@@ -1,0 +1,32 @@
+# 精美 C++ 格式化規則（基於 Google Style 進行微調）
+BasedOnStyle: Google
+
+# 1. 縮排設定
+IndentWidth: 2                  # 縮排 2 空格
+TabWidth: 2
+UseTab: Never                   # 不使用 Tab，只使用空白字元
+
+# 2. 大括號換行規則 (BreakBeforeBraces)
+# 可選值:
+# - Attach: 大括號不換行（例如 if (cond) {）
+# - Allman: 大括號一定換行（例如 if (cond)\n{）
+# - Custom: 自訂精細規則
+BreakBeforeBraces: Allman
+
+# 3. public/private/protected 存取修飾詞縮排
+# Google 預設會向左縮排 1 格，將其改為與 class 關鍵字對齊
+AccessModifierOffset: -2
+
+# 4. 每行長度上限
+ColumnLimit: 120                # 每行最長 120 字元，超過會自動換行
+
+# 5. 指標與參照的對齊方式
+# Left: int* p; (常用於現代 C++)
+# Right: int *p; (預設 C 風格)
+# Middle: int * p;
+PointerAlignment: Right
+
+# 6. 其他常用微調
+AlignAfterOpenBracket: Align    # 換行時，參數與括號對齊
+AllowShortFunctionsOnASingleLine: Inline # 只有極短的 Inline 函數可寫在同一行
+KeepEmptyLinesAtTheStartOfBlocks: false  # 自動移除區塊開頭的多餘空行
