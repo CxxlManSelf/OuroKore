@@ -19,7 +19,7 @@ if(UNIX)
 endif()
 
 # 編譯程式庫時需要加入這個巨集，以作為和使用端的編譯做區別
-add_definitions(-D_OUROKORECORE_DLLEXPORT)
+add_definitions(-DOUROKORE_EXPORTS)
 
 add_library(${TARGET_NAME} SHARED ${SRC_LIST})
 set_target_properties(${TARGET_NAME} PROPERTIES LINKER_LANGUAGE CXX)

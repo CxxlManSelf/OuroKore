@@ -1,0 +1,359 @@
+#include "Registry.h"
+
+#include <algorithm>
+
+#include "ourokore/c_api/core.h"
+#include "ourokore/component/OuroObject.hpp"
+
+namespace ork
+{
+
+static thread_local HandleID g_active_owner_id = ORK_ROOT_ID;
+
+Registry::Registry()
+{
+  std::random_device rd;
+  m_rng.seed(rd());
+}
+
+Registry::~Registry()
+{
+  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+  for (auto &pair : m_object_map)
+  {
+    delete pair.second;
+  }
+  m_object_map.clear();
+}
+
+Registry &Registry::GetInstance()
+{
+  static Registry instance;
+  return instance;
+}
+
+HandleID Registry::GenerateUniqueID()
+{
+  std::lock_guard<std::mutex> lock(m_rng_mutex);
+  HandleID id = 0;
+  while (id == 0)
+  {
+    id = m_rng();
+  }
+  return id;
+}
+
+HandleID Registry::RegisterObject(OuroObject *obj)
+{
+  if (!obj) return 0;
+
+  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+  HandleID id = GenerateUniqueID();
+  while (m_object_map.find(id) != m_object_map.end())
+  {
+    id = GenerateUniqueID();
+  }
+
+  obj->SetObjectID(id);
+  ControlBlock *cb = new ControlBlock(obj);
+  m_object_map[id] = cb;
+  return id;
+}
+
+HandleID Registry::ReserveID()
+{
+  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+  HandleID id = GenerateUniqueID();
+  while (m_object_map.find(id) != m_object_map.end())
+  {
+    id = GenerateUniqueID();
+  }
+
+  ControlBlock *cb = new ControlBlock(nullptr);
+  m_object_map[id] = cb;
+  return id;
+}
+
+bool Registry::BindPayload(HandleID id, OuroObject *obj)
+{
+  if (!obj) return false;
+
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(id);
+  if (it != m_object_map.end())
+  {
+    ControlBlock *cb = it->second;
+    obj->SetObjectID(id);
+    cb->m_payload = obj;
+    return true;
+  }
+  return false;
+}
+
+bool Registry::UnregisterObject(HandleID id)
+{
+  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(id);
+  if (it != m_object_map.end())
+  {
+    ControlBlock *cb = it->second;
+    m_object_map.erase(it);
+    delete cb;
+    return true;
+  }
+  return false;
+}
+
+bool Registry::RegisterEdge(HandleID owner_id, HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+
+  {
+    std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
+    cb->m_owners.push_back(owner_id);
+  }
+
+  cb->m_strong_count.fetch_add(1);
+  return true;
+}
+
+bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+
+  // 1. Remove owner_id from owners roster
+  {
+    std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
+    auto it = std::find(cb->m_owners.begin(), cb->m_owners.end(), owner_id);
+    if (it != cb->m_owners.end())
+    {
+      cb->m_owners.erase(it);
+    }
+  }
+
+  // 2. Decrement strong reference count
+  uint32_t prev_strong = cb->m_strong_count.fetch_sub(1);
+  if (prev_strong == 1)
+  {
+    // Strong count transitioned to 0: dehydrate (delete body/payload)
+    std::unique_lock<std::shared_mutex> payload_lock(cb->m_rw_lock);
+    if (cb->m_payload)
+    {
+      delete cb->m_payload;
+      cb->m_payload = nullptr;
+    }
+  }
+
+  // 3. Clean up the ControlBlock if completely dead
+  if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+  {
+    std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+    // Double-check under exclusive registry lock
+    if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+    {
+      auto it = m_object_map.find(target_id);
+      if (it != m_object_map.end())
+      {
+        m_object_map.erase(it);
+        delete cb;
+      }
+    }
+  }
+  return true;
+}
+
+bool Registry::RegisterWeak(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+
+  cb->m_weak_count.fetch_add(1);
+  return true;
+}
+
+bool Registry::UnregisterWeak(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+
+  cb->m_weak_count.fetch_sub(1);
+
+  if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+  {
+    std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+    if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+    {
+      auto it = m_object_map.find(target_id);
+      if (it != m_object_map.end())
+      {
+        m_object_map.erase(it);
+        delete cb;
+      }
+    }
+  }
+  return true;
+}
+
+bool Registry::CheckAlive(HandleID target_id, bool perform_pruning)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+
+  bool alive = (cb->m_strong_count > 0);
+  if (!alive && perform_pruning)
+  {
+    cb->m_weak_count.fetch_sub(1);
+    if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+    {
+      std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+      if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+      {
+        auto it = m_object_map.find(target_id);
+        if (it != m_object_map.end())
+        {
+          m_object_map.erase(it);
+          delete cb;
+        }
+      }
+    }
+  }
+  return alive;
+}
+
+bool Registry::LockObject(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+  cb->m_rw_lock.lock();
+  return true;
+}
+
+bool Registry::UnlockObject(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+  cb->m_rw_lock.unlock();
+  return true;
+}
+
+bool Registry::LockObjectShared(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+  cb->m_rw_lock.lock_shared();
+  return true;
+}
+
+bool Registry::UnlockObjectShared(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+  cb->m_rw_lock.unlock_shared();
+  return true;
+}
+
+OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return nullptr;
+    }
+    cb = it->second;
+  }
+  // Return null if payload has been deleted (object is dead/tombstoned)
+  if (cb->m_strong_count == 0)
+  {
+    return nullptr;
+  }
+  return cb->m_payload;
+}
+
+void Registry::SetActiveOwner(HandleID owner_id)
+{
+  g_active_owner_id = owner_id;
+}
+
+HandleID Registry::GetActiveOwner() const
+{
+  return g_active_owner_id;
+}
+
+}  // namespace ork
