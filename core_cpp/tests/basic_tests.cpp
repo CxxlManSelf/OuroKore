@@ -1,8 +1,6 @@
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
-
-#include "../core/src/Registry.h"
 #include "ourokore/c_api/core.h"
 #include "ourokore/component/Handles.hpp"
 #include "ourokore/component/OuroObject.hpp"
