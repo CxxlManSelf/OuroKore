@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
+
 #include "ourokore/c_api/core.h"
 #include "ourokore/component/Handles.hpp"
 #include "ourokore/component/OuroObject.hpp"
@@ -56,7 +57,8 @@ class DiamondChild : public DiamondLeft, public DiamondRight
 public:
   uint64_t GetTypeID() const override { return 203; }
 };
-
+// 驗證菱形繼承（Diamond Inheritance）因歧義性而無法隱式轉換為 OuroObject*。
+// 這確保了 Handles.hpp 中 CreateObject() 函式的編譯期防護（static_assert）能正確阻擋此類不良繼承結構。
 static_assert(!std::is_convertible_v<DiamondChild *, ork::OuroObject *>,
               "Diamond inheritance should be detected as ambiguous and forbidden at compile time.");
 
