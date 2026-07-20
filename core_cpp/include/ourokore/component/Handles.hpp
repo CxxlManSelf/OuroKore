@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "OuroObject.hpp"
-#include "ourokore/c_api/core.h"
+#include "ourokore/c_api/component_api.h"
 
 namespace ork
 {

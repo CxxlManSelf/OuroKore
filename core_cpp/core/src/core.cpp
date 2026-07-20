@@ -1,4 +1,4 @@
-#include "ourokore/c_api/core.h"
+#include "ourokore/c_api/component_api.h"
 
 #include "Registry.h"
 
