@@ -120,6 +120,33 @@ graph TD
 本專案將採以下結構部署：
 *   `specs/`：存放此規格書。
 *   `core/include/`：
-    *   `ourokore/c_api/`：給應用開發者的 C 接口。
-    *   `ourokore/component/`：給元件開發者的 C++ 接口 (`OuroObject.hpp` 等)。
+    *   `ourokore/c_api/`：給應用開發者的 C 接口（`core.h` 安全沙盒與 `component_api.h` 靈肉橋樑）。
+    *   `ourokore/component/`：給 C++ 元件開發者的接口 (`OuroObject.hpp`, `Handles.hpp`)。
 *   `core/src/`：私有的核心 C++ 實作。
+
+---
+
+## 7. NotebookLM 最新 Code Review 改善與修復建議
+
+針對目前專案實作，NotebookLM 提供了以下關鍵修復與優化建議：
+
+### A. Registry 與併發邊界修復
+1. **`Registry` 解構邊界 ( Use-After-Free 防護 )**：
+   - 在 `UnregisterEdge` 與 `UnregisterWeak` 清除死物件時，必須先從 `m_object_map` 中執行 `erase(it)` 取得獨佔所有權，然後再執行 `delete cb`，避免其他執行緒透過 Read Lock 取得存取中的 ControlBlock 指標。
+2. **`AcquireObjectPointer` 空指標與多執行緒防護**：
+   - 在讀取 `cb->m_payload` 時，即便檢查 `m_strong_count > 0`，也需搭配讀取鎖或 shared lock，防止肉體在另一執行緒剛好被 `delete`。
+
+### B. Handles 指標武器庫與 Move 語意修正
+1. **`OwningHandle` 移動語意 (Move Semantics)**：
+   - 移動建構子與移動賦值運算子 (`operator=`) 轉移所有權時，只需將來源的 `m_target_id` 置為 `0`，**絕不可呼叫 `other.Release()`**。呼叫 `other.Release()` 會向底層觸發 `ork_unregister_edge`，導致剛轉移的 Edge 計數被意外扣減。
+2. **`OuroPtr` 解引用生命週期防禦**：
+   - `OuroPtr` 為 RAII Lock Guard，使用者不可將解引用拿到的 `T&` 或原始指標傳遞至超越 `OuroPtr` 作用域外使用。
+
+### C. C ABI 標頭檔「黃金雙層分流」規範
+1. **`c_api/core.h`（外部應用安全沙盒）**：
+   - 僅暴露 Handle ID (`uint64_t`) 與純 C 狀態碼，絕不暴露 C++ 原始指標或底層 Mutex。適合 Node.js / Python 等 FFI 綁定。
+2. **`c_api/component_api.h`（靈肉橋樑）**：
+   - 放置 `bind_payload`、`acquire_object_pointer` 及底層 RWLock 介面，供 C++ 元件與 `Handles.hpp` 內部呼叫。
+3. **廢除 `internal_api.h` 與 C ABI 匿名工廠**：
+   - 揚棄 C ABI 級別的 `ork_create_object_by_type`，物件建立完全由 C++ 原生 `ork::CreateObject<T>()` 樣板負責。
+

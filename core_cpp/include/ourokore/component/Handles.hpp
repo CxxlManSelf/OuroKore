@@ -210,11 +210,15 @@ public:
     {
       HandleID target_id = other.m_target_id;
       CheckEnforceRules(target_id);
-      Release();
-      m_target_id = target_id;
-      if (m_target_id != 0)
+      if (target_id == 0)
       {
-        ork_register_edge(m_owner_id, m_target_id);
+        Release();
+      }
+      else
+      {
+        ork_register_edge(m_owner_id, target_id);
+        Release();
+        m_target_id = target_id;
       }
     }
     return *this;
@@ -224,12 +228,12 @@ public:
   {
     HandleID target_id = ptr.GetTargetID();
     CheckEnforceRules(target_id);
+    if (target_id != 0)
+    {
+      ork_register_edge(m_owner_id, target_id);
+    }
     Release();
     m_target_id = target_id;
-    if (m_target_id != 0)
-    {
-      ork_register_edge(m_owner_id, m_target_id);
-    }
     return *this;
   }
 
@@ -240,11 +244,12 @@ public:
     HandleID target_id = other.m_target_id;
     CheckEnforceRules(target_id);
     m_target_id = target_id;
-    if (m_target_id != 0)
+    if (m_target_id != 0 && m_owner_id != other.m_owner_id)
     {
       ork_register_edge(m_owner_id, m_target_id);
+      ork_unregister_edge(other.m_owner_id, m_target_id);
     }
-    other.Release();
+    other.m_target_id = 0;
   }
 
   OwningHandle &operator=(OwningHandle &&other) noexcept
@@ -252,14 +257,16 @@ public:
     if (this != &other)
     {
       HandleID target_id = other.m_target_id;
+      HandleID other_owner_id = other.m_owner_id;
       CheckEnforceRules(target_id);
+      if (target_id != 0 && m_owner_id != other_owner_id)
+      {
+        ork_register_edge(m_owner_id, target_id);
+        ork_unregister_edge(other_owner_id, target_id);
+      }
       Release();
       m_target_id = target_id;
-      if (m_target_id != 0)
-      {
-        ork_register_edge(m_owner_id, m_target_id);
-      }
-      other.Release();
+      other.m_target_id = 0;
     }
     return *this;
   }
