@@ -170,15 +170,13 @@ class OwningHandle
 public:
   static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
 
-  OwningHandle()
+  OwningHandle() : m_owner_id(GetActiveOwnerHelper())
   {
-    ork_get_active_owner(&m_owner_id);
     // Default constructed state (m_target_id == 0) is allowed.
   }
 
-  OwningHandle(const OuroPtr<T> &ptr)
+  OwningHandle(const OuroPtr<T> &ptr) : m_owner_id(GetActiveOwnerHelper())
   {
-    ork_get_active_owner(&m_owner_id);
     HandleID target_id = ptr.GetTargetID();
     CheckEnforceRules(target_id);
     m_target_id = target_id;
@@ -191,9 +189,8 @@ public:
   ~OwningHandle() { Release(); }
 
   // Copy constructor (establishes edge from this handle's owner context)
-  OwningHandle(const OwningHandle &other)
+  OwningHandle(const OwningHandle &other) : m_owner_id(GetActiveOwnerHelper())
   {
-    ork_get_active_owner(&m_owner_id);
     HandleID target_id = other.m_target_id;
     CheckEnforceRules(target_id);
     m_target_id = target_id;
@@ -238,9 +235,8 @@ public:
   }
 
   // Move semantics
-  OwningHandle(OwningHandle &&other) noexcept
+  OwningHandle(OwningHandle &&other) noexcept : m_owner_id(GetActiveOwnerHelper())
   {
-    ork_get_active_owner(&m_owner_id);
     HandleID target_id = other.m_target_id;
     CheckEnforceRules(target_id);
     m_target_id = target_id;
@@ -266,7 +262,7 @@ public:
         ork_register_edge(m_owner_id, target_id);
         ork_unregister_edge(other_owner_id, target_id);
       }
-      Release(); // 但我筧得還是放回這，可免煩腦邊際效應
+      Release();  // 但我筧得還是放回這，可免煩腦邊際效應
       m_target_id = target_id;
       other.m_target_id = 0;
     }
@@ -305,8 +301,15 @@ private:
     }
   }
 
+  static HandleID GetActiveOwnerHelper()
+  {
+    HandleID owner = 0;
+    ork_get_active_owner(&owner);
+    return owner;
+  }
+
   HandleID m_target_id = 0;
-  const HandleID m_owner_id = 0; // 順便加上 const 表明永不改變
+  const HandleID m_owner_id = 0;  // 順便加上 const 表明永不改變
 };
 
 /**
