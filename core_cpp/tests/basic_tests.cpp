@@ -1,6 +1,7 @@
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 #include "ourokore/c_api/core.h"
 #include "ourokore/component/Handles.hpp"
@@ -235,6 +236,154 @@ int main()
     assert(parent2->m_child1.GetTargetID() == 0);
   }
   std::cout << "Test 7 Passed." << std::endl;
+
+  // ==========================================
+  // Test 8: ActiveOwnerGuard 容器批次插入測試
+  // ==========================================
+  std::cout << "Test 8: ActiveOwnerGuard 容器批次插入測試..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    HandleID fake_parent_id = 8888;
+    std::vector<ork::OwningHandle<SimpleObject>> container;
+
+    // 建立 active owner 上下文守護者，模擬 parent 正在對肚子裡的容器進行批次操作
+    {
+      ork::ActiveOwnerGuard guard(fake_parent_id);
+
+      // 建立數個 SimpleObject 並插入容器
+      ork::OuroPtr<SimpleObject> obj1 = ork::CreateObject<SimpleObject>();
+      ork::OuroPtr<SimpleObject> obj2 = ork::CreateObject<SimpleObject>();
+      ork::OuroPtr<SimpleObject> obj3 = ork::CreateObject<SimpleObject>();
+
+      assert(obj1.GetTargetID() != 0);
+      assert(obj2.GetTargetID() != 0);
+      assert(obj3.GetTargetID() != 0);
+
+      // 這些 OwningHandle 會因為 Thread-Local 上下文而自動將 m_owner_id 設定為 fake_parent_id
+      container.emplace_back(obj1);
+      container.emplace_back(obj2);
+      container.emplace_back(obj3);
+    } // OuroPtrs 和 guard 出作用域
+
+    // 驗證容器中 OwningHandle 的 Owner ID 是否為 fake_parent_id
+    for (const auto& handle : container)
+    {
+      assert(handle.GetOwnerID() == fake_parent_id);
+      assert(handle.GetTargetID() != 0);
+    }
+
+    // 由於 container 持有強引用，物件不應被析構
+    assert(g_deconstruct_count == 0);
+  }
+  // container 析構後，所有物件應被正確釋放
+  assert(g_deconstruct_count == 3);
+  std::cout << "Test 8 Passed." << std::endl;
+
+  // ==========================================
+  // Test 9: 容器擴容之同宿主 Zero-Cost Move 測試
+  // ==========================================
+  std::cout << "Test 9: 容器擴容之同宿主 Zero-Cost Move 測試..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    HandleID fake_parent_id = 9999;
+    std::vector<ork::OwningHandle<SimpleObject>> container;
+
+    {
+      ork::ActiveOwnerGuard guard(fake_parent_id);
+      
+      // 批次插入大量物件，故意超過 vector 的預設 capacity 以觸發擴容
+      // 這會讓 vector 在記憶體重分配時，對原本的 OwningHandle 呼叫移動建構/移動賦值
+      for (int i = 0; i < 20; ++i)
+      {
+        ork::OuroPtr<SimpleObject> obj = ork::CreateObject<SimpleObject>();
+        container.emplace_back(obj);
+      }
+    }
+
+    // 驗證在動態擴容（同宿主搬移）過程中，完全沒有觸發物件的 Release 析構
+    assert(g_deconstruct_count == 0);
+    
+    // 驗證所有元素的 owner 依然是 fake_parent_id
+    for (const auto& handle : container)
+    {
+      assert(handle.GetOwnerID() == fake_parent_id);
+      assert(handle.GetTargetID() != 0);
+    }
+
+    // 手動模擬同宿主之間 Move
+    {
+      ork::ActiveOwnerGuard guard(fake_parent_id);
+      ork::OwningHandle<SimpleObject> handle1 = std::move(container[0]);
+      assert(handle1.GetOwnerID() == fake_parent_id);
+      assert(container[0].GetTargetID() == 0); // 來源置零
+      
+      // 移動賦值
+      container[0] = std::move(handle1);
+      assert(container[0].GetOwnerID() == fake_parent_id);
+      assert(handle1.GetTargetID() == 0); // 來源置零
+    }
+    
+    assert(g_deconstruct_count == 0); // 過程中依然不觸發析構
+  }
+  assert(g_deconstruct_count == 20); // 容器銷毀時全部正確釋放
+  std::cout << "Test 9 Passed." << std::endl;
+
+  // ==========================================
+  // Test 10: 跨宿主 Move 語意與舊目標 Release 測試
+  // ==========================================
+  std::cout << "Test 10: 跨宿主 Move 語意與舊目標 Release 測試..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    ork::OuroPtr<ParentWithTwoChildren> parent1 = ork::CreateObject<ParentWithTwoChildren>();
+    ork::OuroPtr<ParentWithTwoChildren> parent2 = ork::CreateObject<ParentWithTwoChildren>();
+
+    HandleID parent1_id = parent1.GetTargetID();
+    HandleID parent2_id = parent2.GetTargetID();
+
+    HandleID childA_id = 0;
+    HandleID childB_id = 0;
+
+    {
+      ork::OuroPtr<SimpleObject> childA = ork::CreateObject<SimpleObject>();
+      childA_id = childA.GetTargetID();
+      parent1->m_child1 = childA;
+    }
+
+    {
+      ork::OuroPtr<SimpleObject> childB = ork::CreateObject<SimpleObject>();
+      childB_id = childB.GetTargetID();
+      parent2->m_child1 = childB;
+    }
+
+    assert(parent1->m_child1.GetOwnerID() == parent1_id);
+    assert(parent2->m_child1.GetOwnerID() == parent2_id);
+    assert(g_deconstruct_count == 0);
+
+    // 跨宿主 Move Assignment：把 parent2 的子物件移交給 parent1 的 Handle
+    // 依據三步合約，這會：
+    // 1. 釋放 parent1->m_child1 的舊目標 (childA) -> 觸發 childA 析構
+    // 2. 將 childB 的 Target ID 移交，並把 parent2->m_child1 的 target 設為 0
+    // 3. 偵測到 Owner ID 不同 (parent1_id != parent2_id)，呼叫 Registry 註冊新邊 (parent1_id -> childB_id) 並解除舊邊 (parent2_id -> childB_id)
+    parent1->m_child1 = std::move(parent2->m_child1);
+
+    // 1. 驗證 childA 已經被釋放並析構
+    assert(g_deconstruct_count == 1);
+
+    // 2. 驗證 parent1->m_child1 現在持有 childB，且 owner 依然是 parent1_id
+    assert(parent1->m_child1.GetTargetID() == childB_id);
+    assert(parent1->m_child1.GetOwnerID() == parent1_id);
+
+    // 3. 驗證 parent2->m_child1 的 target 被安全置零
+    assert(parent2->m_child1.GetTargetID() == 0);
+
+    // 4. 驗證 childB 依然存活，且其 Owner Roster 被 Registry 正確更新為僅有 parent1_id
+    int32_t alive = 0;
+    ork_check_alive(childB_id, &alive, 0);
+    assert(alive == 1);
+  }
+  // parent1 & parent2 析構，childB 釋放。總析構數為：childA + parent1 + parent2 + childB = 4。
+  assert(g_deconstruct_count == 4);
+  std::cout << "Test 10 Passed." << std::endl;
 
   std::cout << "\n=== All Tests Passed Successfully! ===" << std::endl;
   return 0;

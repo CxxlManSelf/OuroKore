@@ -256,6 +256,8 @@ public:
   {
     if (this != &other)
     {
+      Release();
+
       HandleID target_id = other.m_target_id;
       HandleID other_owner_id = other.m_owner_id;
       CheckEnforceRules(target_id);
@@ -264,7 +266,6 @@ public:
         ork_register_edge(m_owner_id, target_id);
         ork_unregister_edge(other_owner_id, target_id);
       }
-      Release();
       m_target_id = target_id;
       other.m_target_id = 0;
     }

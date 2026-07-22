@@ -30,74 +30,54 @@
 
 ### OuroKore Core Component
 
-#### [NEW] [OuroObject.hpp](file:///c:/MySrc/OuroKore/develop/core_cpp/include/ourokore/component/OuroObject.hpp)
-定義所有具體物件實體（肉體）的虛擬基底類別。
-- 強制宣告 `virtual ~OuroObject() = default;`
-- 強制宣告 `virtual uint64_t GetTypeID() const = 0;` (供未來 RTTI 序列化使用)
+#### [MODIFY] [basic_tests.cpp](file:///c:/MySrc/OuroKore/develop/core_cpp/tests/basic_tests.cpp)
+在測試主程式中，新增 `Test 8`, `Test 9` 與 `Test 10` 以驗證 `OwningHandle` 在容器 (如 `std::vector`) 中的使用行為。
 
-#### [NEW] [Handles.hpp](file:///c:/MySrc/OuroKore/develop/core_cpp/include/ourokore/component/Handles.hpp)
-實作 `ork::OwningHandle<T>`, `ork::WeakHandle<T>` 與 `ork::OuroPtr<T>` 範本類別。
-- **`OuroPtr<T>`**：
-  - 增加 `m_is_root` 與 `m_is_write` 成員。
-  - 當作為工廠產生的 Root 憑證時，建構時向 Registry 註冊 `ORK_ROOT_ID` 邊，解構時註銷並釋放強引用。
-  - 提供 RAII 方式鎖定目標物件的讀寫鎖。
-  - 提供 `operator->()` 與 `operator*()` 存取具體 Payload。
-- **`OwningHandle<T>`**：
-  - 持有 `HandleID m_target_id` 與 `HandleID m_owner_id`。
-  - **不提供** `operator->()` 或 `operator*()` 運算子。
-  - 建構時透過 C API 向 Registry 註冊有向邊（`RegisterEdge`），增加強引用。
-  - 析構與指派時，註銷有向邊，扣減強引用。
-  - **執行期安全防禦**：若 `m_owner_id == ORK_ROOT_ID` 且 `m_target_id != 0`，拋出異常阻止外部使用。
-- **`WeakHandle<T>`**：
-  - 持有 `mutable HandleID m_target_id`。
-  - 增加弱引用計數。
-  - 實作 `IsAlive() const`，若偵測到已死，則自我閹割（`m_target_id = 0`）並扣減弱引用。
+---
 
-#### [NEW] [core.h](file:///c:/MySrc/OuroKore/develop/core_cpp/include/ourokore/c_api/core.h)
-公開的 C ABI 邊界。
-- **嚴格的 C 語言隔離**：使用 `extern "C"` 保護，絕不使用 C++ 的 `class` 宣告。對外提供不透明的結構體指標 `typedef struct OuroObject OuroObject;`，主要透過 `HandleID`（`uint64_t`）與系統進行互動。
-- **異常防禦與錯誤碼**：所有匯出函式強制標記呼叫慣例巨集 `ORK_API`（如 `__cdecl`），且統一回傳 `int32_t` 錯誤碼（成功為 `0`，失敗為錯誤代碼），避免 C++ 異常穿透 FFI 導致崩潰。
-- **核心 C API 接口**：提供註冊物件、註冊/註銷邊、上鎖與解鎖、讀寫狀態查詢等 C 接口。
+## OwningHandle 陣列與容器使用測試計畫
 
-#### [NEW] [ControlBlock.h](file:///c:/MySrc/OuroKore/develop/core_cpp/core/src/ControlBlock.h)
-控制區塊（靈魂）的私有 C++ 定義。
-- `std::atomic<uint32_t> m_strong_count;`
-- `std::atomic<uint32_t> m_weak_count;`
-- `std::shared_mutex m_rw_lock;` (讀寫鎖)
-- `OuroObject* m_payload;`
-- `std::vector<HandleID> m_owners;` (Owner ID Roster，允許重複以支援多個邊)
-- `std::mutex m_owners_mutex;` (保護名冊)
+針對 `OwningHandle` 在 `std::vector` 等容器中的使用情境（如擴容、批次插入、同/跨宿主 Move 等），我們將在 `tests/basic_tests.cpp` 中新增以下測試案例以驗證規格：
 
-#### [NEW] [Registry.h](file:///c:/MySrc/OuroKore/develop/core_cpp/core/src/Registry.h) & [Registry.cpp](file:///c:/MySrc/OuroKore/develop/core_cpp/core/src/Registry.cpp)
-全域註冊表，管理所有的控制區塊與其對應的隨機 `HandleID`。
-- 提供安全執行緒的雜湊表（使用讀寫鎖保護的 `std::unordered_map<HandleID, ControlBlock*>`）。
-- 實作隨機 ID 的核發與邊緣註冊/註銷。
-- 實作強/弱引用計數的歸零回收邏輯（強引用歸零則銷毀 Payload，強弱皆歸零則釋放 Control Block）。
+### 1. Test 8: ActiveOwnerGuard 容器批次插入測試
+- **目的**：驗證使用 `ActiveOwnerGuard` 在 Thread-Local 暫時綁定宿主 (Owner) ID 後，於 `std::vector<ork::OwningHandle<SimpleObject>>` 批量 `push_back`/`emplace_back` 物件時，這些 Handle 都能自動綁定正確的宿主 ID。
+- **步驟**：
+  1. 宣告虛擬宿主 ID (例如 `8888`) 並建立 `ActiveOwnerGuard guard(8888);`。
+  2. 建立數個 `SimpleObject` 並呼叫 `vector::emplace_back(child_ptr)`。
+  3. 驗證所有 vector 內 `OwningHandle` 的 `GetOwnerID()` 皆為 `8888`，且目標物件的強引用計數為 1。
 
-#### [NEW] [core.cpp](file:///c:/MySrc/OuroKore/develop/core_cpp/core/src/core.cpp)
-- 實作 `core.h` 所宣告的 C ABI 接口。
-- **全面異常攔截**：每一個 C 匯出函式內部都使用 `try { ... } catch (...) { ... }` 結構進行包覆，將 C++ 的任何異常轉化為 C ABI 錯誤碼回傳。
-- **Thread-Local 執行期上下文**：提供執行緒局部變數 (TLS) 的全域管理方法，供 `ActiveOwnerContext` 查詢當前建構物件的 Parent ID。
+### 2. Test 9: 容器擴容之同宿主 Zero-Cost Move 測試
+- **目的**：驗證當 `std::vector` 因動態擴容（Reallocation）導致記憶體重新分配、搬移 `OwningHandle` 時，由於 Owner ID 相同（皆為相同宿主），系統不會重複向底層 C API 註冊或解除邊，實現零效能開銷。
+- **步驟**：
+  1. 宣告宿主 ID 並建立 `ActiveOwnerGuard`。
+  2. 建立 `std::vector<ork::OwningHandle<SimpleObject>>`，但不呼叫 `reserve`。
+  3. 批量新增物件，使 `vector` 的 size 超過 capacity，觸發擴容重新分配。
+  4. 驗證在此過程中：
+     - 沒有任何物件因為 `Release` 被意外析構（`g_deconstruct_count` 依然為 0）。
+     - 所有物件依然正常存活。
+     - 手動模擬同宿主 `std::move`，驗證目標轉移成功，來源置零，且強引用計數並未被額外增減。
+
+### 3. Test 10: 跨宿主 Move 語意與舊目標 Release 測試
+- **目的**：驗證 `OwningHandle` 的跨宿主移動賦值運算子能正確釋放舊目標、轉移 Target ID、將來源置零，並正確在底層 Registry 中將有向邊由舊宿主更新為新宿主。
+- **步驟**：
+  1. 建立兩個不同宿主 (如 `parent1` 與 `parent2`)。
+  2. 將 `childA` 綁定給 `parent1` 的 `OwningHandle`，`childB` 綁定給 `parent2` 的 `OwningHandle`。
+  3. 將 `childB` 從 `parent2` Move 到 `parent1` 原本持有 `childA` 的 Handle 上：`parent1_handle = std::move(parent2_handle);`。
+  4. 驗證：
+     - `childA` 的強引用歸零並被析構（`g_deconstruct_count` 增加）。
+     - `childB` 的宿主在 Registry 中被更新為 `parent1`。
+     - `parent2_handle` 的 target 被安全置零。
 
 ---
 
 ## Verification Plan
 
 ### Automated Tests
-我們將建立一個簡單的測試專案 `basic_tests` 來驗證核心記憶體管理行為。
+- 在 `c:\MySrc\OuroKore\develop\core_cpp\build` 目錄下執行編譯及測試：
+  ```powershell
+  cmake --build . --config Debug
+  ./bin/basic_tests
+  ```
 
-#### [NEW] [CMakeLists.txt (tests)](file:///c:/MySrc/OuroKore/develop/core_cpp/tests/CMakeLists.txt)
-在根目錄新增測試子目錄，編譯 `tests/basic_tests.cpp` 並連結 `ourokore_core`。
-
-#### [NEW] [basic_tests.cpp](file:///c:/MySrc/OuroKore/develop/core_cpp/tests/basic_tests.cpp)
-- **測試 1：物件生成與生命週期**
-  - 驗證 `CreateObject` 回傳 `OuroPtr`。
-  - 驗證外部 `OuroPtr` 銷毀時，Payload 被正確 delete。
-- **測試 2：Owner ID Roster 的自動註冊與限制**
-  - 建立父物件 A 與子欄位 B，驗證物件 B 的 Control Block 中包含物件 A 的 ID。
-  - 驗證若在 Stack 上試圖初始化有效的 `OwningHandle`，會觸發執行期異常。
-- **測試 3：WeakHandle 的 Lazy Pruning**
-  - 建立 `WeakHandle` 並讓 `OuroPtr` 銷毀。
-  - 呼叫 `IsAlive()`，驗證其回傳 `false` 且 `m_target_id` 自動清空，且弱引用計數扣減至 0。
-- **測試 4：防範菱形繼承**
-  - 驗證菱形繼承的類別無法通過 `CreateObject` 編譯。
+### Manual Verification
+- 檢查測試輸出，確保 Test 8、Test 9 與 Test 10 皆成功印出 "Test X Passed"。
