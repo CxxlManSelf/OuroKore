@@ -235,7 +235,7 @@ public:
   }
 
   // Move semantics
-  OwningHandle(OwningHandle &&other) noexcept : m_owner_id(GetActiveOwnerHelper())
+  OwningHandle(OwningHandle &&other) noexcept : m_owner_id(other.m_owner_id)
   {
     HandleID target_id = other.m_target_id;
     CheckEnforceRules(target_id);
