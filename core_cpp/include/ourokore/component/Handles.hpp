@@ -256,7 +256,7 @@ public:
   {
     if (this != &other)
     {
-      Release();
+      // Release(); // AI 建意放這
 
       HandleID target_id = other.m_target_id;
       HandleID other_owner_id = other.m_owner_id;
@@ -266,6 +266,7 @@ public:
         ork_register_edge(m_owner_id, target_id);
         ork_unregister_edge(other_owner_id, target_id);
       }
+      Release(); // 但我筧得還是放回這，可免煩腦邊際效應
       m_target_id = target_id;
       other.m_target_id = 0;
     }
@@ -305,7 +306,7 @@ private:
   }
 
   HandleID m_target_id = 0;
-  HandleID m_owner_id = 0;
+  const HandleID m_owner_id = 0; // 順便加上 const 表明永不改變
 };
 
 /**
