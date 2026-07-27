@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -291,6 +292,20 @@ public:
   HandleID GetOwnerID() const { return m_owner_id; }
 
 private:
+  friend class OuroObject;
+
+  OwningHandle(HandleID owner_id, HandleID target_id) : m_owner_id(owner_id), m_target_id(target_id)
+  {
+    CheckEnforceRules(m_target_id);
+    if (m_target_id != 0)
+    {
+      ork_register_edge(m_owner_id, m_target_id);
+    }
+  }
+
+  void* operator new(size_t) = delete;
+  void* operator new[](size_t) = delete;
+
   void CheckEnforceRules(HandleID target_id) const
   {
     if (m_owner_id == ORK_ROOT_ID && target_id != 0)
@@ -485,6 +500,44 @@ OuroPtr<T> CreateObject(Args &&...args)
 
   // Return the OuroPtr marked as Root (is_root = true)
   return OuroPtr<T>(reserved_id, true /*write*/, true /*is_root*/);
+}
+
+// ---------------------------------------------------------
+// Inline implementations of OuroObject member templates/methods
+// ---------------------------------------------------------
+
+template <typename T, typename... Args>
+OwningHandle<T> OuroObject::CreateChild(Args &&...args)
+{
+  static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
+  static_assert(std::is_convertible_v<T *, OuroObject *>,
+                "T* must be convertible to OuroObject* (Diamond Inheritance forbidden)");
+
+  HandleID parent_id = this->GetObjectID();
+  if (parent_id == 0)
+  {
+    ork_get_active_owner(&parent_id);
+  }
+  ActiveOwnerGuard guard(parent_id);
+  OuroPtr<T> ptr = CreateObject<T>(std::forward<Args>(args)...);
+  return OwningHandle<T>(parent_id, ptr.GetTargetID());
+}
+
+template <typename T>
+OwningHandle<T> OuroObject::AdoptChild(const OuroPtr<T> &child)
+{
+  return AdoptChild<T>(child.GetTargetID());
+}
+
+template <typename T>
+OwningHandle<T> OuroObject::AdoptChild(HandleID child_id)
+{
+  HandleID parent_id = this->GetObjectID();
+  if (parent_id == 0)
+  {
+    ork_get_active_owner(&parent_id);
+  }
+  return OwningHandle<T>(parent_id, child_id);
 }
 
 }  // namespace ork

@@ -74,6 +74,44 @@ public:
 static_assert(!std::is_convertible_v<DiamondChild *, ork::OuroObject *>,
               "Diamond inheritance should be detected as ambiguous and forbidden at compile time.");
 
+class ParentDrivenObject : public ork::OuroObject
+{
+public:
+  ParentDrivenObject() = default;
+  ~ParentDrivenObject() override { g_deconstruct_count++; }
+  uint64_t GetTypeID() const override { return 106; }
+
+  void InitChildren()
+  {
+    m_child = CreateChild<ChildObject>();
+  }
+
+  ork::OwningHandle<ChildObject> m_child;
+};
+
+class ParentDrivenCtorObject : public ork::OuroObject
+{
+public:
+  ParentDrivenCtorObject()
+  {
+    m_child = CreateChild<ChildObject>();
+  }
+  ~ParentDrivenCtorObject() override { g_deconstruct_count++; }
+  uint64_t GetTypeID() const override { return 107; }
+
+  ork::OwningHandle<ChildObject> m_child;
+};
+
+class ParentDrivenAdoptObject : public ork::OuroObject
+{
+public:
+  ParentDrivenAdoptObject() = default;
+  ~ParentDrivenAdoptObject() override { g_deconstruct_count++; }
+  uint64_t GetTypeID() const override { return 108; }
+
+  ork::OwningHandle<SimpleObject> m_child;
+};
+
 int main()
 {
   std::cout << "=== Running OuroKore Basic Tests ===" << std::endl;
@@ -384,6 +422,91 @@ int main()
   // parent1 & parent2 析構，childB 釋放。總析構數為：childA + parent1 + parent2 + childB = 4。
   assert(g_deconstruct_count == 4);
   std::cout << "Test 10 Passed." << std::endl;
+
+  // ==========================================
+  // Test 11: Parent-Driven Child Creation
+  // ==========================================
+  std::cout << "Test 11: Parent-Driven Child Creation..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    ork::OuroPtr<ParentDrivenObject> parent = ork::CreateObject<ParentDrivenObject>();
+    HandleID parent_id = parent.GetTargetID();
+    
+    // Create child post-construction
+    parent->InitChildren();
+    HandleID child_id = parent->m_child.GetTargetID();
+    
+    assert(parent_id != 0);
+    assert(child_id != 0);
+    assert(parent->m_child.GetOwnerID() == parent_id);
+    
+    int32_t alive = 0;
+    ork_check_alive(child_id, &alive, 0);
+    assert(alive == 1);
+  }
+  // Parent and Child deconstructed
+  assert(g_deconstruct_count == 2);
+  
+  g_deconstruct_count = 0;
+  {
+    ork::OuroPtr<ParentDrivenCtorObject> parent = ork::CreateObject<ParentDrivenCtorObject>();
+    assert(parent.GetTargetID() != 0);
+    assert(parent->m_child.GetTargetID() != 0);
+    assert(parent->m_child.GetOwnerID() == parent.GetTargetID());
+  }
+  assert(g_deconstruct_count == 2);
+  std::cout << "Test 11 Passed." << std::endl;
+
+  // ==========================================
+  // Test 12: Parent-Driven Adoption
+  // ==========================================
+  std::cout << "Test 12: Parent-Driven Adoption..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    ork::OuroPtr<ParentDrivenAdoptObject> parent = ork::CreateObject<ParentDrivenAdoptObject>();
+    HandleID parent_id = parent.GetTargetID();
+    HandleID child_id = 0;
+    {
+      ork::OuroPtr<SimpleObject> child = ork::CreateObject<SimpleObject>();
+      child_id = child.GetTargetID();
+      
+      // Adopt via OuroPtr
+      parent->m_child = parent->AdoptChild(child);
+      assert(parent->m_child.GetTargetID() == child_id);
+      assert(parent->m_child.GetOwnerID() == parent_id);
+    }
+    // child OuroPtr goes out of scope, but parent still owns it
+    assert(g_deconstruct_count == 0);
+    
+    int32_t alive = 0;
+    ork_check_alive(child_id, &alive, 0);
+    assert(alive == 1);
+  }
+  assert(g_deconstruct_count == 2);
+  std::cout << "Test 12 Passed." << std::endl;
+
+  // ==========================================
+  // Test 13: Same-Target Move-Assignment Safety
+  // ==========================================
+  std::cout << "Test 13: Same-Target Move-Assignment Safety..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    ork::OuroPtr<ParentWithTwoChildren> parent = ork::CreateObject<ParentWithTwoChildren>();
+    {
+      ork::OuroPtr<SimpleObject> child = ork::CreateObject<SimpleObject>();
+      parent->m_child1 = child;
+      parent->m_child2 = child;
+    }
+    assert(g_deconstruct_count == 0);
+    
+    // Move assign: same target, same owner
+    parent->m_child1 = std::move(parent->m_child2);
+    assert(parent->m_child1.GetTargetID() != 0);
+    assert(parent->m_child2.GetTargetID() == 0);
+    assert(g_deconstruct_count == 0); // Target should not be deconstructed!
+  }
+  assert(g_deconstruct_count == 2); // Parent and Child deconstructed
+  std::cout << "Test 13 Passed." << std::endl;
 
   std::cout << "\n=== All Tests Passed Successfully! ===" << std::endl;
   return 0;
