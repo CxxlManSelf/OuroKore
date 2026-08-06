@@ -1,0 +1,15 @@
+# clangd 語言伺服器設定檔
+
+CompileFlags:
+  # 指定 CMake 產生的編譯資料庫 (compile_commands.json) 所在目錄
+  CompilationDatabase: build
+
+  # 指定預設使用的 C++ 編譯器絕對路徑
+  Compiler: 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe'
+
+  # 新增 MinGW 目標平台與 C++20 標準，確保標頭檔 (如 <cassert>) 能被 clangd 找到
+  Add:
+    - '--target=x86_64-w64-mingw32'
+    - '-std=c++20'
+
+

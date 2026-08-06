@@ -14,7 +14,6 @@ class SimpleObject : public ork::OuroObject
 public:
   SimpleObject() = default;
   ~SimpleObject() override { g_deconstruct_count++; }
-  uint64_t GetTypeID() const override { return 100; }
 };
 
 // Classes for Test 2 (Parent-Child topology)
@@ -23,7 +22,6 @@ class ChildObject : public ork::OuroObject
 public:
   ChildObject() = default;
   ~ChildObject() override { g_deconstruct_count++; }
-  uint64_t GetTypeID() const override { return 102; }
 };
 
 class ParentObject : public ork::OuroObject
@@ -35,9 +33,8 @@ public:
     m_child = ork::CreateObject<ChildObject>();
   }
   ~ParentObject() override { g_deconstruct_count++; }
-  uint64_t GetTypeID() const override { return 101; }
 
-  ork::OwningHandle<ChildObject> m_child;
+  ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
 
 class ParentWithTwoChildren : public ork::OuroObject
@@ -45,29 +42,25 @@ class ParentWithTwoChildren : public ork::OuroObject
 public:
   ParentWithTwoChildren() = default;
   ~ParentWithTwoChildren() override { g_deconstruct_count++; }
-  uint64_t GetTypeID() const override { return 105; }
 
-  ork::OwningHandle<SimpleObject> m_child1;
-  ork::OwningHandle<SimpleObject> m_child2;
+  ork::OwningHandle<SimpleObject> m_child1{"m_child1"};
+  ork::OwningHandle<SimpleObject> m_child2{"m_child2"};
 };
 
 // Compile-time validation for Test 4 (Diamond inheritance prevention)
 class DiamondLeft : public ork::OuroObject
 {
 public:
-  uint64_t GetTypeID() const override { return 201; }
 };
 
 class DiamondRight : public ork::OuroObject
 {
 public:
-  uint64_t GetTypeID() const override { return 202; }
 };
 
 class DiamondChild : public DiamondLeft, public DiamondRight
 {
 public:
-  uint64_t GetTypeID() const override { return 203; }
 };
 // 驗證菱形繼承（Diamond Inheritance）因歧義性而無法隱式轉換為 OuroObject*。
 // 這確保了 Handles.hpp 中 CreateObject() 函式的編譯期防護（static_assert）能正確阻擋此類不良繼承結構。
@@ -79,27 +72,19 @@ class ParentDrivenObject : public ork::OuroObject
 public:
   ParentDrivenObject() = default;
   ~ParentDrivenObject() override { g_deconstruct_count++; }
-  uint64_t GetTypeID() const override { return 106; }
 
-  void InitChildren()
-  {
-    m_child = CreateChild<ChildObject>();
-  }
+  void InitChildren() { m_child = ork::CreateObject<ChildObject>(); }
 
-  ork::OwningHandle<ChildObject> m_child;
+  ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
 
 class ParentDrivenCtorObject : public ork::OuroObject
 {
 public:
-  ParentDrivenCtorObject()
-  {
-    m_child = CreateChild<ChildObject>();
-  }
+  ParentDrivenCtorObject() { m_child = ork::CreateObject<ChildObject>(); }
   ~ParentDrivenCtorObject() override { g_deconstruct_count++; }
-  uint64_t GetTypeID() const override { return 107; }
 
-  ork::OwningHandle<ChildObject> m_child;
+  ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
 
 class ParentDrivenAdoptObject : public ork::OuroObject
@@ -107,9 +92,30 @@ class ParentDrivenAdoptObject : public ork::OuroObject
 public:
   ParentDrivenAdoptObject() = default;
   ~ParentDrivenAdoptObject() override { g_deconstruct_count++; }
-  uint64_t GetTypeID() const override { return 108; }
 
-  ork::OwningHandle<SimpleObject> m_child;
+  ork::OwningHandle<SimpleObject> m_child{"m_child"};
+};
+
+class ParentWithContainer : public ork::OuroObject
+{
+public:
+  ParentWithContainer() = default;
+  ~ParentWithContainer() override { g_deconstruct_count++; }
+
+  void AddChildObject(const ork::OuroPtr<SimpleObject> &child) { m_children.AddTarget(child.GetTargetID()); }
+  void RemoveChildObject(HandleID child_id) { m_children.RemoveTarget(child_id); }
+  size_t GetChildrenCount() const { return m_children.GetTargetCount(); }
+
+  /**
+   * @brief 在 Parent 鎖保護狀態下取得所有子物件控制指標
+   */
+  std::vector<ork::OuroPtr<SimpleObject>> GetChildrenObjects(bool write_children = false) const
+  {
+    return m_children.LockAndAcquireAll<SimpleObject>(write_children);
+  }
+
+private:
+  ork::OwningContainerHandle m_children{"children_slot"};
 };
 
 int main()
@@ -157,7 +163,7 @@ int main()
   // Check that we cannot assign a valid target to OwningHandle on Stack
   {
     ork::OuroPtr<SimpleObject> ptr = ork::CreateObject<SimpleObject>();
-    ork::OwningHandle<SimpleObject> stack_handle;
+    ork::OwningHandle<SimpleObject> stack_handle{"stack_handle"};
     bool caught = false;
     try
     {
@@ -215,10 +221,10 @@ int main()
     }
     // childA OuroPtr went out of scope. Since parent->m_child1 points to it,
     // strong count should be 1, so it shouldn't be deconstructed yet!
-    assert(g_deconstruct_count == 0); 
+    assert(g_deconstruct_count == 0);
   }
   std::cout << "Test 5 Passed." << std::endl;
- 
+
   // ==========================================
   // Test 6: Copy Assignment Correctness (Same Owner)
   // ==========================================
@@ -298,13 +304,13 @@ int main()
       assert(obj3.GetTargetID() != 0);
 
       // 這些 OwningHandle 會因為 Thread-Local 上下文而自動將 m_owner_id 設定為 fake_parent_id
-      container.emplace_back(obj1);
-      container.emplace_back(obj2);
-      container.emplace_back(obj3);
-    } // OuroPtrs 和 guard 出作用域
+      container.emplace_back("slot1", obj1);
+      container.emplace_back("slot2", obj2);
+      container.emplace_back("slot3", obj3);
+    }  // OuroPtrs 和 guard 出作用域
 
     // 驗證容器中 OwningHandle 的 Owner ID 是否為 fake_parent_id
-    for (const auto& handle : container)
+    for (const auto &handle : container)
     {
       assert(handle.GetOwnerID() == fake_parent_id);
       assert(handle.GetTargetID() != 0);
@@ -328,21 +334,21 @@ int main()
 
     {
       ork::ActiveOwnerGuard guard(fake_parent_id);
-      
+
       // 批次插入大量物件，故意超過 vector 的預設 capacity 以觸發擴容
       // 這會讓 vector 在記憶體重分配時，對原本的 OwningHandle 呼叫移動建構/移動賦值
       for (int i = 0; i < 20; ++i)
       {
         ork::OuroPtr<SimpleObject> obj = ork::CreateObject<SimpleObject>();
-        container.emplace_back(obj);
+        container.emplace_back("slot_" + std::to_string(i), obj);
       }
     }
 
     // 驗證在動態擴容（同宿主搬移）過程中，完全沒有觸發物件的 Release 析構
     assert(g_deconstruct_count == 0);
-    
+
     // 驗證所有元素的 owner 依然是 fake_parent_id
-    for (const auto& handle : container)
+    for (const auto &handle : container)
     {
       assert(handle.GetOwnerID() == fake_parent_id);
       assert(handle.GetTargetID() != 0);
@@ -353,17 +359,17 @@ int main()
       ork::ActiveOwnerGuard guard(fake_parent_id);
       ork::OwningHandle<SimpleObject> handle1 = std::move(container[0]);
       assert(handle1.GetOwnerID() == fake_parent_id);
-      assert(container[0].GetTargetID() == 0); // 來源置零
-      
+      assert(container[0].GetTargetID() == 0);  // 來源置零
+
       // 移動賦值
       container[0] = std::move(handle1);
       assert(container[0].GetOwnerID() == fake_parent_id);
-      assert(handle1.GetTargetID() == 0); // 來源置零
+      assert(handle1.GetTargetID() == 0);  // 來源置零
     }
-    
-    assert(g_deconstruct_count == 0); // 過程中依然不觸發析構
+
+    assert(g_deconstruct_count == 0);  // 過程中依然不觸發析構
   }
-  assert(g_deconstruct_count == 20); // 容器銷毀時全部正確釋放
+  assert(g_deconstruct_count == 20);  // 容器銷毀時全部正確釋放
   std::cout << "Test 9 Passed." << std::endl;
 
   // ==========================================
@@ -401,7 +407,8 @@ int main()
     // 依據三步合約，這會：
     // 1. 釋放 parent1->m_child1 的舊目標 (childA) -> 觸發 childA 析構
     // 2. 將 childB 的 Target ID 移交，並把 parent2->m_child1 的 target 設為 0
-    // 3. 偵測到 Owner ID 不同 (parent1_id != parent2_id)，呼叫 Registry 註冊新邊 (parent1_id -> childB_id) 並解除舊邊 (parent2_id -> childB_id)
+    // 3. 偵測到 Owner ID 不同 (parent1_id != parent2_id)，呼叫 Registry 註冊新邊 (parent1_id -> childB_id) 並解除舊邊
+    // (parent2_id -> childB_id)
     parent1->m_child1 = std::move(parent2->m_child1);
 
     // 1. 驗證 childA 已經被釋放並析構
@@ -431,22 +438,22 @@ int main()
   {
     ork::OuroPtr<ParentDrivenObject> parent = ork::CreateObject<ParentDrivenObject>();
     HandleID parent_id = parent.GetTargetID();
-    
+
     // Create child post-construction
     parent->InitChildren();
     HandleID child_id = parent->m_child.GetTargetID();
-    
+
     assert(parent_id != 0);
     assert(child_id != 0);
     assert(parent->m_child.GetOwnerID() == parent_id);
-    
+
     int32_t alive = 0;
     ork_check_alive(child_id, &alive, 0);
     assert(alive == 1);
   }
   // Parent and Child deconstructed
   assert(g_deconstruct_count == 2);
-  
+
   g_deconstruct_count = 0;
   {
     ork::OuroPtr<ParentDrivenCtorObject> parent = ork::CreateObject<ParentDrivenCtorObject>();
@@ -469,15 +476,15 @@ int main()
     {
       ork::OuroPtr<SimpleObject> child = ork::CreateObject<SimpleObject>();
       child_id = child.GetTargetID();
-      
-      // Adopt via OuroPtr
-      parent->m_child = parent->AdoptChild(child);
+
+      // Adopt via OuroPtr assignment
+      parent->m_child = child;
       assert(parent->m_child.GetTargetID() == child_id);
       assert(parent->m_child.GetOwnerID() == parent_id);
     }
     // child OuroPtr goes out of scope, but parent still owns it
     assert(g_deconstruct_count == 0);
-    
+
     int32_t alive = 0;
     ork_check_alive(child_id, &alive, 0);
     assert(alive == 1);
@@ -498,15 +505,79 @@ int main()
       parent->m_child2 = child;
     }
     assert(g_deconstruct_count == 0);
-    
+
     // Move assign: same target, same owner
     parent->m_child1 = std::move(parent->m_child2);
     assert(parent->m_child1.GetTargetID() != 0);
     assert(parent->m_child2.GetTargetID() == 0);
-    assert(g_deconstruct_count == 0); // Target should not be deconstructed!
+    assert(g_deconstruct_count == 0);  // Target should not be deconstructed!
   }
-  assert(g_deconstruct_count == 2); // Parent and Child deconstructed
+  assert(g_deconstruct_count == 2);  // Parent and Child deconstructed
   std::cout << "Test 13 Passed." << std::endl;
+
+  // ==========================================
+  // Test 14: OwningContainerHandle 多態與多重子物件拓撲測試
+  // ==========================================
+  std::cout << "Test 14: OwningContainerHandle 多態與多重子物件拓撲測試..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    ork::OuroPtr<ParentWithContainer> parent = ork::CreateObject<ParentWithContainer>();
+    HandleID parent_id = parent.GetTargetID();
+    assert(parent_id != 0);
+
+    // 驗證 RegisterHandle 成功將私有 OwningContainerHandle 註冊進父物件的名冊
+    const auto &roster = parent->GetRegisteredHandles();
+    assert(roster.find("children_slot") != roster.end());
+    assert(roster.at("children_slot")->GetSlotName() == "children_slot");
+
+    HandleID child1_id = 0;
+    HandleID child2_id = 0;
+    HandleID child3_id = 0;
+
+    {
+      ork::OuroPtr<SimpleObject> child1 = ork::CreateObject<SimpleObject>();
+      ork::OuroPtr<SimpleObject> child2 = ork::CreateObject<SimpleObject>();
+      ork::OuroPtr<SimpleObject> child3 = ork::CreateObject<SimpleObject>();
+
+      child1_id = child1.GetTargetID();
+      child2_id = child2.GetTargetID();
+      child3_id = child3.GetTargetID();
+
+      parent->AddChildObject(child1);
+      parent->AddChildObject(child2);
+      parent->AddChildObject(child3);
+
+      assert(parent->GetChildrenCount() == 3);
+    }
+    // 3 個臨時 CreateObject 的 OuroPtr 寫鎖離開作用域並釋放，但 parent 的 OwningContainerHandle 持有拓撲強引用，皆未析構
+    assert(g_deconstruct_count == 0);
+
+    // 測試透過 Parent 封裝介面在 Parent 鎖定下無衝突打包與鎖定所有子物件
+    {
+      auto acquired_all = parent->GetChildrenObjects();
+      assert(acquired_all.size() == 3);
+      assert(acquired_all[0].GetTargetID() == child1_id);
+      assert(acquired_all[1].GetTargetID() == child2_id);
+      assert(acquired_all[2].GetTargetID() == child3_id);
+    }
+
+    // 測試從容器中透過 Parent 封裝介面個別移除子物件
+    parent->RemoveChildObject(child1_id);
+    assert(parent->GetChildrenCount() == 2);
+    // child1 失去所有 Owner 引用，觸發即時析構
+    assert(g_deconstruct_count == 1);
+
+    int32_t alive1 = 0, alive2 = 0, alive3 = 0;
+    ork_check_alive(child1_id, &alive1, 0);
+    ork_check_alive(child2_id, &alive2, 0);
+    ork_check_alive(child3_id, &alive3, 0);
+    assert(alive1 == 0);
+    assert(alive2 == 1);
+    assert(alive3 == 1);
+  }
+  // parent 出作用域，ReleaseAll() 觸發釋放剩餘 2 個子物件 + parent 本身析構
+  assert(g_deconstruct_count == 4);
+  std::cout << "Test 14 Passed." << std::endl;
 
   std::cout << "\n=== All Tests Passed Successfully! ===" << std::endl;
   return 0;
