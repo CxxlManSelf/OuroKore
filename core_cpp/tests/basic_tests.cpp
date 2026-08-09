@@ -14,6 +14,21 @@ class SimpleObject : public ork::OuroObject
 public:
   SimpleObject() = default;
   ~SimpleObject() override { g_deconstruct_count++; }
+
+  int GetValue() const
+  {
+    ork::OuroReadLock lock(*this);
+    return m_value;
+  }
+
+  void SetValue(int val)
+  {
+    ork::OuroWriteLock lock(*this);
+    m_value = val;
+  }
+
+private:
+  int m_value = 0;
 };
 
 // Classes for Test 2 (Parent-Child topology)
@@ -109,9 +124,9 @@ public:
   /**
    * @brief 在 Parent 鎖保護狀態下取得所有子物件控制指標
    */
-  std::vector<ork::OuroPtr<SimpleObject>> GetChildrenObjects(bool write_children = false) const
+  std::vector<ork::OuroPtr<SimpleObject>> GetChildrenObjects() const
   {
-    return m_children.LockAndAcquireAll<SimpleObject>(write_children);
+    return m_children.LockAndAcquireAll<SimpleObject>();
   }
 
 private:
@@ -578,6 +593,65 @@ int main()
   // parent 出作用域，ReleaseAll() 觸發釋放剩餘 2 個子物件 + parent 本身析構
   assert(g_deconstruct_count == 4);
   std::cout << "Test 14 Passed." << std::endl;
+
+  // ==========================================
+  // Test 15: 生命週期 OuroPtr、Const 重載與自主鎖定 (OuroReadLock/OuroWriteLock) 測試
+  // ==========================================
+  std::cout << "\nTest 15: 生命週期 OuroPtr、Const 重載與自主鎖定 (OuroReadLock/OuroWriteLock) 測試..." << std::endl;
+  {
+    ork::OuroPtr<ParentWithTwoChildren> parent = ork::CreateObject<ParentWithTwoChildren>();
+
+    {
+      ork::OuroPtr<SimpleObject> child_ptr = ork::CreateObject<SimpleObject>();
+      // 測試由 SimpleObject 成員函式內部自主呼叫 OuroWriteLock 修改屬性
+      child_ptr->SetValue(42);
+      assert(child_ptr->GetValue() == 42);
+      std::cout << "  [1. 物件建立與寫鎖更新] 初始化 Value: " << child_ptr->GetValue() << std::endl;
+
+      parent->m_child1 = child_ptr;
+    }
+
+    // 1. 測試在 const 上下文 (const Handle) 呼叫 LockAndAcquire()
+    const auto &const_parent = parent;
+    {
+      // const Handle 自動發放 OuroPtr<const SimpleObject>
+      ork::OuroPtr<const SimpleObject> const_ptr = const_parent->m_child1.LockAndAcquire();
+      assert(const_ptr->GetValue() == 42);
+      std::cout << "  [2. Const 重載] const Handle 匯出 OuroPtr<const T>，唯讀 Value: " << const_ptr->GetValue()
+                << std::endl;
+      // 說明：此時若嘗試呼叫 const_ptr->SetValue(100)，將在編譯期直接觸發編譯錯誤！
+    }
+
+    // 2. 測試在非 const 上下文 (非 const Handle) 呼叫 LockAndAcquire()
+    {
+      // 非 const Handle 自動發放 OuroPtr<SimpleObject> (可變內容)
+      ork::OuroPtr<SimpleObject> mutable_ptr = parent->m_child1.LockAndAcquire();
+      mutable_ptr->SetValue(100);
+      assert(mutable_ptr->GetValue() == 100);
+      std::cout << "  [3. 可變重載] 可變 Handle 匯出 OuroPtr<T>，更新 Value 為: " << mutable_ptr->GetValue()
+                << std::endl;
+    }
+
+    // 3. 測試 OwningHandle 及 WeakHandle 接受 OuroPtr<const SimpleObject> 指派與建構
+    {
+      ork::OuroPtr<const SimpleObject> const_ptr = parent->m_child1.LockAndAcquire();
+
+      // OwningHandle &operator=(const OuroPtr<U>&) 支援 const T / OuroPtr<const T>
+      parent->m_child2 = const_ptr;
+      assert(parent->m_child2.GetTargetID() == const_ptr.GetTargetID());
+
+      // WeakHandle 支援從 OuroPtr<const T> 建構與指派
+      ork::WeakHandle<SimpleObject> weak_from_const(const_ptr);
+      assert(weak_from_const.GetTargetID() == const_ptr.GetTargetID());
+
+      ork::WeakHandle<SimpleObject> weak_assigned;
+      weak_assigned = const_ptr;
+      assert(weak_assigned.GetTargetID() == const_ptr.GetTargetID());
+
+      std::cout << "  [4. const T 接受度測試] OwningHandle 與 WeakHandle 皆可順利接受 OuroPtr<const T>" << std::endl;
+    }
+  }
+  std::cout << "Test 15 Passed." << std::endl;
 
   std::cout << "\n=== All Tests Passed Successfully! ===" << std::endl;
   return 0;

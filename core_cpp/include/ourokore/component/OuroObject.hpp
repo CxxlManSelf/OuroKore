@@ -5,6 +5,8 @@
 #include <unordered_map>
 
 
+#include "ourokore/c_api/component_api.h"
+
 namespace ork
 {
 
@@ -31,6 +33,12 @@ public:
 /**
  * @brief Base class for all managed objects in OuroKore.
  * All concrete components must inherit from this class.
+ *
+ * @note Architecture & Concurrency Guidelines:
+ * 1. OuroPtr serves as a Lifetime Guard (prevents object deletion, ref count management).
+ * 2. OuroPtr dereferencing (operator->) does NOT hold thread mutexes automatically.
+ * 3. Member functions of OuroObject derived classes manage their own thread synchronization
+ *    using OuroReadLock / OuroWriteLock as needed.
  */
 class OuroObject
 {
@@ -72,6 +80,64 @@ private:
 
   HandleID m_object_id = 0;
   std::unordered_map<std::string, OwningContainerHandle *> m_registered_handles;
+};
+
+/**
+ * @brief RAII Scope Guard for Read Lock (Shared Lock) on an OuroObject.
+ */
+class OuroReadLock
+{
+public:
+  explicit OuroReadLock(const OuroObject &obj) : m_target_id(obj.GetObjectID())
+  {
+    if (m_target_id != 0)
+    {
+      ork_lock_object_shared(m_target_id);
+    }
+  }
+
+  ~OuroReadLock()
+  {
+    if (m_target_id != 0)
+    {
+      ork_unlock_object_shared(m_target_id);
+    }
+  }
+
+  OuroReadLock(const OuroReadLock &) = delete;
+  OuroReadLock &operator=(const OuroReadLock &) = delete;
+
+private:
+  HandleID m_target_id = 0;
+};
+
+/**
+ * @brief RAII Scope Guard for Write Lock (Exclusive Lock) on an OuroObject.
+ */
+class OuroWriteLock
+{
+public:
+  explicit OuroWriteLock(const OuroObject &obj) : m_target_id(obj.GetObjectID())
+  {
+    if (m_target_id != 0)
+    {
+      ork_lock_object(m_target_id);
+    }
+  }
+
+  ~OuroWriteLock()
+  {
+    if (m_target_id != 0)
+    {
+      ork_unlock_object(m_target_id);
+    }
+  }
+
+  OuroWriteLock(const OuroWriteLock &) = delete;
+  OuroWriteLock &operator=(const OuroWriteLock &) = delete;
+
+private:
+  HandleID m_target_id = 0;
 };
 
 }  // namespace ork

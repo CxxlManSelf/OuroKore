@@ -82,8 +82,12 @@ template <typename T>
 class OuroPtr
 {
 public:
-  static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
-  static_assert(std::is_convertible_v<T *, OuroObject *>, "T* must be convertible to OuroObject*");
+  using RawT = std::remove_const_t<T>;
+  static_assert(std::is_base_of_v<OuroObject, RawT>, "T must inherit from OuroObject");
+  static_assert(std::is_convertible_v<RawT *, OuroObject *>, "T* must be convertible to OuroObject*");
+
+  template <typename U>
+  friend class OuroPtr;
 
   OuroPtr() = default;
 
@@ -124,6 +128,31 @@ public:
   OuroPtr &operator=(OuroPtr &&other) noexcept
   {
     if (this != &other)
+    {
+      Release();
+      m_target_id = other.m_target_id;
+      m_is_root = other.m_is_root;
+      m_is_write = other.m_is_write;
+      other.m_target_id = 0;
+      other.m_is_root = false;
+    }
+    return *this;
+  }
+
+  // Template converting move constructor (allows OuroPtr<T> -> OuroPtr<const T>)
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
+  OuroPtr(OuroPtr<U> &&other) noexcept
+      : m_target_id(other.m_target_id), m_is_root(other.m_is_root), m_is_write(other.m_is_write)
+  {
+    other.m_target_id = 0;
+    other.m_is_root = false;
+  }
+
+  // Template converting move assignment
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
+  OuroPtr &operator=(OuroPtr<U> &&other) noexcept
+  {
+    if (this->m_target_id != other.m_target_id || this->m_is_root != other.m_is_root)
     {
       Release();
       m_target_id = other.m_target_id;
@@ -353,21 +382,33 @@ class OwningHandle : protected OwningContainerHandle
 {
   friend class OuroObject;
 
+  template <typename U>
+  friend class OwningHandle;
+
 public:
+  using RawT = std::remove_const_t<T>;
   using OwningContainerHandle::GetOwnerID;
   using OwningContainerHandle::GetSlotName;
 
-  static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
+  static_assert(std::is_base_of_v<OuroObject, RawT>, "T must inherit from OuroObject");
 
   explicit OwningHandle(std::string slot_name) : OwningContainerHandle(std::move(slot_name)) {}
 
-  OwningHandle(std::string slot_name, const OuroPtr<T> &ptr) : OwningContainerHandle(std::move(slot_name))
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle(std::string slot_name, const OuroPtr<U> &ptr) : OwningContainerHandle(std::move(slot_name))
   {
     SetTarget(ptr.GetTargetID());
   }
 
   // Copy Constructor
   OwningHandle(const OwningHandle &other) : OwningContainerHandle(other.m_slot_name) { SetTarget(other.GetTargetID()); }
+
+  // Converting Copy Constructor
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle(std::string slot_name, const OwningHandle<U> &other) : OwningContainerHandle(std::move(slot_name))
+  {
+    SetTarget(other.GetTargetID());
+  }
 
   // Copy Assignment
   OwningHandle &operator=(const OwningHandle &other)
@@ -379,7 +420,17 @@ public:
     return *this;
   }
 
-  OwningHandle &operator=(const OuroPtr<T> &ptr)
+  // Converting Copy Assignment from OwningHandle<U>
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle &operator=(const OwningHandle<U> &other)
+  {
+    SetTarget(other.GetTargetID());
+    return *this;
+  }
+
+  // Converting Copy Assignment from OuroPtr<U>
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle &operator=(const OuroPtr<U> &ptr)
   {
     SetTarget(ptr.GetTargetID());
     return *this;
@@ -438,14 +489,15 @@ public:
 
   HandleID GetTargetID() const { return m_target_ids.empty() ? 0 : m_target_ids[0]; }
 
-  OuroPtr<T> LockAndAcquire(bool write = false) const
+  template <typename TargetT = T>
+  OuroPtr<TargetT> LockAndAcquire(bool write = false) const
   {
     HandleID tid = GetTargetID();
     if (tid == 0)
     {
-      return OuroPtr<T>();
+      return OuroPtr<TargetT>();
     }
-    return OuroPtr<T>(tid, write, false /*is_root*/);
+    return OuroPtr<TargetT>(tid, write, false /*is_root*/);
   }
 
 private:
@@ -462,12 +514,17 @@ private:
 template <typename T>
 class WeakHandle
 {
+  template <typename U>
+  friend class WeakHandle;
+
 public:
-  static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
+  using RawT = std::remove_const_t<T>;
+  static_assert(std::is_base_of_v<OuroObject, RawT>, "T must inherit from OuroObject");
 
   WeakHandle() = default;
 
-  explicit WeakHandle(const OwningHandle<T> &handle) : m_target_id(handle.GetTargetID())
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  explicit WeakHandle(const OwningHandle<U> &handle) : m_target_id(handle.GetTargetID())
   {
     if (m_target_id != 0)
     {
@@ -475,7 +532,8 @@ public:
     }
   }
 
-  explicit WeakHandle(const OuroPtr<T> &ptr) : m_target_id(ptr.GetTargetID())
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  explicit WeakHandle(const OuroPtr<U> &ptr) : m_target_id(ptr.GetTargetID())
   {
     if (m_target_id != 0)
     {
@@ -487,6 +545,15 @@ public:
 
   // Copy semantics
   WeakHandle(const WeakHandle &other) : m_target_id(other.m_target_id)
+  {
+    if (m_target_id != 0)
+    {
+      ork_register_weak(m_target_id);
+    }
+  }
+
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  WeakHandle(const WeakHandle<U> &other) : m_target_id(other.GetTargetID())
   {
     if (m_target_id != 0)
     {
@@ -508,7 +575,23 @@ public:
     return *this;
   }
 
-  WeakHandle &operator=(const OwningHandle<T> &handle)
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  WeakHandle &operator=(const WeakHandle<U> &other)
+  {
+    if (this->m_target_id != other.GetTargetID())
+    {
+      Release();
+      m_target_id = other.GetTargetID();
+      if (m_target_id != 0)
+      {
+        ork_register_weak(m_target_id);
+      }
+    }
+    return *this;
+  }
+
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  WeakHandle &operator=(const OwningHandle<U> &handle)
   {
     Release();
     m_target_id = handle.GetTargetID();
@@ -519,7 +602,8 @@ public:
     return *this;
   }
 
-  WeakHandle &operator=(const OuroPtr<T> &ptr)
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  WeakHandle &operator=(const OuroPtr<U> &ptr)
   {
     Release();
     m_target_id = ptr.GetTargetID();
@@ -570,13 +654,14 @@ public:
     return false;
   }
 
-  OuroPtr<T> LockAndAcquire(bool write = false) const
+  template <typename TargetT = T>
+  OuroPtr<TargetT> LockAndAcquire(bool write = false) const
   {
     if (!IsAlive())
     {
-      return OuroPtr<T>();
+      return OuroPtr<TargetT>();
     }
-    return OuroPtr<T>(m_target_id, write, false /*is_root*/);
+    return OuroPtr<TargetT>(m_target_id, write, false /*is_root*/);
   }
 
   HandleID GetTargetID() const { return m_target_id; }
