@@ -27,6 +27,10 @@ ColumnLimit: 120                # 每行最長 120 字元，超過會自動換�
 PointerAlignment: Right
 
 # 6. 其他常用微調
-AlignAfterOpenBracket: Align    # 換行時，參數與括號對齊
-AllowShortFunctionsOnASingleLine: Inline # 只有極短的 Inline 函數可寫在同一行
+AlignAfterOpenBracket: BlockIndent    # 換行時，參數與括號對齊
+AllowShortFunctionsOnASingleLine: Empty # 僅允許空函數寫在同一行
 KeepEmptyLinesAtTheStartOfBlocks: false  # 自動移除區塊開頭的多餘空行
+
+# 強制建構子初始化成員不要打包在同一行
+PackConstructorInitializers: Never # 建構子初始化列表不換行
+BreakConstructorInitializers: AfterColon # 建構子初始化列表冒號放在上一行末尾

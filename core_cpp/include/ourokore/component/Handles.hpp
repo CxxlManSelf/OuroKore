@@ -75,7 +75,7 @@ private:
 };
 
 /**
- * @brief OuroPtr represents an active, locked operational execution pointer (RAII).
+ * @brief OuroPtr represents a lifetime guard operational execution pointer (RAII).
  * It can also act as the Root credential (owning a life cycle) when m_is_root is true.
  */
 template <typename T>
@@ -91,23 +91,11 @@ public:
 
   OuroPtr() = default;
 
-  OuroPtr(HandleID target_id, bool write, bool is_root) : m_target_id(target_id), m_is_root(is_root), m_is_write(write)
+  OuroPtr(HandleID target_id, bool is_root = false) : m_target_id(target_id), m_is_root(is_root)
   {
     if (m_is_root && m_target_id != 0)
     {
       ork_register_edge(ORK_ROOT_ID, m_target_id);
-    }
-
-    if (m_target_id != 0)
-    {
-      if (m_is_write)
-      {
-        ork_lock_object(m_target_id);
-      }
-      else
-      {
-        ork_lock_object_shared(m_target_id);
-      }
     }
   }
 
@@ -119,7 +107,7 @@ public:
 
   // Enable moving
   OuroPtr(OuroPtr &&other) noexcept
-      : m_target_id(other.m_target_id), m_is_root(other.m_is_root), m_is_write(other.m_is_write)
+      : m_target_id(other.m_target_id), m_is_root(other.m_is_root)
   {
     other.m_target_id = 0;
     other.m_is_root = false;
@@ -132,7 +120,6 @@ public:
       Release();
       m_target_id = other.m_target_id;
       m_is_root = other.m_is_root;
-      m_is_write = other.m_is_write;
       other.m_target_id = 0;
       other.m_is_root = false;
     }
@@ -142,7 +129,7 @@ public:
   // Template converting move constructor (allows OuroPtr<T> -> OuroPtr<const T>)
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
   OuroPtr(OuroPtr<U> &&other) noexcept
-      : m_target_id(other.m_target_id), m_is_root(other.m_is_root), m_is_write(other.m_is_write)
+      : m_target_id(other.m_target_id), m_is_root(other.m_is_root)
   {
     other.m_target_id = 0;
     other.m_is_root = false;
@@ -157,7 +144,6 @@ public:
       Release();
       m_target_id = other.m_target_id;
       m_is_root = other.m_is_root;
-      m_is_write = other.m_is_write;
       other.m_target_id = 0;
       other.m_is_root = false;
     }
@@ -168,14 +154,6 @@ public:
   {
     if (m_target_id != 0)
     {
-      if (m_is_write)
-      {
-        ork_unlock_object(m_target_id);
-      }
-      else
-      {
-        ork_unlock_object_shared(m_target_id);
-      }
       if (m_is_root)
       {
         ork_unregister_edge(ORK_ROOT_ID, m_target_id);
@@ -215,12 +193,10 @@ public:
 
   HandleID GetTargetID() const { return m_target_id; }
   bool IsRoot() const { return m_is_root; }
-  bool IsWriteLocked() const { return m_is_write; }
 
 private:
   HandleID m_target_id = 0;
   bool m_is_root = false;
-  bool m_is_write = false;
 };
 
 /**
@@ -294,7 +270,7 @@ public:
    * @brief Lock and acquire all child objects in this container into an OuroPtr vector.
    */
   template <typename T = OuroObject>
-  std::vector<OuroPtr<T>> LockAndAcquireAll(bool write = false) const
+  std::vector<OuroPtr<T>> LockAndAcquireAll() const
   {
     std::vector<OuroPtr<T>> result;
     result.reserve(m_target_ids.size());
@@ -302,7 +278,7 @@ public:
     {
       if (tid != 0)
       {
-        result.emplace_back(tid, write, false /*is_root*/);
+        result.emplace_back(tid, false /*is_root*/);
       }
     }
     return result;
@@ -490,14 +466,14 @@ public:
   HandleID GetTargetID() const { return m_target_ids.empty() ? 0 : m_target_ids[0]; }
 
   template <typename TargetT = T>
-  OuroPtr<TargetT> LockAndAcquire(bool write = false) const
+  OuroPtr<TargetT> LockAndAcquire() const
   {
     HandleID tid = GetTargetID();
     if (tid == 0)
     {
       return OuroPtr<TargetT>();
     }
-    return OuroPtr<TargetT>(tid, write, false /*is_root*/);
+    return OuroPtr<TargetT>(tid, false /*is_root*/);
   }
 
 private:
@@ -655,13 +631,13 @@ public:
   }
 
   template <typename TargetT = T>
-  OuroPtr<TargetT> LockAndAcquire(bool write = false) const
+  OuroPtr<TargetT> LockAndAcquire() const
   {
     if (!IsAlive())
     {
       return OuroPtr<TargetT>();
     }
-    return OuroPtr<TargetT>(m_target_id, write, false /*is_root*/);
+    return OuroPtr<TargetT>(m_target_id, false /*is_root*/);
   }
 
   HandleID GetTargetID() const { return m_target_id; }
@@ -710,7 +686,7 @@ OuroPtr<T> CreateObject(Args &&...args)
     throw std::runtime_error("OuroKore Error: Failed to bind payload to reserved HandleID.");
   }
 
-  return OuroPtr<T>(reserved_id, true /*write*/, true /*is_root*/);
+  return OuroPtr<T>(reserved_id, true /*is_root*/);
 }
 
 }  // namespace ork

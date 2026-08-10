@@ -7,9 +7,23 @@ CompileFlags:
   # 指定預設使用的 C++ 編譯器絕對路徑
   Compiler: 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe'
 
-  # 新增 MinGW 目標平台與 C++20 標準，確保標頭檔 (如 <cassert>) 能被 clangd 找到
+  # 新增 MinGW 目標平台、C++20 標準與系統標頭檔路徑，確保 clangd 能正確解析標頭檔
   Add:
     - '--target=x86_64-w64-mingw32'
     - '-std=c++20'
+    - '-IC:/OuroKore/include'
+    - '-isystem'
+    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/c++'
+    - '-isystem'
+    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/c++/x86_64-w64-mingw32'
+    - '-isystem'
+    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/c++/backward'
+    - '-isystem'
+    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include'
+    - '-isystem'
+    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include-fixed'
+    - '-isystem'
+    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/x86_64-w64-mingw32/include'
+
 
 
