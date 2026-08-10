@@ -145,10 +145,38 @@ int main()
   {
     ork::OuroPtr<SimpleObject> ptr = ork::CreateObject<SimpleObject>();
     assert(ptr.GetTargetID() != 0);
-    assert(ptr.IsRoot() == true);
     assert(g_deconstruct_count == 0);  // Still alive
   }
   assert(g_deconstruct_count == 1);  // Automatically deleted on OuroPtr destruction
+
+  // Sub-test: LockAndAcquire OuroPtr holds root edge and protects object lifetime
+  {
+    g_deconstruct_count = 0;
+    HandleID child_id = 0;
+    {
+      ork::OuroPtr<ParentWithTwoChildren> parent = ork::CreateObject<ParentWithTwoChildren>();
+      ork::OuroPtr<SimpleObject> child_guard;
+      {
+        ork::OuroPtr<SimpleObject> child = ork::CreateObject<SimpleObject>();
+        child_id = child.GetTargetID();
+        parent->m_child1 = child;
+      }
+      // Lock and acquire temporary OuroPtr guard
+      child_guard = parent->m_child1.LockAndAcquire();
+      assert(child_guard.GetTargetID() == child_id);
+
+      // Parent releases its handle
+      parent->m_child1.Release();
+
+      // Object must STILL be alive because child_guard holds an active root edge!
+      assert(g_deconstruct_count == 0);
+      int32_t alive = 0;
+      ork_check_alive(child_id, &alive, 0);
+      assert(alive == 1);
+    }
+    // child_guard and parent out of scope -> object now deconstructed
+    assert(g_deconstruct_count == 2);
+  }
   std::cout << "Test 1 Passed." << std::endl;
 
   // ==========================================
