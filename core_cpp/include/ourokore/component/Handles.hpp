@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <stdexcept>
 #include <string>
@@ -65,7 +66,10 @@ public:
     ork_set_active_owner(new_owner);
   }
 
-  ~ActiveOwnerGuard() { ork_set_active_owner(m_backup_owner); }
+  ~ActiveOwnerGuard()
+  {
+    ork_set_active_owner(m_backup_owner);
+  }
 
   ActiveOwnerGuard(const ActiveOwnerGuard &) = delete;
   ActiveOwnerGuard &operator=(const ActiveOwnerGuard &) = delete;
@@ -92,7 +96,8 @@ public:
 
   OuroPtr() = default;
 
-  explicit OuroPtr(HandleID target_id) : m_target_id(target_id)
+  explicit OuroPtr(HandleID target_id) :
+      m_target_id(target_id)
   {
     if (m_target_id != 0)
     {
@@ -100,14 +105,18 @@ public:
     }
   }
 
-  ~OuroPtr() { Release(); }
+  ~OuroPtr()
+  {
+    Release();
+  }
 
   // Disable copying
   OuroPtr(const OuroPtr &) = delete;
   OuroPtr &operator=(const OuroPtr &) = delete;
 
   // Enable moving
-  OuroPtr(OuroPtr &&other) noexcept : m_target_id(other.m_target_id)
+  OuroPtr(OuroPtr &&other) noexcept :
+      m_target_id(other.m_target_id)
   {
     other.m_target_id = 0;
   }
@@ -125,7 +134,8 @@ public:
 
   // Template converting move constructor (allows OuroPtr<T> -> OuroPtr<const T>)
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
-  OuroPtr(OuroPtr<U> &&other) noexcept : m_target_id(other.m_target_id)
+  OuroPtr(OuroPtr<U> &&other) noexcept :
+      m_target_id(other.m_target_id)
   {
     other.m_target_id = 0;
   }
@@ -180,7 +190,10 @@ public:
     return ork_acquire_object_pointer(m_target_id, &raw_obj) == ORK_STATUS_OK;
   }
 
-  HandleID GetTargetID() const { return m_target_id; }
+  HandleID GetTargetID() const
+  {
+    return m_target_id;
+  }
 
 private:
   HandleID m_target_id = 0;
@@ -193,8 +206,9 @@ private:
 class OwningContainerHandle
 {
 public:
-  explicit OwningContainerHandle(std::string slot_name)
-      : m_slot_name(std::move(slot_name)), m_owner_id(GetActiveOwnerHelper())
+  explicit OwningContainerHandle(std::string slot_name) :
+      m_slot_name(std::move(slot_name)),
+      m_owner_id(GetActiveOwnerHelper())
   {
     OuroObject *active_obj = detail::GetActiveObject();
     if (active_obj)
@@ -203,11 +217,15 @@ public:
     }
   }
 
-  virtual ~OwningContainerHandle() { ReleaseAll(); }
+  virtual ~OwningContainerHandle()
+  {
+    ReleaseAll();
+  }
 
   // Copy semantics
-  OwningContainerHandle(const OwningContainerHandle &other)
-      : m_slot_name(other.m_slot_name), m_owner_id(GetActiveOwnerHelper())
+  OwningContainerHandle(const OwningContainerHandle &other) :
+      m_slot_name(other.m_slot_name),
+      m_owner_id(GetActiveOwnerHelper())
   {
     for (HandleID tid : other.m_target_ids)
     {
@@ -229,8 +247,9 @@ public:
   }
 
   // Move semantics (Zero-Cost Reallocation for same-owner moves)
-  OwningContainerHandle(OwningContainerHandle &&other) noexcept
-      : m_slot_name(std::move(other.m_slot_name)), m_owner_id(other.m_owner_id)
+  OwningContainerHandle(OwningContainerHandle &&other) noexcept :
+      m_slot_name(std::move(other.m_slot_name)),
+      m_owner_id(other.m_owner_id)
   {
     m_target_ids = std::move(other.m_target_ids);
     other.m_target_ids.clear();
@@ -248,10 +267,22 @@ public:
     return *this;
   }
 
-  const std::string &GetSlotName() const { return m_slot_name; }
-  HandleID GetOwnerID() const { return m_owner_id; }
-  const std::vector<HandleID> &GetTargetIDs() const { return m_target_ids; }
-  size_t GetTargetCount() const { return m_target_ids.size(); }
+  const std::string &GetSlotName() const
+  {
+    return m_slot_name;
+  }
+  HandleID GetOwnerID() const
+  {
+    return m_owner_id;
+  }
+  const std::vector<HandleID> &GetTargetIDs() const
+  {
+    return m_target_ids;
+  }
+  size_t GetTargetCount() const
+  {
+    return m_target_ids.size();
+  }
 
   /**
    * @brief Lock and acquire all child objects in this container into an OuroPtr vector.
@@ -308,7 +339,8 @@ protected:
     {
       throw std::runtime_error(
           "OuroKore Error: OwningHandle with a valid target is strictly forbidden on Stack/Global (owner must not be "
-          "ORK_ROOT_ID). Use OuroPtr instead.");
+          "ORK_ROOT_ID). Use OuroPtr instead."
+      );
     }
   }
 
@@ -355,20 +387,29 @@ public:
 
   static_assert(std::is_base_of_v<OuroObject, RawT>, "T must inherit from OuroObject");
 
-  explicit OwningHandle(std::string slot_name) : OwningContainerHandle(std::move(slot_name)) {}
+  explicit OwningHandle(std::string slot_name) :
+      OwningContainerHandle(std::move(slot_name))
+  {
+  }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  OwningHandle(std::string slot_name, const OuroPtr<U> &ptr) : OwningContainerHandle(std::move(slot_name))
+  OwningHandle(std::string slot_name, const OuroPtr<U> &ptr) :
+      OwningContainerHandle(std::move(slot_name))
   {
     SetTarget(ptr.GetTargetID());
   }
 
   // Copy Constructor
-  OwningHandle(const OwningHandle &other) : OwningContainerHandle(other.m_slot_name) { SetTarget(other.GetTargetID()); }
+  OwningHandle(const OwningHandle &other) :
+      OwningContainerHandle(other.m_slot_name)
+  {
+    SetTarget(other.GetTargetID());
+  }
 
   // Converting Copy Constructor
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  OwningHandle(std::string slot_name, const OwningHandle<U> &other) : OwningContainerHandle(std::move(slot_name))
+  OwningHandle(std::string slot_name, const OwningHandle<U> &other) :
+      OwningContainerHandle(std::move(slot_name))
   {
     SetTarget(other.GetTargetID());
   }
@@ -400,7 +441,10 @@ public:
   }
 
   // Move Constructor (inherits same m_owner_id & slot_name)
-  OwningHandle(OwningHandle &&other) noexcept : OwningContainerHandle(std::move(other)) {}
+  OwningHandle(OwningHandle &&other) noexcept :
+      OwningContainerHandle(std::move(other))
+  {
+  }
 
   // Move Assignment (Strong Exception Guarantee: Step 1 Check -> Step 2 Register -> Step 3 Release)
   OwningHandle &operator=(OwningHandle &&other) noexcept
@@ -408,49 +452,67 @@ public:
     if (this != &other)
     {
       HandleID target_id = other.GetTargetID();
+      HandleID old_target_id = GetTargetID();
       HandleID other_owner_id = other.m_owner_id;
 
       // Step 1: Rule check
       CheckEnforceRules(target_id);
 
-      // Step 2: Edge registration if cross-host
-      if (target_id != 0 && m_owner_id != other_owner_id)
+      if (old_target_id != 0 && old_target_id == target_id)
       {
-        ork_register_edge(m_owner_id, target_id);
+        // Target is the same object:
+        // Whether cross-host or same-host, 'this' already holds target_id under m_owner_id.
+        // We only need to unregister one edge from other_owner_id and clear the source handle 'other'.
         ork_unregister_edge(other_owner_id, target_id);
+        other.m_target_ids.clear();
       }
-
-      // Step 3: Release old target
-      Release();
-
-      m_target_ids.clear();
-      if (target_id != 0)
+      else
       {
-        m_target_ids.push_back(target_id);
+        // Target is different (or target_id == 0)
+        // Step 2: Edge registration if cross-host
+        if (target_id != 0 && m_owner_id != other_owner_id)
+        {
+          ork_register_edge(m_owner_id, target_id);
+          ork_unregister_edge(other_owner_id, target_id);
+        }
+
+        // Step 3: Release old target (Release() -> ReleaseAll() already clears m_target_ids)
+        Release();
+
+        if (target_id != 0)
+        {
+          m_target_ids.push_back(target_id);
+          other.m_target_ids.clear();
+        }
       }
-      other.m_target_ids.clear();
     }
     return *this;
   }
 
   void SetTarget(HandleID target_id)
   {
+    if (GetTargetID() == target_id) return;
     CheckEnforceRules(target_id);
     if (target_id != 0)
     {
       ork_register_edge(m_owner_id, target_id);
     }
     Release();
-    m_target_ids.clear();
     if (target_id != 0)
     {
       m_target_ids.push_back(target_id);
     }
   }
 
-  void Release() { ReleaseAll(); }
+  void Release()
+  {
+    ReleaseAll();
+  }
 
-  HandleID GetTargetID() const { return m_target_ids.empty() ? 0 : m_target_ids[0]; }
+  HandleID GetTargetID() const
+  {
+    return m_target_ids.empty() ? 0 : m_target_ids[0];
+  }
 
   template <typename TargetT = T>
   OuroPtr<TargetT> LockAndAcquire() const
@@ -487,40 +549,51 @@ public:
   WeakHandle() = default;
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  explicit WeakHandle(const OwningHandle<U> &handle) : m_target_id(handle.GetTargetID())
+  explicit WeakHandle(const OwningHandle<U> &handle) :
+      m_target_id(handle.GetTargetID())
   {
-    if (m_target_id != 0)
+    HandleID tid = m_target_id.load(std::memory_order_relaxed);
+    if (tid != 0)
     {
-      ork_register_weak(m_target_id);
+      ork_register_weak(tid);
     }
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  explicit WeakHandle(const OuroPtr<U> &ptr) : m_target_id(ptr.GetTargetID())
+  explicit WeakHandle(const OuroPtr<U> &ptr) :
+      m_target_id(ptr.GetTargetID())
   {
-    if (m_target_id != 0)
+    HandleID tid = m_target_id.load(std::memory_order_relaxed);
+    if (tid != 0)
     {
-      ork_register_weak(m_target_id);
+      ork_register_weak(tid);
     }
   }
 
-  ~WeakHandle() { Release(); }
+  ~WeakHandle()
+  {
+    Release();
+  }
 
   // Copy semantics
-  WeakHandle(const WeakHandle &other) : m_target_id(other.m_target_id)
+  WeakHandle(const WeakHandle &other) :
+      m_target_id(other.m_target_id.load(std::memory_order_relaxed))
   {
-    if (m_target_id != 0)
+    HandleID tid = m_target_id.load(std::memory_order_relaxed);
+    if (tid != 0)
     {
-      ork_register_weak(m_target_id);
+      ork_register_weak(tid);
     }
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  WeakHandle(const WeakHandle<U> &other) : m_target_id(other.GetTargetID())
+  WeakHandle(const WeakHandle<U> &other) :
+      m_target_id(other.GetTargetID())
   {
-    if (m_target_id != 0)
+    HandleID tid = m_target_id.load(std::memory_order_relaxed);
+    if (tid != 0)
     {
-      ork_register_weak(m_target_id);
+      ork_register_weak(tid);
     }
   }
 
@@ -529,10 +602,11 @@ public:
     if (this != &other)
     {
       Release();
-      m_target_id = other.m_target_id;
-      if (m_target_id != 0)
+      HandleID tid = other.m_target_id.load(std::memory_order_relaxed);
+      m_target_id.store(tid, std::memory_order_relaxed);
+      if (tid != 0)
       {
-        ork_register_weak(m_target_id);
+        ork_register_weak(tid);
       }
     }
     return *this;
@@ -541,13 +615,14 @@ public:
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
   WeakHandle &operator=(const WeakHandle<U> &other)
   {
-    if (this->m_target_id != other.GetTargetID())
+    HandleID other_tid = other.GetTargetID();
+    if (this->m_target_id.load(std::memory_order_relaxed) != other_tid)
     {
       Release();
-      m_target_id = other.GetTargetID();
-      if (m_target_id != 0)
+      m_target_id.store(other_tid, std::memory_order_relaxed);
+      if (other_tid != 0)
       {
-        ork_register_weak(m_target_id);
+        ork_register_weak(other_tid);
       }
     }
     return *this;
@@ -557,10 +632,11 @@ public:
   WeakHandle &operator=(const OwningHandle<U> &handle)
   {
     Release();
-    m_target_id = handle.GetTargetID();
-    if (m_target_id != 0)
+    HandleID tid = handle.GetTargetID();
+    m_target_id.store(tid, std::memory_order_relaxed);
+    if (tid != 0)
     {
-      ork_register_weak(m_target_id);
+      ork_register_weak(tid);
     }
     return *this;
   }
@@ -569,51 +645,76 @@ public:
   WeakHandle &operator=(const OuroPtr<U> &ptr)
   {
     Release();
-    m_target_id = ptr.GetTargetID();
-    if (m_target_id != 0)
+    HandleID tid = ptr.GetTargetID();
+    m_target_id.store(tid, std::memory_order_relaxed);
+    if (tid != 0)
     {
-      ork_register_weak(m_target_id);
+      ork_register_weak(tid);
     }
     return *this;
   }
 
   // Move semantics
-  WeakHandle(WeakHandle &&other) noexcept : m_target_id(other.m_target_id) { other.m_target_id = 0; }
+  WeakHandle(WeakHandle &&other) noexcept :
+      m_target_id(other.m_target_id.exchange(0, std::memory_order_relaxed))
+  {
+  }
+
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  WeakHandle(WeakHandle<U> &&other) noexcept :
+      m_target_id(other.m_target_id.exchange(0, std::memory_order_relaxed))
+  {
+  }
 
   WeakHandle &operator=(WeakHandle &&other) noexcept
   {
     if (this != &other)
     {
       Release();
-      m_target_id = other.m_target_id;
-      other.m_target_id = 0;
+      m_target_id.store(other.m_target_id.exchange(0, std::memory_order_relaxed), std::memory_order_relaxed);
+    }
+    return *this;
+  }
+
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  WeakHandle &operator=(WeakHandle<U> &&other) noexcept
+  {
+    HandleID other_tid = other.m_target_id.exchange(0, std::memory_order_relaxed);
+    if (this->m_target_id.load(std::memory_order_relaxed) != other_tid)
+    {
+      Release();
+      m_target_id.store(other_tid, std::memory_order_relaxed);
     }
     return *this;
   }
 
   void Release()
   {
-    if (m_target_id != 0)
+    HandleID tid = m_target_id.exchange(0, std::memory_order_relaxed);
+    if (tid != 0)
     {
-      ork_unregister_weak(m_target_id);
-      m_target_id = 0;
+      ork_unregister_weak(tid);
     }
   }
 
   bool IsAlive() const
   {
-    if (m_target_id == 0) return false;
+    HandleID tid = m_target_id.load(std::memory_order_relaxed);
+    if (tid == 0) return false;
     int32_t alive = 0;
-    if (ork_check_alive(m_target_id, &alive, 1) == ORK_STATUS_OK)
+    // Step 1: Probe WITHOUT pruning (perform_pruning = 0)
+    if (ork_check_alive(tid, &alive, 0) == ORK_STATUS_OK && alive)
     {
-      if (!alive)
-      {
-        m_target_id = 0;  // Lazy pruning!
-        return false;
-      }
-      return true;
+      return true;  // Fast path: object is alive, 0 atomic mutations!
     }
-    m_target_id = 0;
+
+    // Step 2: Object is dead or not found.
+    // Atomically claim the right to prune this WeakHandle instance (CAS tid -> 0).
+    if (m_target_id.compare_exchange_strong(tid, 0, std::memory_order_relaxed))
+    {
+      // We won the race! Call Registry to perform pruning for this WeakHandle ONCE.
+      ork_check_alive(tid, &alive, 1);
+    }
     return false;
   }
 
@@ -624,13 +725,16 @@ public:
     {
       return OuroPtr<TargetT>();
     }
-    return OuroPtr<TargetT>(m_target_id);
+    return OuroPtr<TargetT>(m_target_id.load(std::memory_order_relaxed));
   }
 
-  HandleID GetTargetID() const { return m_target_id; }
+  HandleID GetTargetID() const
+  {
+    return m_target_id.load(std::memory_order_relaxed);
+  }
 
 private:
-  mutable HandleID m_target_id = 0;
+  mutable std::atomic<HandleID> m_target_id{0};
 };
 
 /**
@@ -641,8 +745,9 @@ template <typename T, typename... Args>
 OuroPtr<T> CreateObject(Args &&...args)
 {
   static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
-  static_assert(std::is_convertible_v<T *, OuroObject *>,
-                "T* must be convertible to OuroObject* (Diamond Inheritance forbidden)");
+  static_assert(
+      std::is_convertible_v<T *, OuroObject *>, "T* must be convertible to OuroObject* (Diamond Inheritance forbidden)"
+  );
 
   HandleID reserved_id = 0;
   if (ork_reserve_object_id(&reserved_id) != ORK_STATUS_OK)

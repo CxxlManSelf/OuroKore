@@ -13,7 +13,10 @@ class SimpleObject : public ork::OuroObject
 {
 public:
   SimpleObject() = default;
-  ~SimpleObject() override { g_deconstruct_count++; }
+  ~SimpleObject() override
+  {
+    g_deconstruct_count++;
+  }
 
   int GetValue() const
   {
@@ -36,7 +39,10 @@ class ChildObject : public ork::OuroObject
 {
 public:
   ChildObject() = default;
-  ~ChildObject() override { g_deconstruct_count++; }
+  ~ChildObject() override
+  {
+    g_deconstruct_count++;
+  }
 };
 
 class ParentObject : public ork::OuroObject
@@ -47,7 +53,10 @@ public:
     // Child is nested-constructed. ActiveOwnerContext should pass Parent ID automatically.
     m_child = ork::CreateObject<ChildObject>();
   }
-  ~ParentObject() override { g_deconstruct_count++; }
+  ~ParentObject() override
+  {
+    g_deconstruct_count++;
+  }
 
   ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
@@ -56,7 +65,10 @@ class ParentWithTwoChildren : public ork::OuroObject
 {
 public:
   ParentWithTwoChildren() = default;
-  ~ParentWithTwoChildren() override { g_deconstruct_count++; }
+  ~ParentWithTwoChildren() override
+  {
+    g_deconstruct_count++;
+  }
 
   ork::OwningHandle<SimpleObject> m_child1{"m_child1"};
   ork::OwningHandle<SimpleObject> m_child2{"m_child2"};
@@ -79,16 +91,24 @@ public:
 };
 // 驗證菱形繼承（Diamond Inheritance）因歧義性而無法隱式轉換為 OuroObject*。
 // 這確保了 Handles.hpp 中 CreateObject() 函式的編譯期防護（static_assert）能正確阻擋此類不良繼承結構。
-static_assert(!std::is_convertible_v<DiamondChild *, ork::OuroObject *>,
-              "Diamond inheritance should be detected as ambiguous and forbidden at compile time.");
+static_assert(
+    !std::is_convertible_v<DiamondChild *, ork::OuroObject *>,
+    "Diamond inheritance should be detected as ambiguous and forbidden at compile time."
+);
 
 class ParentDrivenObject : public ork::OuroObject
 {
 public:
   ParentDrivenObject() = default;
-  ~ParentDrivenObject() override { g_deconstruct_count++; }
+  ~ParentDrivenObject() override
+  {
+    g_deconstruct_count++;
+  }
 
-  void InitChildren() { m_child = ork::CreateObject<ChildObject>(); }
+  void InitChildren()
+  {
+    m_child = ork::CreateObject<ChildObject>();
+  }
 
   ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
@@ -96,8 +116,14 @@ public:
 class ParentDrivenCtorObject : public ork::OuroObject
 {
 public:
-  ParentDrivenCtorObject() { m_child = ork::CreateObject<ChildObject>(); }
-  ~ParentDrivenCtorObject() override { g_deconstruct_count++; }
+  ParentDrivenCtorObject()
+  {
+    m_child = ork::CreateObject<ChildObject>();
+  }
+  ~ParentDrivenCtorObject() override
+  {
+    g_deconstruct_count++;
+  }
 
   ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
@@ -106,7 +132,10 @@ class ParentDrivenAdoptObject : public ork::OuroObject
 {
 public:
   ParentDrivenAdoptObject() = default;
-  ~ParentDrivenAdoptObject() override { g_deconstruct_count++; }
+  ~ParentDrivenAdoptObject() override
+  {
+    g_deconstruct_count++;
+  }
 
   ork::OwningHandle<SimpleObject> m_child{"m_child"};
 };
@@ -115,11 +144,23 @@ class ParentWithContainer : public ork::OuroObject
 {
 public:
   ParentWithContainer() = default;
-  ~ParentWithContainer() override { g_deconstruct_count++; }
+  ~ParentWithContainer() override
+  {
+    g_deconstruct_count++;
+  }
 
-  void AddChildObject(const ork::OuroPtr<SimpleObject> &child) { m_children.AddTarget(child.GetTargetID()); }
-  void RemoveChildObject(HandleID child_id) { m_children.RemoveTarget(child_id); }
-  size_t GetChildrenCount() const { return m_children.GetTargetCount(); }
+  void AddChildObject(const ork::OuroPtr<SimpleObject> &child)
+  {
+    m_children.AddTarget(child.GetTargetID());
+  }
+  void RemoveChildObject(HandleID child_id)
+  {
+    m_children.RemoveTarget(child_id);
+  }
+  size_t GetChildrenCount() const
+  {
+    return m_children.GetTargetCount();
+  }
 
   /**
    * @brief 在 Parent 鎖保護狀態下取得所有子物件控制指標
@@ -554,8 +595,19 @@ int main()
     assert(parent->m_child1.GetTargetID() != 0);
     assert(parent->m_child2.GetTargetID() == 0);
     assert(g_deconstruct_count == 0);  // Target should not be deconstructed!
+
+    // Move assign: same target, different owner (cross-host)
+    ork::OuroPtr<ParentWithTwoChildren> parent2 = ork::CreateObject<ParentWithTwoChildren>();
+    parent2->m_child1 = parent->m_child1.LockAndAcquire();
+    assert(parent->m_child1.GetTargetID() == parent2->m_child1.GetTargetID());
+
+    HandleID target_id = parent->m_child1.GetTargetID();
+    parent->m_child1 = std::move(parent2->m_child1);
+    assert(parent->m_child1.GetTargetID() == target_id);
+    assert(parent2->m_child1.GetTargetID() == 0);
+    assert(g_deconstruct_count == 0);
   }
-  assert(g_deconstruct_count == 2);  // Parent and Child deconstructed
+  assert(g_deconstruct_count == 3);  // 2 parents + 1 child
   std::cout << "Test 13 Passed." << std::endl;
 
   // ==========================================
@@ -592,7 +644,8 @@ int main()
 
       assert(parent->GetChildrenCount() == 3);
     }
-    // 3 個臨時 CreateObject 的 OuroPtr 寫鎖離開作用域並釋放，但 parent 的 OwningContainerHandle 持有拓撲強引用，皆未析構
+    // 3 個臨時 CreateObject 的 OuroPtr 寫鎖離開作用域並釋放，但 parent 的 OwningContainerHandle
+    // 持有拓撲強引用，皆未析構
     assert(g_deconstruct_count == 0);
 
     // 測試透過 Parent 封裝介面在 Parent 鎖定下無衝突打包與鎖定所有子物件
