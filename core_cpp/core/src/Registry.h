@@ -92,6 +92,11 @@ public:
    */
   OuroObject *AcquireObjectPointer(HandleID target_id);
 
+  // StorageState management
+  uint8_t GetStorageState(HandleID target_id) const;
+  bool SetStorageState(HandleID target_id, uint8_t state);
+  bool MarkDirty(HandleID target_id);
+
   // Thread-Local Active Owner context
   void SetActiveOwner(HandleID owner_id);
   HandleID GetActiveOwner() const;

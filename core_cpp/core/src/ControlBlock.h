@@ -18,6 +18,7 @@ struct ControlBlock
 {
   std::atomic<uint32_t> m_strong_count{0};
   std::atomic<uint32_t> m_weak_count{0};
+  std::atomic<uint8_t> m_storage_state{0};  // 0: UnsavedNew, 1: Clean, 2: Dirty, 3: Dehydrated
 
   // Shared mutex supporting the two-stage locking contract
   // 支援兩階段鎖定協定的共享互斥鎖

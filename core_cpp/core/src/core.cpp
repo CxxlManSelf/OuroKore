@@ -40,7 +40,7 @@ extern "C"
 
   int32_t ORK_CALL ork_bind_object_payload(HandleID id, OuroObject *obj)
   {
-    if (id == ORK_ROOT_ID || !obj)
+    if (id == ORK_ROOT_ID)
     {
       return ORK_STATUS_ERROR_INVALID_ARG;
     }
@@ -301,6 +301,55 @@ extern "C"
     {
       *out_owner_id = ork::Registry::GetInstance().GetActiveOwner();
       return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_get_storage_state(HandleID target_id, uint8_t *out_state)
+  {
+    if (!out_state)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      *out_state = ork::Registry::GetInstance().GetStorageState(target_id);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_set_storage_state(HandleID target_id, uint8_t state)
+  {
+    try
+    {
+      if (ork::Registry::GetInstance().SetStorageState(target_id, state))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_mark_dirty(HandleID target_id)
+  {
+    try
+    {
+      if (ork::Registry::GetInstance().MarkDirty(target_id))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
     }
     catch (...)
     {

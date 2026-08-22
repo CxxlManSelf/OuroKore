@@ -84,6 +84,29 @@ ORK_API int32_t ORK_CALL ork_set_active_owner(HandleID owner_id);
  */
 ORK_API int32_t ORK_CALL ork_get_active_owner(HandleID* out_owner_id);
 
+/**
+ * @brief Gets the StorageState of an object's ControlBlock.
+ * @param target_id The HandleID of the target object.
+ * @param out_state Pointer to receive the uint8_t StorageState value.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_get_storage_state(HandleID target_id, uint8_t* out_state);
+
+/**
+ * @brief Sets the StorageState of an object's ControlBlock.
+ * @param target_id The HandleID of the target object.
+ * @param state The uint8_t StorageState value to set.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_set_storage_state(HandleID target_id, uint8_t state);
+
+/**
+ * @brief Automatically marks an object's ControlBlock as Dirty if currently Clean.
+ * @param target_id The HandleID of the target object.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_mark_dirty(HandleID target_id);
+
 #ifdef __cplusplus
 }
 #endif

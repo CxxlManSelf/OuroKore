@@ -76,14 +76,15 @@ HandleID Registry::ReserveID()
 
 bool Registry::BindPayload(HandleID id, OuroObject *obj)
 {
-  if (!obj) return false;
-
   std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
   auto it = m_object_map.find(id);
   if (it != m_object_map.end())
   {
     ControlBlock *cb = it->second;
-    obj->SetObjectID(id);
+    if (obj)
+    {
+      obj->SetObjectID(id);
+    }
     cb->m_payload = obj;
     return true;
   }
@@ -344,6 +345,42 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
     return nullptr;
   }
   return cb->m_payload;
+}
+
+uint8_t Registry::GetStorageState(HandleID target_id) const
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    return it->second->m_storage_state.load(std::memory_order_relaxed);
+  }
+  return 0;  // Default UnsavedNew
+}
+
+bool Registry::SetStorageState(HandleID target_id, uint8_t state)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    it->second->m_storage_state.store(state, std::memory_order_relaxed);
+    return true;
+  }
+  return false;
+}
+
+bool Registry::MarkDirty(HandleID target_id)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    uint8_t expected = 1;  // Clean (1)
+    it->second->m_storage_state.compare_exchange_strong(expected, 2);  // Dirty (2)
+    return true;
+  }
+  return false;
 }
 
 void Registry::SetActiveOwner(HandleID owner_id)

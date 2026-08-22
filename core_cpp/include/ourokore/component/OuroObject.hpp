@@ -4,7 +4,7 @@
 #include <string>
 #include <unordered_map>
 
-
+#include "OuroStream.hpp"
 #include "ourokore/c_api/component_api.h"
 
 namespace ork
@@ -20,25 +20,19 @@ template <typename T>
 class OuroPtr;
 
 /**
- * @brief Abstract Stream interface for Phase 3 Blueprint Serialization.
+ * @brief Storage lifecycle states for an OuroObject.
  */
-class OuroStream
+enum class StorageState : uint8_t
 {
-public:
-  virtual ~OuroStream() = default;
-  virtual void WriteBytes(const void *data, size_t size) = 0;
-  virtual void ReadBytes(void *dest, size_t size) = 0;
+  UnsavedNew = 0,  ///< Freshly created object, never saved to storage.
+  Clean = 1,       ///< Saved in storage and memory payload is unmodified.
+  Dirty = 2,       ///< Saved in storage but memory payload has been modified.
+  Dehydrated = 3   ///< Saved in storage and payload memory freed (empty shell).
 };
 
 /**
  * @brief Base class for all managed objects in OuroKore.
  * All concrete components must inherit from this class.
- *
- * @note Architecture & Concurrency Guidelines:
- * 1. OuroPtr serves as a Lifetime Guard (prevents object deletion, ref count management).
- * 2. OuroPtr dereferencing (operator->) does NOT hold thread mutexes automatically.
- * 3. Member functions of OuroObject derived classes manage their own thread synchronization
- *    using OuroReadLock / OuroWriteLock as needed.
  */
 class OuroObject
 {
@@ -51,8 +45,36 @@ public:
   HandleID GetObjectID() const { return m_object_id; }
 
   /**
+   * @brief Get current storage lifecycle state from ControlBlock.
+   */
+  StorageState GetStorageState() const
+  {
+    uint8_t state_val = 0;
+    if (ork_get_storage_state(m_object_id, &state_val) == ORK_STATUS_OK)
+    {
+      return static_cast<StorageState>(state_val);
+    }
+    return StorageState::UnsavedNew;
+  }
+
+  /**
+   * @brief Set storage lifecycle state in ControlBlock.
+   */
+  void SetStorageState(StorageState state)
+  {
+    ork_set_storage_state(m_object_id, static_cast<uint8_t>(state));
+  }
+
+  /**
+   * @brief Mark object as Dirty in ControlBlock if currently Clean.
+   */
+  void MarkDirty()
+  {
+    ork_mark_dirty(m_object_id);
+  }
+
+  /**
    * @brief Register an OwningContainerHandle into this object's handle roster.
-   * Asserts uniqueness of slot names within the same OuroObject.
    */
   void RegisterHandle(OwningContainerHandle *handle);
 
@@ -65,18 +87,21 @@ public:
   }
 
   /**
-   * @brief Optional Phase 3 Blueprint Serialization interface.
+   * @brief Pure Payload serialization interface for concrete component classes.
    */
-  virtual void Serialize(OuroStream & /*stream*/) const {}
-  virtual void Deserialize(OuroStream & /*stream*/) {}
+  virtual void SerializePayload(OuroStream & /*stream*/) const {}
+  virtual void DeserializePayload(OuroStream & /*stream*/) {}
+
+  /**
+   * @brief Sets the runtime instance identifier of this object.
+   */
+  void SetObjectID(HandleID id) { m_object_id = id; }
 
 protected:
   OuroObject();
 
 private:
-  // Allow core registry/factory to assign the object ID on creation.
   friend class Registry;
-  void SetObjectID(HandleID id) { m_object_id = id; }
 
   HandleID m_object_id = 0;
   std::unordered_map<std::string, OwningContainerHandle *> m_registered_handles;
@@ -113,11 +138,13 @@ private:
 
 /**
  * @brief RAII Scope Guard for Write Lock (Exclusive Lock) on an OuroObject.
+ * Automatically marks the object as Dirty upon scope release if currently Clean.
  */
 class OuroWriteLock
 {
 public:
-  explicit OuroWriteLock(const OuroObject &obj) : m_target_id(obj.GetObjectID())
+  explicit OuroWriteLock(OuroObject &obj)
+      : m_target_id(obj.GetObjectID())
   {
     if (m_target_id != 0)
     {
@@ -129,6 +156,7 @@ public:
   {
     if (m_target_id != 0)
     {
+      ork_mark_dirty(m_target_id);
       ork_unlock_object(m_target_id);
     }
   }
