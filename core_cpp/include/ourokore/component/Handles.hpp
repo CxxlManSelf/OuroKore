@@ -302,12 +302,16 @@ public:
     return result;
   }
 
-  void AddTarget(HandleID target_id)
+  bool AddTarget(HandleID target_id)
   {
-    if (target_id == 0) return;
+    if (target_id == 0) return false;
     CheckEnforceRules(target_id);
-    ork_register_edge(m_owner_id, target_id);
-    m_target_ids.push_back(target_id);
+    if (ork_register_edge(m_owner_id, target_id) == ORK_STATUS_OK)
+    {
+      m_target_ids.push_back(target_id);
+      return true;
+    }
+    return false;
   }
 
   void RemoveTarget(HandleID target_id)
@@ -493,12 +497,13 @@ public:
   {
     if (GetTargetID() == target_id) return;
     CheckEnforceRules(target_id);
+    bool registered = false;
     if (target_id != 0)
     {
-      ork_register_edge(m_owner_id, target_id);
+      registered = (ork_register_edge(m_owner_id, target_id) == ORK_STATUS_OK);
     }
     Release();
-    if (target_id != 0)
+    if (registered)
     {
       m_target_ids.push_back(target_id);
     }

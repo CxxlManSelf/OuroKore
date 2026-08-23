@@ -6,10 +6,11 @@
 #include <vector>
 
 #include "ourokore/component/Handles.hpp"
+#include "ourokore/component/IStorageDriver.hpp"
+#include "ourokore/component/InMemoryStorage.hpp"
 #include "ourokore/component/OuroCore.hpp"
 #include "ourokore/component/OuroObject.hpp"
 #include "ourokore/component/OuroStream.hpp"
-#include "ourokore/component/StorageBackend.hpp"
 
 static int g_deconstruct_count = 0;
 
@@ -214,7 +215,7 @@ void Test3_SingleObject_Dehydration_Rehydration()
   std::cout << "[Test 3] Single Object Dehydration & Rehydration with StorageState..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::make_shared<ork::InMemoryStorageBackend>();
+  auto storage = std::make_shared<ork::InMemoryStorage>();
   ork::Init(storage);
 
   auto player = ork::CreateObject<PlayerObject>();
@@ -255,7 +256,7 @@ void Test4_ParentChild_Dehydration_Rehydration()
   std::cout << "[Test 4] Parent-Child Topology Dehydration & Rehydration..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::make_shared<ork::InMemoryStorageBackend>();
+  auto storage = std::make_shared<ork::InMemoryStorage>();
   ork::Init(storage);
 
   std::cout << "  Creating ParentCharacter..." << std::endl;
@@ -313,6 +314,80 @@ void Test4_ParentChild_Dehydration_Rehydration()
   std::cout.flush();
 }
 
+void Test5_InMemoryStorage_Save_And_Load()
+{
+  std::cout << "[Test 5] InMemoryStorage Direct Save & Load (Clean Skip & Sub-Object Edge Lifecycle)..." << std::endl;
+  std::cout.flush();
+
+  auto storage = std::make_shared<ork::InMemoryStorage>();
+
+  // 1. Single Object Save & Load
+  auto hero = ork::CreateObject<PlayerObject>();
+  hero->SetHp(500);
+  hero->SetName("Lancelot");
+
+  // Save 1: UnsavedNew/Dirty -> saves to storage
+  assert(storage->Save(hero) == true);
+  assert(storage->GetCount() == 1);
+  assert(storage->Contains(hero.GetTargetID()));
+  assert(hero->GetStorageState() == ork::StorageState::Clean);
+
+  // Save 2: Clean -> fast skip, count remains 1
+  assert(storage->Save(hero) == true);
+  assert(storage->GetCount() == 1);
+
+  // Modify hero property via WriteLock -> automatically marked Dirty
+  hero->SetHp(50);
+  assert(hero->GetStorageState() == ork::StorageState::Dirty);
+
+  // Load hero from storage -> reverts hp back to 500!
+  assert(storage->Load(hero) == true);
+  assert(hero->GetHp() == 500);
+  assert(hero->GetName() == "Lancelot");
+  assert(hero->GetStorageState() == ork::StorageState::Clean);
+
+  // Load non-existent ID -> returns false
+  auto stranger = ork::CreateObject<PlayerObject>();
+  assert(storage->Load(stranger) == false);
+
+  // 2. Sub-Object Edge Replacement & Load Rollback
+  auto parent = ork::CreateObject<ParentCharacter>();
+  ork::HandleID weapon1_id = parent->m_weapon.GetTargetID();
+  auto weapon1 = parent->m_weapon.LockAndAcquire();
+  weapon1->SetDamage(77);
+
+  // Save parent and weapon1 independently
+  assert(storage->Save(parent) == true);
+  assert(storage->Save(weapon1) == true);
+
+  // Now replace weapon1 with weapon2 (e.g. gameplay equip new weapon)
+  auto weapon2 = ork::CreateObject<WeaponObject>();
+  ork::HandleID weapon2_id = weapon2.GetTargetID();
+  weapon2->SetDamage(999);
+  parent->m_weapon = weapon2;
+  assert(parent->m_weapon.GetTargetID() == weapon2_id);
+
+  // Load parent from storage (roll back to saved snapshot)
+  assert(storage->Load(parent) == true);
+  assert(parent->m_weapon.GetTargetID() == weapon1_id);
+
+  // 3. Child Destructed/Deleted Defense Verification
+  auto char_a = ork::CreateObject<ParentCharacter>();
+  storage->Save(char_a);
+
+  // Explicitly release sword, causing sword strong count to drop to 0 and get deleted from Registry
+  char_a->m_weapon.Release();
+
+  // Load char_a from storage: char_a blueprint has sword_id, but sword is dead in Registry
+  assert(storage->Load(char_a) == true);
+  // Verified: m_weapon safely skips dead ID and remains empty (0), preventing phantom dangling references!
+  assert(char_a->m_weapon.GetTargetID() == 0);
+  assert((bool)char_a->m_weapon.LockAndAcquire() == false);
+
+  std::cout << "  Test 5 Passed!\n" << std::endl;
+  std::cout.flush();
+}
+
 int main()
 {
   std::cout << "=== OuroKore Phase 3 Serialization & Dehydration/Rehydration Tests ===" << std::endl;
@@ -324,6 +399,7 @@ int main()
     Test2_PurePayload_And_EdgeRoster();
     Test3_SingleObject_Dehydration_Rehydration();
     Test4_ParentChild_Dehydration_Rehydration();
+    Test5_InMemoryStorage_Save_And_Load();
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();

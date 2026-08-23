@@ -6,9 +6,9 @@
 #include <vector>
 
 #include "Handles.hpp"
+#include "IStorageDriver.hpp"
 #include "OuroObject.hpp"
 #include "OuroStream.hpp"
-#include "StorageBackend.hpp"
 #include "ourokore/c_api/component_api.h"
 #include "ourokore/c_api/core.h"
 
@@ -17,35 +17,43 @@ namespace ork
 
 namespace detail
 {
-inline std::shared_ptr<IStorageBackend> &GetStorageBackendRef()
+inline std::shared_ptr<IStorageDriver> &GetStorageDriverRef()
 {
-  static std::shared_ptr<IStorageBackend> s_backend = nullptr;
-  return s_backend;
+  static std::shared_ptr<IStorageDriver> s_driver = nullptr;
+  return s_driver;
 }
 }  // namespace detail
 
 /**
- * @brief Initialize OuroKore Core with a persistent storage backend instance (Dependency Injection).
+ * @brief Initialize OuroKore Core with a persistent storage driver instance (Dependency Injection).
  */
-inline void Init(std::shared_ptr<IStorageBackend> storage)
+inline void Init(std::shared_ptr<IStorageDriver> driver)
 {
-  detail::GetStorageBackendRef() = std::move(storage);
+  detail::GetStorageDriverRef() = std::move(driver);
 }
 
 /**
- * @brief Shutdown OuroKore Core and release storage backend reference.
+ * @brief Shutdown OuroKore Core and release storage driver reference.
  */
 inline void Shutdown()
 {
-  detail::GetStorageBackendRef().reset();
+  detail::GetStorageDriverRef().reset();
 }
 
 /**
- * @brief Get currently registered storage backend.
+ * @brief Get currently registered storage driver.
  */
-inline std::shared_ptr<IStorageBackend> GetStorageBackend()
+inline std::shared_ptr<IStorageDriver> GetStorageDriver()
 {
-  return detail::GetStorageBackendRef();
+  return detail::GetStorageDriverRef();
+}
+
+/**
+ * @brief Backward compatibility alias for GetStorageDriver().
+ */
+inline std::shared_ptr<IStorageDriver> GetStorageBackend()
+{
+  return GetStorageDriver();
 }
 
 /**
@@ -137,7 +145,7 @@ inline void UnpackBlueprint(OuroObject &obj, const std::vector<uint8_t> &buffer)
 }
 
 /**
- * @brief Save object state to persistent storage.
+ * @brief Save object state to persistent storage driver.
  * If object is Clean or Dehydrated, skips Save (O(1)).
  */
 template <typename T>
@@ -161,21 +169,21 @@ void Save(const OuroPtr<T> &ptr)
     return;  // Fast skip!
   }
 
-  auto storage = GetStorageBackend();
-  if (!storage)
+  auto driver = GetStorageDriver();
+  if (!driver)
   {
     throw std::runtime_error(
-        "OuroKore Save Error: Storage backend not initialized. Call ork::Init(storage) first."
+        "OuroKore Save Error: Storage driver not initialized. Call ork::Init(driver) first."
     );
   }
 
   std::vector<uint8_t> data = PackBlueprint(*obj);
-  storage->SaveBlueprint(id, data);
+  driver->SaveBlueprint(id, data);
   obj->SetStorageState(StorageState::Clean);
 }
 
 /**
- * @brief Dehydrate an object: save Payload to storage backend and free memory payload.
+ * @brief Dehydrate an object: save Payload to storage driver and free memory payload.
  * ControlBlock tombstone & HandleID remain intact in memory!
  */
 template <typename T>
@@ -228,16 +236,16 @@ OuroPtr<T> Rehydrate(HandleID id)
     return OuroPtr<T>(id);  // Object payload is already loaded
   }
 
-  auto storage = GetStorageBackend();
-  if (!storage)
+  auto driver = GetStorageDriver();
+  if (!driver)
   {
-    throw std::runtime_error("OuroKore Rehydrate Error: Storage backend not initialized.");
+    throw std::runtime_error("OuroKore Rehydrate Error: Storage driver not initialized.");
   }
 
   std::vector<uint8_t> data;
-  if (!storage->LoadBlueprint(id, data))
+  if (!driver->LoadBlueprint(id, data))
   {
-    throw std::runtime_error("OuroKore Rehydrate Error: Blueprint data not found in storage backend.");
+    throw std::runtime_error("OuroKore Rehydrate Error: Blueprint data not found in storage driver.");
   }
 
   // 1. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
