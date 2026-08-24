@@ -57,14 +57,12 @@ inline std::shared_ptr<IStorageDriver> GetStorageBackend()
 }
 
 /**
- * @brief Pack an OuroObject's Payload and Edge Roster into a BlueprintStream binary vector.
+ * @brief Pack an OuroObject's Payload and Edge Roster into any OuroStream.
  * @note Core only packs Payload + Edge Roster (Slot Name -> Target HandleID).
  * Core does NOT dictate physical disk layout or magic numbers.
  */
-inline std::vector<uint8_t> PackBlueprint(const OuroObject &obj)
+inline void PackBlueprint(const OuroObject &obj, OuroStream &stream)
 {
-  BlueprintStream stream;
-
   // 1. Serialize Pure Payload
   obj.SerializePayload(stream);
 
@@ -88,68 +86,57 @@ inline std::vector<uint8_t> PackBlueprint(const OuroObject &obj)
       }
     }
   }
-
-  return stream.GetBuffer();
 }
 
 /**
- * @brief Unpack an OuroObject's Payload and Edge Roster from a binary buffer.
+ * @brief Unpack an OuroObject's Payload and Edge Roster from any OuroStream.
  */
-inline void UnpackBlueprint(OuroObject &obj, const std::vector<uint8_t> &buffer)
+inline void UnpackBlueprint(OuroObject &obj, OuroStream &stream)
 {
-  BlueprintStream stream(buffer);
-
   // 1. Deserialize Pure Payload
   obj.DeserializePayload(stream);
 
-  // 2. Deserialize Edge Roster
-  if (stream.GetSize() > 0)
+  // 2. Deserialize Edge Roster if stream still has remaining bytes
+  if (stream.HasRemainingBytes())
   {
-    try
+    uint32_t edge_count = 0;
+    stream.ReadBytes(reinterpret_cast<uint8_t *>(&edge_count), sizeof(edge_count));
+    const auto &handles = obj.GetRegisteredHandles();
+
+    for (uint32_t i = 0; i < edge_count; ++i)
     {
-      uint32_t edge_count = 0;
-      stream.ReadBytes(reinterpret_cast<uint8_t *>(&edge_count), sizeof(edge_count));
-      const auto &handles = obj.GetRegisteredHandles();
+      std::string slot_name = stream.ReadStringRaw();
+      uint32_t target_count = 0;
+      stream.ReadBytes(reinterpret_cast<uint8_t *>(&target_count), sizeof(target_count));
 
-      for (uint32_t i = 0; i < edge_count; ++i)
+      std::vector<HandleID> tids(target_count);
+      for (uint32_t j = 0; j < target_count; ++j)
       {
-        std::string slot_name = stream.ReadStringRaw();
-        uint32_t target_count = 0;
-        stream.ReadBytes(reinterpret_cast<uint8_t *>(&target_count), sizeof(target_count));
+        stream.ReadBytes(reinterpret_cast<uint8_t *>(&tids[j]), sizeof(tids[j]));
+      }
 
-        std::vector<HandleID> tids(target_count);
-        for (uint32_t j = 0; j < target_count; ++j)
+      auto it = handles.find(slot_name);
+      if (it != handles.end() && it->second)
+      {
+        it->second->ReleaseAll();
+        for (HandleID tid : tids)
         {
-          stream.ReadBytes(reinterpret_cast<uint8_t *>(&tids[j]), sizeof(tids[j]));
-        }
-
-        auto it = handles.find(slot_name);
-        if (it != handles.end() && it->second)
-        {
-          it->second->ReleaseAll();
-          for (HandleID tid : tids)
+          if (tid != 0)
           {
-            if (tid != 0)
-            {
-              it->second->AddTarget(tid);
-            }
+            it->second->AddTarget(tid);
           }
         }
       }
-    }
-    catch (...)
-    {
-      // Ignore if stream ends without edge roster
     }
   }
 }
 
 /**
- * @brief Save object state to persistent storage driver.
+ * @brief Save object state to persistent storage driver via pure streaming.
  * If object is Clean or Dehydrated, skips Save (O(1)).
  */
 template <typename T>
-void Save(const OuroPtr<T> &ptr)
+bool Save(const OuroPtr<T> &ptr)
 {
   if (!ptr)
   {
@@ -166,7 +153,7 @@ void Save(const OuroPtr<T> &ptr)
   StorageState state = obj->GetStorageState();
   if (state == StorageState::Clean || state == StorageState::Dehydrated)
   {
-    return;  // Fast skip!
+    return true;  // Fast skip!
   }
 
   auto driver = GetStorageDriver();
@@ -177,13 +164,64 @@ void Save(const OuroPtr<T> &ptr)
     );
   }
 
-  std::vector<uint8_t> data = PackBlueprint(*obj);
-  driver->SaveBlueprint(id, data);
+  auto stream = driver->CreateWriteStream(id);
+  if (!stream)
+  {
+    throw std::runtime_error("OuroKore Save Error: Failed to create write stream from storage driver.");
+  }
+
+  {
+    OuroReadLock lock(*obj);
+    PackBlueprint(*obj, *stream);
+  }
+
   obj->SetStorageState(StorageState::Clean);
+  return true;
 }
 
 /**
- * @brief Dehydrate an object: save Payload to storage driver and free memory payload.
+ * @brief Load (revert/refresh) object state from persistent storage driver into an existing living object via pure streaming.
+ */
+template <typename T>
+bool Load(const OuroPtr<T> &ptr)
+{
+  if (!ptr)
+  {
+    throw std::runtime_error("OuroKore Load Error: Invalid or null OuroPtr.");
+  }
+
+  HandleID id = ptr.GetTargetID();
+  T *obj = ptr.operator->();
+  if (!obj)
+  {
+    throw std::runtime_error("OuroKore Load Error: Cannot access payload.");
+  }
+
+  auto driver = GetStorageDriver();
+  if (!driver)
+  {
+    throw std::runtime_error(
+        "OuroKore Load Error: Storage driver not initialized. Call ork::Init(driver) first."
+    );
+  }
+
+  auto stream = driver->OpenReadStream(id);
+  if (!stream)
+  {
+    return false;
+  }
+
+  {
+    OuroWriteLock lock(*obj);
+    UnpackBlueprint(*obj, *stream);
+  }
+
+  obj->SetStorageState(StorageState::Clean);
+  return true;
+}
+
+/**
+ * @brief Dehydrate an object: stream Payload to storage driver and free memory payload.
  * ControlBlock tombstone & HandleID remain intact in memory!
  */
 template <typename T>
@@ -208,7 +246,7 @@ void Dehydrate(const OuroPtr<T> &ptr)
     return;  // Already dehydrated
   }
 
-  // 1. Save if UnsavedNew or Dirty
+  // 1. Save to registered storage driver if UnsavedNew or Dirty
   Save(ptr);
 
   // 2. Free payload memory, set payload to null, and mark ControlBlock as Dehydrated!
@@ -218,8 +256,8 @@ void Dehydrate(const OuroPtr<T> &ptr)
 }
 
 /**
- * @brief Rehydrate a dehydrated object: allocate new empty shell T(), load blueprint, and rebind payload to ControlBlock.
- * Target HandleID & child connection handles remain 100% stable!
+ * @brief Rehydrate a dehydrated object: allocate new empty shell T(), stream load blueprint, and rebind payload to
+ * ControlBlock. Target HandleID & child connection handles remain 100% stable!
  */
 template <typename T>
 OuroPtr<T> Rehydrate(HandleID id)
@@ -242,10 +280,10 @@ OuroPtr<T> Rehydrate(HandleID id)
     throw std::runtime_error("OuroKore Rehydrate Error: Storage driver not initialized.");
   }
 
-  std::vector<uint8_t> data;
-  if (!driver->LoadBlueprint(id, data))
+  auto stream = driver->OpenReadStream(id);
+  if (!stream)
   {
-    throw std::runtime_error("OuroKore Rehydrate Error: Blueprint data not found in storage driver.");
+    throw std::runtime_error("OuroKore Rehydrate Error: Blueprint stream not found in storage driver.");
   }
 
   // 1. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
@@ -262,21 +300,23 @@ OuroPtr<T> Rehydrate(HandleID id)
     detail::PopActiveObject();
     throw;
   }
-  empty_shell->SetObjectID(id);
 
-  // 2. Unpack Payload & Edge Roster
-  UnpackBlueprint(*empty_shell, data);
+  // RAII guard to prevent memory leak if UnpackBlueprint throws exception
+  std::unique_ptr<T> shell_guard(empty_shell);
+  shell_guard->SetObjectID(id);
+
+  // 2. Unpack Payload & Edge Roster (Exceptions safely bubble up while shell_guard frees memory)
+  UnpackBlueprint(*shell_guard, *stream);
 
   // 3. Re-bind payload pointer to existing ControlBlock in Registry
-  if (ork_bind_object_payload(
-          id, reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(empty_shell))
-      ) != ORK_STATUS_OK)
+  if (ork_bind_object_payload(id, reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get()))) !=
+      ORK_STATUS_OK)
   {
-    delete empty_shell;
     throw std::runtime_error("OuroKore Rehydrate Error: Failed to re-bind payload pointer to ControlBlock.");
   }
 
-  empty_shell->SetStorageState(StorageState::Clean);
+  T *released_obj = shell_guard.release();
+  released_obj->SetStorageState(StorageState::Clean);
   return OuroPtr<T>(id);
 }
 

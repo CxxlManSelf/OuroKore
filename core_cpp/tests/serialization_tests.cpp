@@ -192,20 +192,33 @@ void Test1_BlueprintStream_Basic_And_DupGuard()
 
 void Test2_PurePayload_And_EdgeRoster()
 {
-  std::cout << "[Test 2] Pure Payload & Edge Roster Packaging..." << std::endl;
+  std::cout << "[Test 2] Pure Payload & Edge Roster Packaging (OuroStream Interface)..." << std::endl;
 
   auto player = ork::CreateObject<PlayerObject>();
   player->SetHp(150);
   player->SetName("Excalibur");
 
-  std::vector<uint8_t> buffer = ork::PackBlueprint(*player);
-  assert(!buffer.empty());
+  // 1. Test direct BlueprintStream
+  ork::BlueprintStream stream1;
+  ork::PackBlueprint(*player, stream1);
+  assert(stream1.GetSize() > 0);
 
   auto restored = ork::CreateObject<PlayerObject>();
-  ork::UnpackBlueprint(*restored, buffer);
+  ork::UnpackBlueprint(*restored, stream1);
 
   assert(restored->GetHp() == 150);
   assert(restored->GetName() == "Excalibur");
+
+  // 2. Test direct OuroStream& polymorphic interface
+  ork::BlueprintStream direct_stream;
+  ork::OuroStream &stream_ref = direct_stream;
+  ork::PackBlueprint(*player, stream_ref);
+  assert(direct_stream.GetSize() == stream1.GetSize());
+
+  auto restored_via_stream = ork::CreateObject<PlayerObject>();
+  ork::UnpackBlueprint(*restored_via_stream, stream_ref);
+  assert(restored_via_stream->GetHp() == 150);
+  assert(restored_via_stream->GetName() == "Excalibur");
 
   std::cout << "  Test 2 Passed!\n" << std::endl;
 }
@@ -316,10 +329,11 @@ void Test4_ParentChild_Dehydration_Rehydration()
 
 void Test5_InMemoryStorage_Save_And_Load()
 {
-  std::cout << "[Test 5] InMemoryStorage Direct Save & Load (Clean Skip & Sub-Object Edge Lifecycle)..." << std::endl;
+  std::cout << "[Test 5] Core Global ork::Save & ork::Load (Clean Skip & Sub-Object Edge Lifecycle)..." << std::endl;
   std::cout.flush();
 
   auto storage = std::make_shared<ork::InMemoryStorage>();
+  ork::Init(storage);
 
   // 1. Single Object Save & Load
   auto hero = ork::CreateObject<PlayerObject>();
@@ -327,13 +341,13 @@ void Test5_InMemoryStorage_Save_And_Load()
   hero->SetName("Lancelot");
 
   // Save 1: UnsavedNew/Dirty -> saves to storage
-  assert(storage->Save(hero) == true);
+  assert(ork::Save(hero) == true);
   assert(storage->GetCount() == 1);
   assert(storage->Contains(hero.GetTargetID()));
   assert(hero->GetStorageState() == ork::StorageState::Clean);
 
   // Save 2: Clean -> fast skip, count remains 1
-  assert(storage->Save(hero) == true);
+  assert(ork::Save(hero) == true);
   assert(storage->GetCount() == 1);
 
   // Modify hero property via WriteLock -> automatically marked Dirty
@@ -341,14 +355,14 @@ void Test5_InMemoryStorage_Save_And_Load()
   assert(hero->GetStorageState() == ork::StorageState::Dirty);
 
   // Load hero from storage -> reverts hp back to 500!
-  assert(storage->Load(hero) == true);
+  assert(ork::Load(hero) == true);
   assert(hero->GetHp() == 500);
   assert(hero->GetName() == "Lancelot");
   assert(hero->GetStorageState() == ork::StorageState::Clean);
 
   // Load non-existent ID -> returns false
   auto stranger = ork::CreateObject<PlayerObject>();
-  assert(storage->Load(stranger) == false);
+  assert(ork::Load(stranger) == false);
 
   // 2. Sub-Object Edge Replacement & Load Rollback
   auto parent = ork::CreateObject<ParentCharacter>();
@@ -357,8 +371,8 @@ void Test5_InMemoryStorage_Save_And_Load()
   weapon1->SetDamage(77);
 
   // Save parent and weapon1 independently
-  assert(storage->Save(parent) == true);
-  assert(storage->Save(weapon1) == true);
+  assert(ork::Save(parent) == true);
+  assert(ork::Save(weapon1) == true);
 
   // Now replace weapon1 with weapon2 (e.g. gameplay equip new weapon)
   auto weapon2 = ork::CreateObject<WeaponObject>();
@@ -368,23 +382,231 @@ void Test5_InMemoryStorage_Save_And_Load()
   assert(parent->m_weapon.GetTargetID() == weapon2_id);
 
   // Load parent from storage (roll back to saved snapshot)
-  assert(storage->Load(parent) == true);
+  assert(ork::Load(parent) == true);
   assert(parent->m_weapon.GetTargetID() == weapon1_id);
 
   // 3. Child Destructed/Deleted Defense Verification
   auto char_a = ork::CreateObject<ParentCharacter>();
-  storage->Save(char_a);
+  ork::Save(char_a);
 
   // Explicitly release sword, causing sword strong count to drop to 0 and get deleted from Registry
   char_a->m_weapon.Release();
 
   // Load char_a from storage: char_a blueprint has sword_id, but sword is dead in Registry
-  assert(storage->Load(char_a) == true);
+  assert(ork::Load(char_a) == true);
   // Verified: m_weapon safely skips dead ID and remains empty (0), preventing phantom dangling references!
   assert(char_a->m_weapon.GetTargetID() == 0);
   assert((bool)char_a->m_weapon.LockAndAcquire() == false);
 
+  ork::Shutdown();
   std::cout << "  Test 5 Passed!\n" << std::endl;
+  std::cout.flush();
+}
+
+void Test6_Stream_Exception_Safety_And_Void_API()
+{
+  std::cout << "[Test 6] Stream Exception Safety & Void API Verification..." << std::endl;
+  std::cout.flush();
+
+  ork::BlueprintStream stream;
+  assert(stream.HasRemainingBytes() == false);
+  assert(stream.GetRemainingBytes() == 0);
+
+  // Verify void WriteProperty and ReadProperty
+  stream.WriteProperty("key::int", 12345);
+  stream.WriteProperty("key::str", std::string("test_void"));
+
+  assert(stream.HasRemainingBytes() == true);
+  assert(stream.GetRemainingBytes() > 0);
+
+  int val_int = 0;
+  std::string val_str;
+  stream.ReadProperty("key::int", val_int);
+  stream.ReadProperty("key::str", val_str);
+  assert(val_int == 12345);
+  assert(val_str == "test_void");
+  assert(stream.HasRemainingBytes() == false);
+
+  // Verify OuroCorruptedStreamException on stream exhaustion
+  bool out_of_range_caught = false;
+  try
+  {
+    int extra = 0;
+    stream.ReadProperty("key::extra", extra);
+  }
+  catch (const ork::OuroCorruptedStreamException &ex)
+  {
+    out_of_range_caught = true;
+    std::cout << "  Captured expected OuroCorruptedStreamException on stream exhaustion: " << ex.what() << std::endl;
+  }
+  assert(out_of_range_caught);
+
+  // Verify Truncated Edge Roster error reporting in UnpackBlueprint
+  {
+    auto parent = ork::CreateObject<ParentCharacter>();
+    ork::BlueprintStream stream_valid;
+    ork::PackBlueprint(*parent, stream_valid);
+    const auto &valid_packed = stream_valid.GetBuffer();
+    assert(valid_packed.size() > 8);
+
+    // Truncate the buffer right in the middle of Edge Roster
+    std::vector<uint8_t> truncated_packed(valid_packed.begin(), valid_packed.end() - 4);
+    ork::BlueprintStream truncated_stream(truncated_packed);
+    auto test_target = ork::CreateObject<ParentCharacter>();
+
+    bool unpack_truncated_caught = false;
+    try
+    {
+      ork::UnpackBlueprint(*test_target, truncated_stream);
+    }
+    catch (const ork::OuroCorruptedStreamException &ex)
+    {
+      unpack_truncated_caught = true;
+      std::cout << "  Captured expected OuroCorruptedStreamException on truncated edge roster: " << ex.what()
+                << std::endl;
+    }
+    assert(unpack_truncated_caught);
+  }
+
+  // Verify Rehydrate Exception Safety with Corrupted Blueprint Data
+  auto storage = std::make_shared<ork::InMemoryStorage>();
+  ork::Init(storage);
+
+  auto dummy = ork::CreateObject<PlayerObject>();
+  ork::HandleID dummy_id = dummy.GetTargetID();
+  dummy->SetName("CorruptedTest");
+
+  // Save invalid/mismatched corrupted payload to storage raw buffer
+  std::vector<uint8_t> corrupted_data = {0xFF, 0xFE, 0xFD, 0xFC};
+  storage->SaveRawBuffer(dummy_id, corrupted_data);
+
+  // Releasing payload from registry to simulate rehydration requirement
+  ork_bind_object_payload(dummy_id, nullptr);
+  ork_set_storage_state(dummy_id, static_cast<uint8_t>(ork::StorageState::Dehydrated));
+
+  bool rehydrate_failed = false;
+  try
+  {
+    ork::Rehydrate<PlayerObject>(dummy_id);
+  }
+  catch (const ork::OuroSerializationException &ex)
+  {
+    rehydrate_failed = true;
+    std::cout << "  Captured expected OuroSerializationException during Rehydrate corrupted data: " << ex.what()
+              << std::endl;
+  }
+  assert(rehydrate_failed);
+
+  ork::Shutdown();
+  std::cout << "  Test 6 Passed!\n" << std::endl;
+  std::cout.flush();
+}
+
+// Mock third-party custom stream that implements OuroStream directly without using BlueprintStream
+class CustomThirdPartyStream : public ork::OuroStream
+{
+private:
+  std::vector<uint8_t> m_raw_data;
+  size_t m_read_pos = 0;
+
+public:
+  CustomThirdPartyStream() = default;
+
+  void WriteBytes(const uint8_t *buffer, size_t size) override
+  {
+    if (buffer && size > 0)
+    {
+      m_raw_data.insert(m_raw_data.end(), buffer, buffer + size);
+    }
+  }
+
+  void ReadBytes(uint8_t *buffer, size_t size) override
+  {
+    if (!buffer || size == 0) return;
+    if (m_read_pos + size > m_raw_data.size())
+    {
+      throw ork::OuroCorruptedStreamException("CustomThirdPartyStream Read out of bounds");
+    }
+    std::memcpy(buffer, m_raw_data.data() + m_read_pos, size);
+    m_read_pos += size;
+  }
+
+  void WriteStringRaw(const std::string &value) override
+  {
+    uint32_t len = static_cast<uint32_t>(value.size());
+    WriteBytes(reinterpret_cast<const uint8_t *>(&len), sizeof(len));
+    if (len > 0)
+    {
+      WriteBytes(reinterpret_cast<const uint8_t *>(value.data()), len);
+    }
+  }
+
+  std::string ReadStringRaw() override
+  {
+    uint32_t len = 0;
+    ReadBytes(reinterpret_cast<uint8_t *>(&len), sizeof(len));
+    if (len == 0) return "";
+    std::string str(len, '\0');
+    ReadBytes(reinterpret_cast<uint8_t *>(str.data()), len);
+    return str;
+  }
+
+  bool HasRemainingBytes() const override
+  {
+    return m_read_pos < m_raw_data.size();
+  }
+
+  size_t GetRemainingBytes() const override
+  {
+    return (m_read_pos < m_raw_data.size()) ? (m_raw_data.size() - m_read_pos) : 0;
+  }
+
+  void ResetCursors() override
+  {
+    m_read_pos = 0;
+  }
+
+  void CheckAndRegisterKey(std::string_view /*key*/) override {}
+  void VerifyKey(std::string_view expected_key) override
+  {
+    std::string actual_key = ReadStringRaw();
+    if (actual_key != expected_key)
+    {
+      throw ork::OuroKeyMismatchException("CustomThirdPartyStream Key mismatch");
+    }
+  }
+  void ClearDupGuard() override {}
+};
+
+void Test7_ThirdParty_Custom_Stream_Implementation()
+{
+  std::cout << "[Test 7] Third-Party Custom OuroStream Implementation Compatibility..." << std::endl;
+  std::cout.flush();
+
+  auto parent = ork::CreateObject<ParentCharacter>();
+  parent->SetLevel(99);
+
+  // Third party creates their own stream implementation
+  CustomThirdPartyStream custom_stream;
+
+  // 1. Pack object into third-party custom stream
+  ork::PackBlueprint(*parent, custom_stream);
+  assert(custom_stream.HasRemainingBytes() == true);
+
+  // 2. Unpack into a new instance using third-party custom stream
+  auto restored = ork::CreateObject<ParentCharacter>();
+  ork::UnpackBlueprint(*restored, custom_stream);
+
+  assert(restored->GetLevel() == 99);
+  assert(restored->m_weapon.GetTargetID() == parent->m_weapon.GetTargetID());
+
+  // 3. ResetCursors and load again into a second instance
+  custom_stream.ResetCursors();
+  auto restored2 = ork::CreateObject<ParentCharacter>();
+  ork::UnpackBlueprint(*restored2, custom_stream);
+  assert(restored2->GetLevel() == 99);
+
+  std::cout << "  Test 7 Passed!\n" << std::endl;
   std::cout.flush();
 }
 
@@ -400,6 +622,8 @@ int main()
     Test3_SingleObject_Dehydration_Rehydration();
     Test4_ParentChild_Dehydration_Rehydration();
     Test5_InMemoryStorage_Save_And_Load();
+    Test6_Stream_Exception_Safety_And_Void_API();
+    Test7_ThirdParty_Custom_Stream_Implementation();
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();
