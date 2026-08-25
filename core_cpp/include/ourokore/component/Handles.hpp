@@ -53,6 +53,8 @@ template <typename T>
 class OwningHandle;
 template <typename T>
 class WeakHandle;
+template <typename T>
+::OuroObject *RehydrateCallback(HandleID id);
 
 /**
  * @brief RAII Guard for Thread-Local Active Owner context.
@@ -786,7 +788,12 @@ OuroPtr<T> CreateObject(Args &&...args)
     throw std::runtime_error("OuroKore Error: Failed to bind payload to reserved HandleID.");
   }
 
+  // Register type-specific auto-rehydration callback
+  ork_set_rehydrate_fn(reserved_id, &RehydrateCallback<T>);
+
   return OuroPtr<T>(reserved_id);
 }
 
 }  // namespace ork
+
+#include "OuroCore.hpp"

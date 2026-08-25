@@ -344,6 +344,21 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
   {
     return nullptr;
   }
+
+  // Automatic Rehydration Check:
+  // If payload is null and state is Dehydrated, invoke registered rehydrate callback
+  if (cb->m_payload == nullptr &&
+      cb->m_storage_state.load(std::memory_order_acquire) == static_cast<uint8_t>(StorageState::Dehydrated))
+  {
+    std::unique_lock<std::shared_mutex> lock(cb->m_rw_lock);
+    if (cb->m_payload == nullptr &&
+        cb->m_storage_state.load(std::memory_order_acquire) == static_cast<uint8_t>(StorageState::Dehydrated) &&
+        cb->m_rehydrate_fn != nullptr)
+    {
+      cb->m_rehydrate_fn(target_id);
+    }
+  }
+
   return cb->m_payload;
 }
 
@@ -381,6 +396,42 @@ bool Registry::MarkDirty(HandleID target_id)
     return true;
   }
   return false;
+}
+
+bool Registry::SetRehydrateFn(HandleID target_id, RehydrateFn fn)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    it->second->m_rehydrate_fn = fn;
+    return true;
+  }
+  return false;
+}
+
+uint32_t Registry::GetRootEdgeCount(HandleID target_id) const
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return 0;
+    }
+    cb = it->second;
+  }
+  std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
+  uint32_t count = 0;
+  for (HandleID owner : cb->m_owners)
+  {
+    if (owner == ORK_ROOT_ID)
+    {
+      ++count;
+    }
+  }
+  return count;
 }
 
 void Registry::SetActiveOwner(HandleID owner_id)

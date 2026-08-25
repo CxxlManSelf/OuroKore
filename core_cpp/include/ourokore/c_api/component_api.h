@@ -107,6 +107,27 @@ ORK_API int32_t ORK_CALL ork_set_storage_state(HandleID target_id, uint8_t state
  */
 ORK_API int32_t ORK_CALL ork_mark_dirty(HandleID target_id);
 
+/**
+ * @brief Function pointer callback type for auto-rehydrating a dehydrated object.
+ */
+typedef OuroObject* (*ork_rehydrate_fn_t)(HandleID id);
+
+/**
+ * @brief Sets the auto-rehydration callback function on an object's ControlBlock.
+ * @param target_id The HandleID of the target object.
+ * @param fn The rehydration callback function pointer.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_set_rehydrate_fn(HandleID target_id, ork_rehydrate_fn_t fn);
+
+/**
+ * @brief Gets the number of active root edges (ORK_ROOT_ID) held on an object (active OuroPtr instances).
+ * @param target_id The HandleID of the target object.
+ * @param out_count Pointer to receive the root edge count.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_get_root_edge_count(HandleID target_id, uint32_t* out_count);
+
 #ifdef __cplusplus
 }
 #endif

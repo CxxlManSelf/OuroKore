@@ -357,4 +357,41 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_set_rehydrate_fn(HandleID target_id, ork_rehydrate_fn_t fn)
+  {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      if (ork::Registry::GetInstance().SetRehydrateFn(target_id, reinterpret_cast<ork::RehydrateFn>(fn)))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_get_root_edge_count(HandleID target_id, uint32_t *out_count)
+  {
+    if (!out_count)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      *out_count = ork::Registry::GetInstance().GetRootEdgeCount(target_id);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
 }  // extern "C"

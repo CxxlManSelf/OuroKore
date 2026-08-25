@@ -10,6 +10,8 @@
 namespace ork
 {
 
+using RehydrateFn = OuroObject *(*)(HandleID id);
+
 /**
  * @brief 私有控制區塊，代表受管理物件的「核心」或「墓碑」。
  * 它負責管理生命週期、參考計數、讀寫鎖，以及擁有者追蹤。
@@ -26,6 +28,9 @@ struct ControlBlock
 
   // Raw pointer to the physical object (the body)
   OuroObject *m_payload{nullptr};
+
+  // Auto-rehydration function pointer callback (persisted across dehydration)
+  RehydrateFn m_rehydrate_fn{nullptr};
 
   // Owner ID Roster for Upstream Cycle Search
   std::vector<HandleID> m_owners;

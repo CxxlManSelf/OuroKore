@@ -223,9 +223,13 @@ bool Load(const OuroPtr<T> &ptr)
 /**
  * @brief Dehydrate an object: stream Payload to storage driver and free memory payload.
  * ControlBlock tombstone & HandleID remain intact in memory!
+ * Fully thread-safe: acquires Exclusive Lock on ControlBlock and guards against in-flight concurrent execution.
+ *
+ * @param ptr Active OuroPtr holding the target object.
+ * @param force If true, bypasses in-flight root edge count check (when root count > 1).
  */
 template <typename T>
-void Dehydrate(const OuroPtr<T> &ptr)
+void Dehydrate(const OuroPtr<T> &ptr, bool force = false)
 {
   if (!ptr)
   {
@@ -234,22 +238,67 @@ void Dehydrate(const OuroPtr<T> &ptr)
 
   HandleID id = ptr.GetTargetID();
 
-  ::OuroObject *raw_obj = nullptr;
-  if (ork_acquire_object_pointer(id, &raw_obj) != ORK_STATUS_OK || !raw_obj)
+  // 1. Guard against In-Flight execution:
+  // The passed `ptr` itself contributes 1 to root edge count.
+  // If root_count > 1, other active OuroPtr instances exist in stack/threads.
+  uint32_t root_count = 0;
+  if (ork_get_root_edge_count(id, &root_count) == ORK_STATUS_OK && root_count > 1 && !force)
   {
-    return;  // Already dehydrated or null
+    throw std::runtime_error(
+        "OuroKore Dehydrate Error: Cannot dehydrate object while other active In-Flight OuroPtr instances (Root Edge "
+        "Count > 1) are holding it. Pass force=true if intentional."
+    );
   }
 
-  T *obj = static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
-  if (obj->GetStorageState() == StorageState::Dehydrated)
+  // 2. RAII Exclusive Lock on ControlBlock to guarantee zero concurrent member function execution (Prevent UAF)
+  struct DehydrateExclusiveLock
+  {
+    HandleID m_id;
+    explicit DehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
+    {
+      ork_lock_object(m_id);
+    }
+    ~DehydrateExclusiveLock()
+    {
+      ork_unlock_object(m_id);
+    }
+  } lock_guard(id);
+
+  uint8_t state_val = 0;
+  if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
+      static_cast<StorageState>(state_val) == StorageState::Dehydrated)
   {
     return;  // Already dehydrated
   }
 
-  // 1. Save to registered storage driver if UnsavedNew or Dirty
-  Save(ptr);
+  ::OuroObject *raw_obj = nullptr;
+  if (ork_acquire_object_pointer(id, &raw_obj) != ORK_STATUS_OK || !raw_obj)
+  {
+    return;  // Already null or invalid
+  }
 
-  // 2. Free payload memory, set payload to null, and mark ControlBlock as Dehydrated!
+  T *obj = static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
+
+  // 3. Save to storage driver if UnsavedNew or Dirty (direct pack under held exclusive lock)
+  StorageState current_state = obj->GetStorageState();
+  if (current_state == StorageState::UnsavedNew || current_state == StorageState::Dirty)
+  {
+    auto driver = GetStorageDriver();
+    if (!driver)
+    {
+      throw std::runtime_error(
+          "OuroKore Dehydrate Error: Storage driver not initialized. Call ork::Init(driver) first."
+      );
+    }
+    auto stream = driver->CreateWriteStream(id);
+    if (!stream)
+    {
+      throw std::runtime_error("OuroKore Dehydrate Error: Failed to create write stream from storage driver.");
+    }
+    PackBlueprint(*obj, *stream);
+  }
+
+  // 4. Free payload memory, set payload to null, and mark ControlBlock as Dehydrated!
   delete obj;
   ork_bind_object_payload(id, nullptr);
   ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
@@ -268,10 +317,15 @@ OuroPtr<T> Rehydrate(HandleID id)
   }
 
   // Check if object payload already exists
-  ::OuroObject *raw_obj = nullptr;
-  if (ork_acquire_object_pointer(id, &raw_obj) == ORK_STATUS_OK && raw_obj)
+  uint8_t state_val = 0;
+  if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
+      static_cast<StorageState>(state_val) != StorageState::Dehydrated)
   {
-    return OuroPtr<T>(id);  // Object payload is already loaded
+    ::OuroObject *raw_obj = nullptr;
+    if (ork_acquire_object_pointer(id, &raw_obj) == ORK_STATUS_OK && raw_obj)
+    {
+      return OuroPtr<T>(id);  // Object payload is already loaded
+    }
   }
 
   auto driver = GetStorageDriver();
@@ -319,6 +373,10 @@ OuroPtr<T> Rehydrate(HandleID id)
 
   T *released_obj = shell_guard.release();
   released_obj->SetStorageState(StorageState::Clean);
+
+  // Re-register type-specific auto-rehydration callback
+  ork_set_rehydrate_fn(id, &RehydrateCallback<T>);
+
   return OuroPtr<T>(id);
 }
 
@@ -326,6 +384,15 @@ template <typename T>
 OuroPtr<T> Rehydrate(const OuroPtr<T> &ptr)
 {
   return Rehydrate<T>(ptr.GetTargetID());
+}
+
+template <typename T>
+inline ::OuroObject *RehydrateCallback(HandleID id)
+{
+  auto ptr = Rehydrate<T>(id);
+  ::OuroObject *raw_obj = nullptr;
+  ork_acquire_object_pointer(id, &raw_obj);
+  return raw_obj;
 }
 
 }  // namespace ork
