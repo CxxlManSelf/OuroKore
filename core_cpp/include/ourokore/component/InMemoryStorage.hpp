@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "IStorageDriver.hpp"
-#include "OuroCore.hpp"
 #include "OuroStream.hpp"
 
 namespace ork
@@ -30,8 +29,9 @@ private:
     bool m_committed = false;
 
   public:
-    InMemoryWriteStream(InMemoryStorage &storage, HandleID id)
-        : m_storage(storage), m_id(id)
+    InMemoryWriteStream(InMemoryStorage &storage, HandleID id) :
+        m_storage(storage),
+        m_id(id)
     {
     }
 

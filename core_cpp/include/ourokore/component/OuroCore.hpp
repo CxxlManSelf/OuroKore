@@ -289,15 +289,17 @@ OuroPtr<T> Rehydrate(HandleID id)
   // 1. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
   ActiveOwnerGuard guard(id);
 
+  void *mem = ::operator new(sizeof(T));
   T *empty_shell = nullptr;
   try
   {
-    empty_shell = new T();
+    empty_shell = ::new (mem) T();
     detail::PopActiveObject();
   }
   catch (...)
   {
     detail::PopActiveObject();
+    ::operator delete(mem);
     throw;
   }
 

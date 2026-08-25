@@ -96,6 +96,19 @@ static_assert(
     "Diamond inheritance should be detected as ambiguous and forbidden at compile time."
 );
 
+// 驗證 OuroObject 及其衍生類別無法直接透過 new 運算子在 Heap 上產生，強制使用 ork::CreateObject
+template <typename U>
+concept CanBeAllocatedViaNew = requires { new U(); };
+
+static_assert(
+    !CanBeAllocatedViaNew<ork::OuroObject>,
+    "OuroObject must not be dynamically allocatable via operator new."
+);
+static_assert(
+    !CanBeAllocatedViaNew<SimpleObject>,
+    "Classes derived from OuroObject must not be dynamically allocatable via operator new."
+);
+
 class ParentDrivenObject : public ork::OuroObject
 {
 public:

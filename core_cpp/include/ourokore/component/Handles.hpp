@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -762,15 +763,17 @@ OuroPtr<T> CreateObject(Args &&...args)
 
   ActiveOwnerGuard guard(reserved_id);
 
+  void *mem = ::operator new(sizeof(T));
   T *obj = nullptr;
   try
   {
-    obj = new T(std::forward<Args>(args)...);
+    obj = ::new (mem) T(std::forward<Args>(args)...);
     detail::PopActiveObject();
   }
   catch (...)
   {
     detail::PopActiveObject();
+    ::operator delete(mem);
     ork_unregister_object(reserved_id);
     throw;
   }
