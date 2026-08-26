@@ -289,16 +289,20 @@ void Test4_ParentChild_Dehydration_Rehydration()
   std::cout.flush();
 
   parent->SetLevel(25);
-  auto weapon_ptr = parent->m_weapon.LockAndAcquire();
-  std::cout << "  Step 2: Acquired weapon_ptr, valid=" << (bool)weapon_ptr << std::endl;
-  std::cout.flush();
 
-  weapon_ptr->SetDamage(120);
-  std::cout << "  Step 3: Set damage to 120" << std::endl;
-  std::cout.flush();
+  {
+    auto weapon_ptr = parent->m_weapon.LockAndAcquire();
+    std::cout << "  Step 2: Acquired weapon_ptr, valid=" << (bool)weapon_ptr << std::endl;
+    std::cout.flush();
 
-  // Dehydrate child weapon first, then dehydrate parent
-  ork::Dehydrate(weapon_ptr);
+    weapon_ptr->SetDamage(120);
+    std::cout << "  Step 3: Set damage to 120" << std::endl;
+    std::cout.flush();
+
+    // Dehydrate child weapon first
+    ork::Dehydrate(weapon_ptr);
+  }
+  // weapon_ptr is now released (0 root edges on child). Parent holds sole edge.
   ork::Dehydrate(parent);
   std::cout << "  Step 4: Dehydrated parent & weapon" << std::endl;
   std::cout.flush();
@@ -805,6 +809,66 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
   std::cout.flush();
 }
 
+void Test10_Concurrent_Rehydration_Thread_Safety()
+{
+  std::cout << "[Test 10] Concurrent Multi-Threaded Rehydrate Safety..." << std::endl;
+  std::cout.flush();
+
+  auto driver = std::make_shared<ork::InMemoryStorage>();
+  ork::Init(driver);
+
+  auto hero = ork::CreateObject<PlayerObject>();
+  hero->SetHp(777);
+  hero->SetName("MultiThreadHero");
+  ork::HandleID hid = hero.GetTargetID();
+
+  // Dehydrate the hero
+  ork::Dehydrate(hero);
+
+  uint8_t state = 0;
+  ork_get_storage_state(hid, &state);
+  assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
+
+  // Spawn 8 concurrent threads all attempting to Rehydrate the SAME HandleID simultaneously
+  const int thread_count = 8;
+  std::vector<std::thread> threads;
+  std::atomic<bool> start_signal{false};
+  std::atomic<int> success_count{0};
+
+  for (int i = 0; i < thread_count; ++i)
+  {
+    threads.emplace_back([hid, &start_signal, &success_count]() {
+      while (!start_signal.load())
+      {
+        std::this_thread::yield();
+      }
+
+      auto ptr = ork::Rehydrate<PlayerObject>(hid);
+      if (ptr && ptr->GetHp() == 777 && ptr->GetName() == "MultiThreadHero")
+      {
+        success_count.fetch_add(1);
+      }
+    });
+  }
+
+  // Release all threads at the exact same instant
+  start_signal.store(true);
+
+  for (auto &t : threads)
+  {
+    t.join();
+  }
+
+  assert(success_count.load() == thread_count);
+
+  ork_get_storage_state(hid, &state);
+  assert(static_cast<ork::StorageState>(state) == ork::StorageState::Clean);
+
+  ork::Shutdown();
+  std::cout << "  Test 10 Passed!\n" << std::endl;
+  std::cout.flush();
+}
+
 int main()
 {
   std::cout << "=== OuroKore Phase 3 Serialization & Dehydration/Rehydration Tests ===" << std::endl;
@@ -821,6 +885,7 @@ int main()
     Test7_ThirdParty_Custom_Stream_Implementation();
     Test8_Transparent_Auto_Rehydration();
     Test9_InFlight_And_Concurrent_Dehydration_Protection();
+    Test10_Concurrent_Rehydration_Thread_Safety();
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();
@@ -834,3 +899,4 @@ int main()
 
   return 0;
 }
+

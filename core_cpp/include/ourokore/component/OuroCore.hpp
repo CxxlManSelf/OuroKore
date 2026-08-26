@@ -74,16 +74,13 @@ inline void PackBlueprint(const OuroObject &obj, OuroStream &stream)
 
   for (const auto &[slot_name, handle_ptr] : handles)
   {
-    if (handle_ptr)
+    stream.WriteStringRaw(slot_name);
+    const auto &target_ids = handle_ptr->GetTargetIDs();
+    uint32_t target_count = static_cast<uint32_t>(target_ids.size());
+    stream.WriteBytes(reinterpret_cast<const uint8_t *>(&target_count), sizeof(target_count));
+    for (HandleID tid : target_ids)
     {
-      stream.WriteStringRaw(slot_name);
-      const auto &target_ids = handle_ptr->GetTargetIDs();
-      uint32_t target_count = static_cast<uint32_t>(target_ids.size());
-      stream.WriteBytes(reinterpret_cast<const uint8_t *>(&target_count), sizeof(target_count));
-      for (HandleID tid : target_ids)
-      {
-        stream.WriteBytes(reinterpret_cast<const uint8_t *>(&tid), sizeof(tid));
-      }
+      stream.WriteBytes(reinterpret_cast<const uint8_t *>(&tid), sizeof(tid));
     }
   }
 }
@@ -116,7 +113,7 @@ inline void UnpackBlueprint(OuroObject &obj, OuroStream &stream)
       }
 
       auto it = handles.find(slot_name);
-      if (it != handles.end() && it->second)
+      if (it != handles.end())
       {
         it->second->ReleaseAll();
         for (HandleID tid : tids)
@@ -298,10 +295,10 @@ void Dehydrate(const OuroPtr<T> &ptr, bool force = false)
     PackBlueprint(*obj, *stream);
   }
 
-  // 4. Free payload memory, set payload to null, and mark ControlBlock as Dehydrated!
+  // 4. Mark ControlBlock as Dehydrated first, then free payload memory and set payload to null!
+  ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
   delete obj;
   ork_bind_object_payload(id, nullptr);
-  ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
 }
 
 /**
@@ -316,7 +313,21 @@ OuroPtr<T> Rehydrate(HandleID id)
     throw std::runtime_error("OuroKore Rehydrate Error: Invalid HandleID.");
   }
 
-  // Check if object payload already exists
+  // 1. RAII Exclusive Lock on ControlBlock to guarantee thread-safe serialization for concurrent Rehydrate/Dehydrate calls
+  struct RehydrateExclusiveLock
+  {
+    HandleID m_id;
+    explicit RehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
+    {
+      ork_lock_object(m_id);
+    }
+    ~RehydrateExclusiveLock()
+    {
+      ork_unlock_object(m_id);
+    }
+  } lock_guard(id);
+
+  // 2. Double-Checked Locking: check if object payload was restored while waiting for the lock
   uint8_t state_val = 0;
   if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
       static_cast<StorageState>(state_val) != StorageState::Dehydrated)
@@ -340,7 +351,7 @@ OuroPtr<T> Rehydrate(HandleID id)
     throw std::runtime_error("OuroKore Rehydrate Error: Blueprint stream not found in storage driver.");
   }
 
-  // 1. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
+  // 3. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
   ActiveOwnerGuard guard(id);
 
   void *mem = ::operator new(sizeof(T));
@@ -361,10 +372,10 @@ OuroPtr<T> Rehydrate(HandleID id)
   std::unique_ptr<T> shell_guard(empty_shell);
   shell_guard->SetObjectID(id);
 
-  // 2. Unpack Payload & Edge Roster (Exceptions safely bubble up while shell_guard frees memory)
+  // 4. Unpack Payload & Edge Roster (Exceptions safely bubble up while shell_guard frees memory)
   UnpackBlueprint(*shell_guard, *stream);
 
-  // 3. Re-bind payload pointer to existing ControlBlock in Registry
+  // 5. Re-bind payload pointer to existing ControlBlock in Registry
   if (ork_bind_object_payload(id, reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get()))) !=
       ORK_STATUS_OK)
   {

@@ -104,7 +104,10 @@ public:
   {
     if (m_target_id != 0)
     {
-      ork_register_edge(ORK_ROOT_ID, m_target_id);
+      if (ork_register_edge(ORK_ROOT_ID, m_target_id) != ORK_STATUS_OK)
+      {
+        m_target_id = 0;
+      }
     }
   }
 
@@ -262,9 +265,29 @@ public:
   {
     if (this != &other)
     {
+      // 1. Release old targets held by this handle
       ReleaseAll();
-      m_slot_name = std::move(other.m_slot_name);
-      m_target_ids = std::move(other.m_target_ids);
+
+      if (m_owner_id == other.m_owner_id)
+      {
+        // 2A. Same-host move: Zero-Cost move without Registry edge overhead
+        m_target_ids = std::move(other.m_target_ids);
+      }
+      else
+      {
+        // 2B. Cross-host move: transfer edges from other.m_owner_id to this->m_owner_id
+        m_target_ids.reserve(other.m_target_ids.size());
+        for (HandleID tid : other.m_target_ids)
+        {
+          if (tid != 0)
+          {
+            CheckEnforceRules(tid);
+            ork_register_edge(m_owner_id, tid);
+            ork_unregister_edge(other.m_owner_id, tid);
+            m_target_ids.push_back(tid);
+          }
+        }
+      }
       other.m_target_ids.clear();
     }
     return *this;
@@ -309,6 +332,17 @@ public:
   {
     if (target_id == 0) return false;
     CheckEnforceRules(target_id);
+
+    // If owner object is currently in Dehydrated state (e.g. during rehydration unpack),
+    // the edge in Registry is already retained from before dehydration.
+    uint8_t state_val = 0;
+    if (m_owner_id != 0 && ork_get_storage_state(m_owner_id, &state_val) == ORK_STATUS_OK &&
+        static_cast<StorageState>(state_val) == StorageState::Dehydrated)
+    {
+      m_target_ids.push_back(target_id);
+      return true;
+    }
+
     if (ork_register_edge(m_owner_id, target_id) == ORK_STATUS_OK)
     {
       m_target_ids.push_back(target_id);
@@ -329,6 +363,16 @@ public:
 
   void ReleaseAll()
   {
+    // If owner object is currently in Dehydrated state (i.e. payload memory being freed for dehydration),
+    // retain edges in Registry and simply clear target IDs.
+    uint8_t state_val = 0;
+    if (m_owner_id != 0 && ork_get_storage_state(m_owner_id, &state_val) == ORK_STATUS_OK &&
+        static_cast<StorageState>(state_val) == StorageState::Dehydrated)
+    {
+      m_target_ids.clear();
+      return;
+    }
+
     for (HandleID tid : m_target_ids)
     {
       if (tid != 0)
@@ -499,16 +543,10 @@ public:
   void SetTarget(HandleID target_id)
   {
     if (GetTargetID() == target_id) return;
-    CheckEnforceRules(target_id);
-    bool registered = false;
+    Release();
     if (target_id != 0)
     {
-      registered = (ork_register_edge(m_owner_id, target_id) == ORK_STATUS_OK);
-    }
-    Release();
-    if (registered)
-    {
-      m_target_ids.push_back(target_id);
+      AddTarget(target_id);
     }
   }
 

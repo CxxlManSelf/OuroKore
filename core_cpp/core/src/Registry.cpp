@@ -350,10 +350,7 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
   if (cb->m_payload == nullptr &&
       cb->m_storage_state.load(std::memory_order_acquire) == static_cast<uint8_t>(StorageState::Dehydrated))
   {
-    std::unique_lock<std::shared_mutex> lock(cb->m_rw_lock);
-    if (cb->m_payload == nullptr &&
-        cb->m_storage_state.load(std::memory_order_acquire) == static_cast<uint8_t>(StorageState::Dehydrated) &&
-        cb->m_rehydrate_fn != nullptr)
+    if (cb->m_rehydrate_fn != nullptr)
     {
       cb->m_rehydrate_fn(target_id);
     }

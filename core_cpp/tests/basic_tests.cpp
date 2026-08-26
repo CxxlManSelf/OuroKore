@@ -183,6 +183,11 @@ public:
     return m_children.LockAndAcquireAll<SimpleObject>();
   }
 
+  void MoveChildrenFrom(ParentWithContainer &other)
+  {
+    m_children = std::move(other.m_children);
+  }
+
 private:
   ork::OwningContainerHandle m_children{"children_slot"};
 };
@@ -683,9 +688,26 @@ int main()
     assert(alive1 == 0);
     assert(alive2 == 1);
     assert(alive3 == 1);
+
+    // 測試 OwningContainerHandle 跨宿主 Move Assignment 邊緣轉移
+    {
+      ork::OuroPtr<ParentWithContainer> parent2 = ork::CreateObject<ParentWithContainer>();
+      parent2->MoveChildrenFrom(*parent);
+
+      assert(parent->GetChildrenCount() == 0);
+      assert(parent2->GetChildrenCount() == 2);
+
+      // 驗證移轉後 child2 與 child3 依然活著（在 parent2 名下）
+      ork_check_alive(child2_id, &alive2, 0);
+      ork_check_alive(child3_id, &alive3, 0);
+      assert(alive2 == 1);
+      assert(alive3 == 1);
+    }
+    // parent2 出作用域，釋放移轉過來的 child2, child3 以及 parent2 本身 (+3)
+    assert(g_deconstruct_count == 4);
   }
-  // parent 出作用域，ReleaseAll() 觸發釋放剩餘 2 個子物件 + parent 本身析構
-  assert(g_deconstruct_count == 4);
+  // parent 出作用域 (+1 parent 本身析構)
+  assert(g_deconstruct_count == 5);
   std::cout << "Test 14 Passed." << std::endl;
 
   // ==========================================
