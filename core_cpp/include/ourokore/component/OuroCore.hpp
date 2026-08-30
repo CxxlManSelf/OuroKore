@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "Handles.hpp"
+#include "IAutoDehydrator.hpp"
 #include "IStorageDriver.hpp"
+#include "NoOpAutoDehydrator.hpp"
 #include "OuroObject.hpp"
 #include "OuroStream.hpp"
 #include "ourokore/c_api/component_api.h"
@@ -22,21 +24,72 @@ inline std::shared_ptr<IStorageDriver> &GetStorageDriverRef()
   static std::shared_ptr<IStorageDriver> s_driver = nullptr;
   return s_driver;
 }
+
+inline std::shared_ptr<IAutoDehydrator> &GetAutoDehydratorRef()
+{
+  static std::shared_ptr<IAutoDehydrator> s_dehydrator = nullptr;
+  return s_dehydrator;
+}
+
+inline void OnObjectDestroyed(HandleID id)
+{
+  auto &driver = GetStorageDriverRef();
+  if (driver)
+  {
+    driver->DeleteBlueprint(id);
+  }
+  auto &dehydrator = GetAutoDehydratorRef();
+  if (dehydrator)
+  {
+    dehydrator->Unregister(id);
+  }
+}
 }  // namespace detail
 
 /**
- * @brief Initialize OuroKore Core with a persistent storage driver instance (Dependency Injection).
+ * @brief 取得當前註冊的自動脫水外掛模組（若未指定則自動回傳 NoOpAutoDehydrator，保證永不為 null）
  */
-inline void Init(std::shared_ptr<IStorageDriver> driver)
+inline std::shared_ptr<IAutoDehydrator> GetAutoDehydrator()
 {
-  detail::GetStorageDriverRef() = std::move(driver);
+  auto &ref = detail::GetAutoDehydratorRef();
+  if (!ref)
+  {
+    ref = std::make_shared<NoOpAutoDehydrator>();
+  }
+  return ref;
 }
 
 /**
- * @brief Shutdown OuroKore Core and release storage driver reference.
+ * @brief Initialize OuroKore Core with a persistent storage driver and optional auto-dehydrator plugin.
+ */
+inline void Init(std::shared_ptr<IStorageDriver> driver, std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr)
+{
+  detail::GetStorageDriverRef() = std::move(driver);
+  if (auto_dehydrator)
+  {
+    detail::GetAutoDehydratorRef() = std::move(auto_dehydrator);
+    detail::GetAutoDehydratorRef()->Start();
+  }
+  else
+  {
+    detail::GetAutoDehydratorRef() = std::make_shared<NoOpAutoDehydrator>();
+  }
+
+  // 註冊全域物件銷毀勾點：當物件 strong_count 與 weak_count 皆歸零死亡時，自動清除 storage 與通知外掛
+  ork_set_object_destroyed_callback(&detail::OnObjectDestroyed);
+}
+
+/**
+ * @brief Shutdown OuroKore Core, stop auto-dehydrator plugin and release driver references.
  */
 inline void Shutdown()
 {
+  ork_set_object_destroyed_callback(nullptr);
+  if (auto &dehydrator = detail::GetAutoDehydratorRef())
+  {
+    dehydrator->Stop();
+    dehydrator.reset();
+  }
   detail::GetStorageDriverRef().reset();
 }
 
@@ -218,36 +271,30 @@ bool Load(const OuroPtr<T> &ptr)
 }
 
 /**
- * @brief Dehydrate an object: stream Payload to storage driver and free memory payload.
- * ControlBlock tombstone & HandleID remain intact in memory!
- * Fully thread-safe: acquires Exclusive Lock on ControlBlock and guards against in-flight concurrent execution.
+ * @brief 透過 HandleID 直接脫水物件（核心唯一標準脫水實作）
  *
- * @param ptr Active OuroPtr holding the target object.
- * @param force If true, bypasses in-flight root edge count check (when root count > 1).
+ * 100% In-Flight 記憶體安全保證：
+ * 核心永遠只檢查單一條件：root_count 必須為 0！
+ * 若 root_count > 0（代表有任何執行緒或作用域正持有 OuroPtr 活躍執行中），核心一律安全略過並傳回 false。
+ *
+ * @param id 目標物件全域唯一 HandleID
+ * @return 成功脫水傳回 true；若物件正忙 (In-Flight)、已脫水或不存在則安全略過並傳回 false。
  */
-template <typename T>
-void Dehydrate(const OuroPtr<T> &ptr, bool force = false)
+inline bool Dehydrate(HandleID id)
 {
-  if (!ptr)
+  if (id == 0)
   {
-    throw std::runtime_error("OuroKore Dehydrate Error: Invalid or null OuroPtr.");
+    return false;
   }
 
-  HandleID id = ptr.GetTargetID();
-
-  // 1. Guard against In-Flight execution:
-  // The passed `ptr` itself contributes 1 to root edge count.
-  // If root_count > 1, other active OuroPtr instances exist in stack/threads.
+  // 1. In-Flight 安全檢查：嚴格要求 root_count 必須為 0！
   uint32_t root_count = 0;
-  if (ork_get_root_edge_count(id, &root_count) == ORK_STATUS_OK && root_count > 1 && !force)
+  if (ork_get_root_edge_count(id, &root_count) != ORK_STATUS_OK || root_count > 0)
   {
-    throw std::runtime_error(
-        "OuroKore Dehydrate Error: Cannot dehydrate object while other active In-Flight OuroPtr instances (Root Edge "
-        "Count > 1) are holding it. Pass force=true if intentional."
-    );
+    return false;  // 物件正處於 In-Flight 活躍執行中，安全跳過
   }
 
-  // 2. RAII Exclusive Lock on ControlBlock to guarantee zero concurrent member function execution (Prevent UAF)
+  // 2. RAII 獨佔寫鎖
   struct DehydrateExclusiveLock
   {
     HandleID m_id;
@@ -261,58 +308,154 @@ void Dehydrate(const OuroPtr<T> &ptr, bool force = false)
     }
   } lock_guard(id);
 
+  // 在鎖定下雙重檢查 root_count
+  if (ork_get_root_edge_count(id, &root_count) != ORK_STATUS_OK || root_count > 0)
+  {
+    return false;
+  }
+
   uint8_t state_val = 0;
   if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
       static_cast<StorageState>(state_val) == StorageState::Dehydrated)
   {
-    return;  // Already dehydrated
+    return true;  // 已經是脫水狀態
   }
 
   ::OuroObject *raw_obj = nullptr;
   if (ork_acquire_object_pointer(id, &raw_obj) != ORK_STATUS_OK || !raw_obj)
   {
-    return;  // Already null or invalid
+    return false;
   }
 
-  T *obj = static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
+  OuroObject *obj = reinterpret_cast<OuroObject *>(raw_obj);
 
-  // 3. Save to storage driver if UnsavedNew or Dirty (direct pack under held exclusive lock)
+  // 3. 若為 UnsavedNew 或 Dirty，自動串流寫入儲存體
   StorageState current_state = obj->GetStorageState();
   if (current_state == StorageState::UnsavedNew || current_state == StorageState::Dirty)
   {
     auto driver = GetStorageDriver();
     if (!driver)
     {
-      throw std::runtime_error(
-          "OuroKore Dehydrate Error: Storage driver not initialized. Call ork::Init(driver) first."
-      );
+      return false;
     }
     auto stream = driver->CreateWriteStream(id);
     if (!stream)
     {
-      throw std::runtime_error("OuroKore Dehydrate Error: Failed to create write stream from storage driver.");
+      return false;
     }
     PackBlueprint(*obj, *stream);
   }
 
-  // 4. Mark ControlBlock as Dehydrated first, then free payload memory and set payload to null!
+  // 4. 標記為 Dehydrated 並釋放 Payload 肉體記憶體
   ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
   delete obj;
   ork_bind_object_payload(id, nullptr);
+  return true;
 }
 
 /**
- * @brief Rehydrate a dehydrated object: allocate new empty shell T(), stream load blueprint, and rebind payload to
- * ControlBlock. Target HandleID & child connection handles remain 100% stable!
+ * @brief 透過右值移動（Move）對物件發起脫水（所有權消耗語意）
+ *
+ * 【重要使用規範】
+ * 本函式採用右值消耗語意（Rvalue Consume）。呼叫此函式後，傳入的原 OuroPtr 物件
+ * 將會被立即釋放並重置（HandleID 歸零），「使用過後原本的物件指標將不可以再被使用」！
+ * 若日後需要再次存取該物件，請使用 Rehydrate<T>(id) 重新取得全新的 OuroPtr。
+ *
+ * @param ptr 要脫水的目標 OuroPtr（傳入後所有權將被轉移並清空）
+ * @return 成功脫水傳回 true；若其他執行緒同時持有該物件 (root_count > 1) 則傳回 false。
  */
 template <typename T>
-OuroPtr<T> Rehydrate(HandleID id)
+inline bool Dehydrate(OuroPtr<T> &&ptr)
 {
-  if (id == 0)
+  if (!ptr)
   {
-    throw std::runtime_error("OuroKore Rehydrate Error: Invalid HandleID.");
+    return false;
   }
 
+  HandleID id = ptr.GetTargetID();
+
+  // 1. 檢查是否有其他活躍 OuroPtr (root_count > 1)
+  uint32_t root_count = 0;
+  if (ork_get_root_edge_count(id, &root_count) != ORK_STATUS_OK || root_count > 1)
+  {
+    return false;  // 有其他並行執行緒正在使用中，安全略過
+  }
+
+  // 2. 在 ptr 依然提供強引用保護的情況下，先完成存檔與脫水標記
+  {
+    struct DehydrateExclusiveLock
+    {
+      HandleID m_id;
+      explicit DehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
+      {
+        ork_lock_object(m_id);
+      }
+      ~DehydrateExclusiveLock()
+      {
+        ork_unlock_object(m_id);
+      }
+    } lock_guard(id);
+
+    if (ork_get_root_edge_count(id, &root_count) != ORK_STATUS_OK || root_count > 1)
+    {
+      return false;
+    }
+
+    uint8_t state_val = 0;
+    if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
+        static_cast<StorageState>(state_val) == StorageState::Dehydrated)
+    {
+      ptr.Release();
+      return true;
+    }
+
+    ::OuroObject *raw_obj = nullptr;
+    if (ork_acquire_object_pointer(id, &raw_obj) != ORK_STATUS_OK || !raw_obj)
+    {
+      return false;
+    }
+
+    OuroObject *obj = reinterpret_cast<OuroObject *>(raw_obj);
+
+    StorageState current_state = obj->GetStorageState();
+    if (current_state == StorageState::UnsavedNew || current_state == StorageState::Dirty)
+    {
+      auto driver = GetStorageDriver();
+      if (!driver)
+      {
+        return false;
+      }
+      auto stream = driver->CreateWriteStream(id);
+      if (!stream)
+      {
+        return false;
+      }
+      PackBlueprint(*obj, *stream);
+    }
+
+    ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
+    delete obj;
+    ork_bind_object_payload(id, nullptr);
+  }
+
+  // 3. 【最後一步】此時狀態已是 Dehydrated 墓碑，才安全釋放呼叫者的 ptr
+  ptr.Release();
+  return true;
+}
+
+/**
+ * @brief 向後相容別名
+ */
+inline bool DehydrateByID(HandleID id)
+{
+  return Dehydrate(id);
+}
+
+namespace detail
+{
+template <typename T>
+inline void RehydratePayload(HandleID id)
+{
   // 1. RAII Exclusive Lock on ControlBlock to guarantee thread-safe serialization for concurrent Rehydrate/Dehydrate calls
   struct RehydrateExclusiveLock
   {
@@ -335,7 +478,7 @@ OuroPtr<T> Rehydrate(HandleID id)
     ::OuroObject *raw_obj = nullptr;
     if (ork_acquire_object_pointer(id, &raw_obj) == ORK_STATUS_OK && raw_obj)
     {
-      return OuroPtr<T>(id);  // Object payload is already loaded
+      return;  // Object payload is already loaded
     }
   }
 
@@ -387,7 +530,21 @@ OuroPtr<T> Rehydrate(HandleID id)
 
   // Re-register type-specific auto-rehydration callback
   ork_set_rehydrate_fn(id, &RehydrateCallback<T>);
+}
+}  // namespace detail
 
+/**
+ * @brief Rehydrate a dehydrated object: allocate new empty shell T(), stream load blueprint, and rebind payload to
+ * ControlBlock. Target HandleID & child connection handles remain 100% stable!
+ */
+template <typename T>
+OuroPtr<T> Rehydrate(HandleID id)
+{
+  if (id == 0)
+  {
+    throw std::runtime_error("OuroKore Rehydrate Error: Invalid HandleID.");
+  }
+  detail::RehydratePayload<T>(id);
   return OuroPtr<T>(id);
 }
 
@@ -400,7 +557,7 @@ OuroPtr<T> Rehydrate(const OuroPtr<T> &ptr)
 template <typename T>
 inline ::OuroObject *RehydrateCallback(HandleID id)
 {
-  auto ptr = Rehydrate<T>(id);
+  detail::RehydratePayload<T>(id);
   ::OuroObject *raw_obj = nullptr;
   ork_acquire_object_pointer(id, &raw_obj);
   return raw_obj;

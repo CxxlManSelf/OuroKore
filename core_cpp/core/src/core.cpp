@@ -394,4 +394,10 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_set_object_destroyed_callback(ork_object_destroyed_fn_t fn)
+  {
+    ork::Registry::GetInstance().SetObjectDestroyedCallback(fn);
+    return ORK_STATUS_OK;
+  }
+
 }  // extern "C"

@@ -128,6 +128,18 @@ ORK_API int32_t ORK_CALL ork_set_rehydrate_fn(HandleID target_id, ork_rehydrate_
  */
 ORK_API int32_t ORK_CALL ork_get_root_edge_count(HandleID target_id, uint32_t* out_count);
 
+/**
+ * @brief Function pointer callback type invoked when an object is destroyed in Registry.
+ */
+typedef void (*ork_object_destroyed_fn_t)(HandleID id);
+
+/**
+ * @brief Sets the global callback invoked when an object's ControlBlock is destroyed.
+ * @param fn The callback function pointer.
+ * @return ORK_STATUS_OK on success.
+ */
+ORK_API int32_t ORK_CALL ork_set_object_destroyed_callback(ork_object_destroyed_fn_t fn);
+
 #ifdef __cplusplus
 }
 #endif

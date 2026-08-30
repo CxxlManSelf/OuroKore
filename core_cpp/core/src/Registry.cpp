@@ -100,6 +100,10 @@ bool Registry::UnregisterObject(HandleID id)
     ControlBlock *cb = it->second;
     m_object_map.erase(it);
     delete cb;
+    if (m_object_destroyed_cb)
+    {
+      m_object_destroyed_cb(id);
+    }
     return true;
   }
   return false;
@@ -140,7 +144,7 @@ bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id)
     cb = it->second;
   }
 
-  // 1. Remove owner_id from owners roster
+  // 1. Remove the edge from owner list
   {
     std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
     auto it = std::find(cb->m_owners.begin(), cb->m_owners.end(), owner_id);
@@ -154,7 +158,7 @@ bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id)
   uint32_t prev_strong = cb->m_strong_count.fetch_sub(1);
   if (prev_strong == 1)
   {
-    // Strong count transitioned to 0: dehydrate (delete body/payload)
+    // Strong count transitioned to 0: free payload
     std::unique_lock<std::shared_mutex> payload_lock(cb->m_rw_lock);
     if (cb->m_payload)
     {
@@ -163,7 +167,7 @@ bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id)
     }
   }
 
-  // 3. Clean up the ControlBlock if completely dead
+  // 3. Clean up the ControlBlock if completely dead (strong == 0 && weak == 0)
   if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
   {
     std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
@@ -175,6 +179,10 @@ bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id)
       {
         m_object_map.erase(it);
         delete cb;
+        if (m_object_destroyed_cb)
+        {
+          m_object_destroyed_cb(target_id);
+        }
       }
     }
   }
@@ -223,6 +231,10 @@ bool Registry::UnregisterWeak(HandleID target_id)
       {
         m_object_map.erase(it);
         delete cb;
+        if (m_object_destroyed_cb)
+        {
+          m_object_destroyed_cb(target_id);
+        }
       }
     }
   }
@@ -256,6 +268,10 @@ bool Registry::CheckAlive(HandleID target_id, bool perform_pruning)
         {
           m_object_map.erase(it);
           delete cb;
+          if (m_object_destroyed_cb)
+          {
+            m_object_destroyed_cb(target_id);
+          }
         }
       }
     }
@@ -339,15 +355,15 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
     }
     cb = it->second;
   }
-  // Return null if payload has been deleted (object is dead/tombstoned)
+  // Return null if object is dead (strong count == 0)
   if (cb->m_strong_count == 0)
   {
     return nullptr;
   }
 
   // Automatic Rehydration Check:
-  // If payload is null and state is Dehydrated, invoke registered rehydrate callback
-  if (cb->m_payload == nullptr &&
+  // If payload is null or state is Dehydrated, invoke registered rehydrate callback
+  if (cb->m_payload == nullptr ||
       cb->m_storage_state.load(std::memory_order_acquire) == static_cast<uint8_t>(StorageState::Dehydrated))
   {
     if (cb->m_rehydrate_fn != nullptr)

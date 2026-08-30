@@ -99,6 +99,13 @@ public:
   bool SetRehydrateFn(HandleID target_id, RehydrateFn fn);
   uint32_t GetRootEdgeCount(HandleID target_id) const;
 
+  // Destruction hook
+  using ObjectDestroyedFn = void (*)(HandleID id);
+  void SetObjectDestroyedCallback(ObjectDestroyedFn fn)
+  {
+    m_object_destroyed_cb = fn;
+  }
+
   // Thread-Local Active Owner context
   void SetActiveOwner(HandleID owner_id);
   HandleID GetActiveOwner() const;
@@ -112,6 +119,9 @@ private:
   // Map protecting the registry structure
   mutable std::shared_mutex m_registry_mutex;
   std::unordered_map<HandleID, ControlBlock *> m_object_map;
+
+  // Global destruction callback
+  ObjectDestroyedFn m_object_destroyed_cb{nullptr};
 
   // Persistent ID maps (reserved for future rehydration)
   mutable std::shared_mutex m_persistent_mutex;

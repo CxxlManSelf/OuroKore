@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -10,11 +11,16 @@
 #include <utility>
 #include <vector>
 
+#include "IAutoDehydrator.hpp"
 #include "OuroObject.hpp"
 #include "ourokore/c_api/component_api.h"
 
 namespace ork
 {
+
+// Forward declaration
+class IAutoDehydrator;
+std::shared_ptr<IAutoDehydrator> GetAutoDehydrator();
 
 namespace detail
 {
@@ -783,12 +789,10 @@ private:
   mutable std::atomic<HandleID> m_target_id{0};
 };
 
-/**
- * @brief Factory function to construct and register managed OuroObjects.
- * Enforces Diamond Inheritance compile-time assertion.
- */
+namespace detail
+{
 template <typename T, typename... Args>
-OuroPtr<T> CreateObject(Args &&...args)
+HandleID CreateObjectInternal(Args &&...args)
 {
   static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
   static_assert(
@@ -829,9 +833,35 @@ OuroPtr<T> CreateObject(Args &&...args)
   // Register type-specific auto-rehydration callback
   ork_set_rehydrate_fn(reserved_id, &RehydrateCallback<T>);
 
-  return OuroPtr<T>(reserved_id);
+  return reserved_id;
+}
+}  // namespace detail
+
+/**
+ * @brief 建立受管物件（預設自動通報脫水外掛模組進行追蹤與大小登記）
+ */
+template <typename T, typename... Args>
+OuroPtr<T> CreateObject(Args &&...args)
+{
+  HandleID id = detail::CreateObjectInternal<T>(std::forward<Args>(args)...);
+  if (auto dehydrator = GetAutoDehydrator())
+  {
+    dehydrator->Register(id, sizeof(T));
+  }
+  return OuroPtr<T>(id);
+}
+
+/**
+ * @brief 建立永久常駐物件（完全不通報脫水模組，生生世世常駐於記憶體）
+ */
+template <typename T, typename... Args>
+OuroPtr<T> CreatePermanentObject(Args &&...args)
+{
+  HandleID id = detail::CreateObjectInternal<T>(std::forward<Args>(args)...);
+  return OuroPtr<T>(id);
 }
 
 }  // namespace ork
 
 #include "OuroCore.hpp"
+

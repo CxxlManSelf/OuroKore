@@ -93,6 +93,12 @@ public:
     m_damage = atk;
   }
 
+  void ReadAndSleep(int ms) const
+  {
+    ork::OuroReadLock lock(*this);
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+  }
+
   void SerializePayload(ork::OuroStream &stream) const override
   {
     stream.WriteProperty(u8"WeaponObject::damage", m_damage);
@@ -146,6 +152,28 @@ public:
 
 private:
   int32_t m_level = 10;
+};
+
+class WorldObject : public ork::OuroObject
+{
+public:
+  WorldObject()
+  {
+    m_character = ork::CreateObject<ParentCharacter>();
+  }
+
+  ork::OwningHandle<ParentCharacter> m_character{"m_character"};
+
+  void SerializePayload(ork::OuroStream &stream) const override
+  {
+    stream.WriteProperty(u8"WorldObject::dummy", int32_t(1));
+  }
+
+  void DeserializePayload(ork::OuroStream &stream) override
+  {
+    int32_t dummy = 0;
+    stream.ReadProperty(u8"WorldObject::dummy", dummy);
+  }
 };
 
 // Duplicate property key object for Fail-Fast test
@@ -238,15 +266,16 @@ void Test3_SingleObject_Dehydration_Rehydration()
   auto storage = std::make_shared<ork::InMemoryStorage>();
   ork::Init(storage);
 
-  auto player = ork::CreateObject<PlayerObject>();
-  ork::HandleID original_id = player.GetTargetID();
-  assert(player->GetStorageState() == ork::StorageState::UnsavedNew);
+  auto parent = ork::CreateObject<ParentCharacter>();
+  auto weapon = parent->m_weapon.LockAndAcquire();
+  ork::HandleID original_id = weapon.GetTargetID();
+  assert(weapon->GetStorageState() == ork::StorageState::UnsavedNew);
 
-  player->SetHp(250);
-  player->SetName("Arthur");
+  weapon->SetDamage(250);
 
-  // Perform Dehydrate: save payload and free payload memory
-  ork::Dehydrate(player);
+  // Perform Dehydrate on weapon (owned by parent->m_weapon, strong_count == 1)
+  ork::Dehydrate(std::move(weapon));
+  assert(!weapon);  // Original object pointer is consumed and can NO longer be used!
   assert(storage->GetCount() == 1);
   assert(storage->Contains(original_id));
 
@@ -255,16 +284,15 @@ void Test3_SingleObject_Dehydration_Rehydration()
   ork_get_storage_state(original_id, &state_val);
   assert(static_cast<ork::StorageState>(state_val) == ork::StorageState::Dehydrated);
 
-  // Rehydrate: create empty shell via template new T(), load payload, re-bind to same HandleID!
-  auto rehydrated_player = ork::Rehydrate<PlayerObject>(original_id);
-  assert(rehydrated_player.GetTargetID() == original_id);
-  assert(rehydrated_player->GetHp() == 250);
-  assert(rehydrated_player->GetName() == "Arthur");
-  assert(rehydrated_player->GetStorageState() == ork::StorageState::Clean);
+  // Rehydrate: reload payload and re-bind to same HandleID!
+  auto rehydrated_weapon = ork::Rehydrate<WeaponObject>(original_id);
+  assert(rehydrated_weapon.GetTargetID() == original_id);
+  assert(rehydrated_weapon->GetDamage() == 250);
+  assert(rehydrated_weapon->GetStorageState() == ork::StorageState::Clean);
 
   // Modify property via WriteLock -> automatically marked Dirty!
-  rehydrated_player->SetHp(300);
-  assert(rehydrated_player->GetStorageState() == ork::StorageState::Dirty);
+  rehydrated_weapon->SetDamage(300);
+  assert(rehydrated_weapon->GetStorageState() == ork::StorageState::Dirty);
 
   ork::Shutdown();
   std::cout << "  Test 3 Passed!\n" << std::endl;
@@ -279,10 +307,11 @@ void Test4_ParentChild_Dehydration_Rehydration()
   auto storage = std::make_shared<ork::InMemoryStorage>();
   ork::Init(storage);
 
-  std::cout << "  Creating ParentCharacter..." << std::endl;
+  std::cout << "  Creating WorldObject..." << std::endl;
   std::cout.flush();
 
-  auto parent = ork::CreateObject<ParentCharacter>();
+  auto world = ork::CreateObject<WorldObject>();
+  auto parent = world->m_character.LockAndAcquire();
   ork::HandleID parent_id = parent.GetTargetID();
   ork::HandleID child_id = parent->m_weapon.GetTargetID();
   std::cout << "  Step 1: Created parent ID=" << parent_id << ", child ID=" << child_id << std::endl;
@@ -299,37 +328,40 @@ void Test4_ParentChild_Dehydration_Rehydration()
     std::cout << "  Step 3: Set damage to 120" << std::endl;
     std::cout.flush();
 
-    // Dehydrate child weapon first
-    ork::Dehydrate(weapon_ptr);
+    // Dehydrate child weapon first (consumes weapon_ptr)
+    ork::Dehydrate(std::move(weapon_ptr));
+    assert(!weapon_ptr);
   }
   // weapon_ptr is now released (0 root edges on child). Parent holds sole edge.
-  ork::Dehydrate(parent);
+  ork::Dehydrate(std::move(parent));
+  assert(!parent);
   std::cout << "  Step 4: Dehydrated parent & weapon" << std::endl;
   std::cout.flush();
 
   assert(storage->Contains(parent_id));
   assert(storage->Contains(child_id));
 
-  // Rehydrate parent
-  auto rehydrated_parent = ork::Rehydrate<ParentCharacter>(parent_id);
+  // Rehydrate parent via world handle
+  auto rehydrated_parent = world->m_character.LockAndAcquire();
   std::cout << "  Step 5: Rehydrated parent, targetID=" << rehydrated_parent.GetTargetID() << std::endl;
   std::cout.flush();
 
   assert(rehydrated_parent.GetTargetID() == parent_id);
   assert(rehydrated_parent->GetLevel() == 25);
 
-  // Check child handle connection
-  std::cout << "  Step 7: Rehydrated parent m_weapon targetID=" << rehydrated_parent->m_weapon.GetTargetID()
-            << " (expected " << child_id << ")" << std::endl;
+  // Step 6: Verify child handle inside parent has correct TargetID
+  ork::HandleID rehydrated_child_id = rehydrated_parent->m_weapon.GetTargetID();
+  std::cout << "  Step 7: Rehydrated parent m_weapon targetID=" << rehydrated_child_id << " (expected " << child_id << ")"
+            << std::endl;
   std::cout.flush();
+  assert(rehydrated_child_id == child_id);
 
-  assert(rehydrated_parent->m_weapon.GetTargetID() == child_id);
-
-  // Rehydrate child weapon
-  auto rehydrated_weapon = ork::Rehydrate<WeaponObject>(child_id);
+  // Step 7: Access child via Parent's handle -> lock & verify weapon state
+  auto rehydrated_weapon = rehydrated_parent->m_weapon.LockAndAcquire();
   std::cout << "  Step 8: Rehydrated weapon valid=" << (bool)rehydrated_weapon << std::endl;
   std::cout.flush();
 
+  assert(static_cast<bool>(rehydrated_weapon));
   assert(rehydrated_weapon.GetTargetID() == child_id);
   assert(rehydrated_weapon->GetDamage() == 120);
 
@@ -631,71 +663,67 @@ void Test8_Transparent_Auto_Rehydration()
 
   // 1. Single Object Transparent Auto-Rehydration
   {
-    auto hero = ork::CreateObject<PlayerObject>();
-    hero->SetHp(350);
-    hero->SetName("AutoRehydrateHero");
-    ork::HandleID hero_id = hero.GetTargetID();
+    auto parent = ork::CreateObject<ParentCharacter>();
+    auto weapon = parent->m_weapon.LockAndAcquire();
+    weapon->SetDamage(350);
+    ork::HandleID weapon_id = weapon.GetTargetID();
 
-    // Dehydrate the hero object
-    ork::Dehydrate(hero);
+    // Dehydrate the weapon object via move (consumes weapon pointer)
+    ork::Dehydrate(std::move(weapon));
+    assert(!weapon);  // Original pointer is reset and cannot be used anymore
 
     // Verify storage state is Dehydrated
     uint8_t state = 0;
-    ork_get_storage_state(hero_id, &state);
+    ork_get_storage_state(weapon_id, &state);
     assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
 
-    // Client accesses hero directly WITHOUT calling ork::Rehydrate explicitly
-    assert(hero->GetHp() == 350);
-    assert(hero->GetName() == "AutoRehydrateHero");
+    // Client accesses weapon via parent handle -> triggers transparent auto-rehydration!
+    auto auto_weapon = parent->m_weapon.LockAndAcquire();
+    assert(static_cast<bool>(auto_weapon));
+    assert(auto_weapon->GetDamage() == 350);
 
-    // StorageState should automatically be Clean now
-    ork_get_storage_state(hero_id, &state);
+    // StorageState should automatically be Clean now while alive
+    ork_get_storage_state(weapon_id, &state);
     assert(static_cast<ork::StorageState>(state) == ork::StorageState::Clean);
   }
 
   // 2. Parent-Child Hierarchy Transparent Auto-Rehydration
   {
-    auto parent = ork::CreateObject<ParentCharacter>();
-    parent->SetLevel(77);
-    ork::HandleID parent_id = parent.GetTargetID();
+    auto root = ork::CreateObject<ParentCharacter>();
+    root->SetLevel(77);
+    ork::HandleID root_id = root.GetTargetID();
 
-    auto weapon = parent->m_weapon.LockAndAcquire();
+    auto weapon = root->m_weapon.LockAndAcquire();
     assert(static_cast<bool>(weapon));
     weapon->SetDamage(888);
     ork::HandleID weapon_id = weapon.GetTargetID();
 
-    // Dehydrate both parent and weapon
-    ork::Dehydrate(weapon);
-    ork::Dehydrate(parent);
+    // Dehydrate child weapon first
+    ork::Dehydrate(std::move(weapon));
+    assert(!weapon);
 
-    uint8_t p_state = 0, w_state = 0;
-    ork_get_storage_state(parent_id, &p_state);
+    uint8_t w_state = 0;
     ork_get_storage_state(weapon_id, &w_state);
-    assert(static_cast<ork::StorageState>(p_state) == ork::StorageState::Dehydrated);
     assert(static_cast<ork::StorageState>(w_state) == ork::StorageState::Dehydrated);
 
-    // Access parent directly -> Auto Rehydrate Parent!
-    assert(parent->GetLevel() == 77);
-
     // Access weapon through parent's handle -> Auto Rehydrate Weapon!
-    auto auto_weapon = parent->m_weapon.LockAndAcquire();
+    auto auto_weapon = root->m_weapon.LockAndAcquire();
     assert(static_cast<bool>(auto_weapon));
     assert(auto_weapon->GetDamage() == 888);
 
-    ork_get_storage_state(parent_id, &p_state);
     ork_get_storage_state(weapon_id, &w_state);
-    assert(static_cast<ork::StorageState>(p_state) == ork::StorageState::Clean);
     assert(static_cast<ork::StorageState>(w_state) == ork::StorageState::Clean);
   }
 
   // 3. Concurrent Multi-Thread Auto-Rehydration Safety Test
   {
-    auto concurrent_player = ork::CreateObject<PlayerObject>();
-    concurrent_player->SetHp(999);
-    concurrent_player->SetName("ConcurrentHero");
-    ork::HandleID conc_id = concurrent_player.GetTargetID();
+    auto parent = ork::CreateObject<ParentCharacter>();
+    auto weapon = parent->m_weapon.LockAndAcquire();
+    weapon->SetDamage(999);
+    ork::HandleID weapon_id = weapon.GetTargetID();
 
-    ork::Dehydrate(concurrent_player);
+    ork::Dehydrate(std::move(weapon));
+    assert(!weapon);
 
     constexpr int kNumThreads = 8;
     std::vector<std::thread> workers;
@@ -703,9 +731,9 @@ void Test8_Transparent_Auto_Rehydration()
 
     for (int i = 0; i < kNumThreads; ++i)
     {
-      workers.emplace_back([conc_id, &success_count]() {
-        ork::OuroPtr<PlayerObject> ptr(conc_id);
-        if (ptr->GetHp() == 999 && ptr->GetName() == "ConcurrentHero")
+      workers.emplace_back([weapon_id, &success_count]() {
+        ork::OuroPtr<WeaponObject> ptr(weapon_id);
+        if (ptr && ptr->GetDamage() == 999)
         {
           success_count.fetch_add(1);
         }
@@ -732,53 +760,50 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
   auto driver = std::make_shared<ork::InMemoryStorage>();
   ork::Init(driver);
 
-  // 1. In-Flight Root Edge Guard (Fail-Fast when multiple active OuroPtr instances exist)
+  // 1. In-Flight Root Edge Guard (Safe rejection when multiple active OuroPtr instances exist)
   {
-    auto hero1 = ork::CreateObject<PlayerObject>();
-    hero1->SetHp(500);
+    auto parent = ork::CreateObject<ParentCharacter>();
+    auto weapon1 = parent->m_weapon.LockAndAcquire();
+    weapon1->SetDamage(500);
+    ork::HandleID wid = weapon1.GetTargetID();
 
     // Another function / stack frame creates a second active OuroPtr to the same object
-    ork::OuroPtr<PlayerObject> hero2(hero1.GetTargetID());
+    ork::OuroPtr<WeaponObject> weapon2(wid);
 
-    bool caught_in_flight_exception = false;
-    try
-    {
-      // Attempting to dehydrate while hero2 is active should fail fast
-      ork::Dehydrate(hero1);
-    }
-    catch (const std::runtime_error &ex)
-    {
-      caught_in_flight_exception = true;
-      std::cout << "  Captured expected In-Flight exception: " << ex.what() << std::endl;
-    }
-    assert(caught_in_flight_exception == true);
+    // Attempting to dehydrate weapon1 while weapon2 is active safely returns false (in-flight protection)
+    bool dehydrate_res1 = ork::Dehydrate(std::move(weapon1));
+    assert(dehydrate_res1 == false);
 
     // Release the second OuroPtr
-    hero2.Release();
+    weapon2.Release();
 
-    // Now Dehydrate succeeds!
-    ork::Dehydrate(hero1);
+    // Now Dehydrate succeeds via weapon1 (since weapon2 is no longer holding it)
+    bool dehydrate_res2 = ork::Dehydrate(std::move(weapon1));
+    assert(dehydrate_res2 == true);
+    assert(!weapon1);  // weapon1 is now consumed and cannot be used anymore
 
     uint8_t state = 0;
-    ork_get_storage_state(hero1.GetTargetID(), &state);
+    ork_get_storage_state(wid, &state);
     assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
 
-    // Auto-rehydrate on access
-    assert(hero1->GetHp() == 500);
+    // Auto-rehydrate on access via parent handle
+    auto reloaded = parent->m_weapon.LockAndAcquire();
+    assert(reloaded->GetDamage() == 500);
   }
 
   // 2. Concurrent Reader vs Dehydrator Lock Safety
   {
-    auto hero = ork::CreateObject<PlayerObject>();
-    hero->SetHp(888);
-    ork::HandleID hid = hero.GetTargetID();
+    auto parent = ork::CreateObject<ParentCharacter>();
+    auto weapon = parent->m_weapon.LockAndAcquire();
+    weapon->SetDamage(888);
+    ork::HandleID wid = weapon.GetTargetID();
 
     std::atomic<bool> reader_started{false};
     std::atomic<bool> reader_finished{false};
 
     // Thread 1 holds a read lock via member method and simulates work
-    std::thread reader_thread([hid, &reader_started, &reader_finished]() {
-      ork::OuroPtr<PlayerObject> ptr(hid);
+    std::thread reader_thread([wid, &reader_started, &reader_finished]() {
+      ork::OuroPtr<WeaponObject> ptr(wid);
       reader_started.store(true);
       ptr->ReadAndSleep(50);
       reader_finished.store(true);
@@ -789,20 +814,24 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
       std::this_thread::yield();
     }
 
-    // Thread 2 (Main) dehydrates with force=true (since reader holds active OuroPtr)
-    // Dehydrate will safely block until reader releases OuroReadLock inside ReadAndSleep!
-    ork::Dehydrate(hero, /*force=*/true);
+    // While reader is active in-flight, Dehydrate safely returns false without crashing
+    assert(ork::Dehydrate(wid) == false);
 
     reader_thread.join();
     assert(reader_finished.load() == true);
 
+    // After reader finishes, Dehydrate succeeds!
+    assert(ork::Dehydrate(std::move(weapon)) == true);
+    assert(!weapon);
+
     // Verify state is Dehydrated
     uint8_t state = 0;
-    ork_get_storage_state(hid, &state);
+    ork_get_storage_state(wid, &state);
     assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
 
     // Subsequent access auto-rehydrates seamlessly
-    assert(hero->GetHp() == 888);
+    auto reloaded = parent->m_weapon.LockAndAcquire();
+    assert(reloaded->GetDamage() == 888);
   }
 
   std::cout << "  Test 9 Passed!\n" << std::endl;
@@ -817,16 +846,17 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
   auto driver = std::make_shared<ork::InMemoryStorage>();
   ork::Init(driver);
 
-  auto hero = ork::CreateObject<PlayerObject>();
-  hero->SetHp(777);
-  hero->SetName("MultiThreadHero");
-  ork::HandleID hid = hero.GetTargetID();
+  auto parent = ork::CreateObject<ParentCharacter>();
+  auto weapon = parent->m_weapon.LockAndAcquire();
+  weapon->SetDamage(777);
+  ork::HandleID wid = weapon.GetTargetID();
 
-  // Dehydrate the hero
-  ork::Dehydrate(hero);
+  // Dehydrate the weapon
+  ork::Dehydrate(std::move(weapon));
+  assert(!weapon);
 
   uint8_t state = 0;
-  ork_get_storage_state(hid, &state);
+  ork_get_storage_state(wid, &state);
   assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
 
   // Spawn 8 concurrent threads all attempting to Rehydrate the SAME HandleID simultaneously
@@ -837,14 +867,14 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
 
   for (int i = 0; i < thread_count; ++i)
   {
-    threads.emplace_back([hid, &start_signal, &success_count]() {
+    threads.emplace_back([wid, &start_signal, &success_count]() {
       while (!start_signal.load())
       {
         std::this_thread::yield();
       }
 
-      auto ptr = ork::Rehydrate<PlayerObject>(hid);
-      if (ptr && ptr->GetHp() == 777 && ptr->GetName() == "MultiThreadHero")
+      auto ptr = ork::Rehydrate<WeaponObject>(wid);
+      if (ptr && ptr->GetDamage() == 777)
       {
         success_count.fetch_add(1);
       }
@@ -861,11 +891,169 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
 
   assert(success_count.load() == thread_count);
 
-  ork_get_storage_state(hid, &state);
-  assert(static_cast<ork::StorageState>(state) == ork::StorageState::Clean);
+  // Re-acquiring via main thread rehydrates it to Clean
+  {
+    auto final_ptr = ork::Rehydrate<WeaponObject>(wid);
+    assert(final_ptr->GetDamage() == 777);
+    ork_get_storage_state(wid, &state);
+    assert(static_cast<ork::StorageState>(state) == ork::StorageState::Clean);
+  }
 
   ork::Shutdown();
   std::cout << "  Test 10 Passed!\n" << std::endl;
+  std::cout.flush();
+}
+
+// Mock Auto-Dehydrator Plugin for testing
+class MockAutoDehydrator : public ork::IAutoDehydrator
+{
+public:
+  std::atomic<bool> m_started{false};
+  std::unordered_map<ork::HandleID, size_t> m_tracked;
+  mutable std::mutex m_mutex;
+  std::atomic<size_t> m_access_count{0};
+
+  void Start() override { m_started.store(true); }
+  void Stop() override { m_started.store(false); }
+  bool IsRunning() const override { return m_started.load(); }
+
+  void Register(ork::HandleID id, size_t size_bytes) override
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_tracked[id] = size_bytes;
+  }
+
+  void Unregister(ork::HandleID id) override
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_tracked.erase(id);
+  }
+
+  bool IsTracked(ork::HandleID id) const override
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_tracked.find(id) != m_tracked.end();
+  }
+
+  size_t GetTrackedMemoryBytes() const override
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    size_t total = 0;
+    for (const auto &[id, sz] : m_tracked)
+    {
+      total += sz;
+    }
+    return total;
+  }
+
+  void OnObjectAccess(ork::HandleID /*id*/) override
+  {
+    m_access_count.fetch_add(1);
+  }
+
+  size_t TriggerDehydration() override
+  {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    size_t count = 0;
+    std::vector<ork::HandleID> to_dehydrate;
+    for (const auto &[id, sz] : m_tracked)
+    {
+      to_dehydrate.push_back(id);
+    }
+    for (ork::HandleID id : to_dehydrate)
+    {
+      if (ork::DehydrateByID(id))
+      {
+        count++;
+      }
+    }
+    return count;
+  }
+};
+
+void Test11_AutoDehydrator_Plugin_And_Core_Communication()
+{
+  std::cout << "[Test 11] Auto-Dehydrator Plugin SPI, Size Tracking & Named Factories..." << std::endl;
+  std::cout.flush();
+
+  auto driver = std::make_shared<ork::InMemoryStorage>();
+  auto mock_dehydrator = std::make_shared<MockAutoDehydrator>();
+
+  // 1. Initialize core with storage driver and mock dehydrator plugin
+  ork::Init(driver, mock_dehydrator);
+  assert(mock_dehydrator->IsRunning() == true);
+  assert(ork::GetAutoDehydrator() == mock_dehydrator);
+
+  // 2. Named Factory 1: Create managed object in ParentCharacter (m_weapon is managed via CreateObject)
+  auto parent = ork::CreateObject<ParentCharacter>();
+  ork::HandleID parent_id = parent.GetTargetID();
+  ork::HandleID managed_weapon_id = parent->m_weapon.GetTargetID();
+
+  // Verify both parent and managed weapon are tracked by the dehydrator
+  assert(mock_dehydrator->IsTracked(parent_id) == true);
+  assert(mock_dehydrator->IsTracked(managed_weapon_id) == true);
+  assert(mock_dehydrator->GetTrackedMemoryBytes() >= sizeof(WeaponObject));
+
+  // 3. Named Factory 2: Create permanent object (CreatePermanentObject) -> NOT registered
+  ork::HandleID permanent_id = 0;
+  auto perm_player = ork::CreatePermanentObject<PlayerObject>();
+  perm_player->SetHp(999);
+  perm_player->SetName("PermanentHero");
+  permanent_id = perm_player.GetTargetID();
+
+  assert(mock_dehydrator->IsTracked(permanent_id) == false);
+
+  // 4. In-Flight Protection:
+  // `parent` is currently held by active OuroPtr (root_count == 1) -> DehydrateByID safely skips it (returns false)
+  // `managed_weapon_id` has root_count == 0 (no active OuroPtr) and strong_count == 1 (held by parent) -> Dehydrated successfully!
+  size_t dehydrated_count = mock_dehydrator->TriggerDehydration();
+  assert(dehydrated_count == 1);  // Only managed_weapon_id was dehydrated; parent was busy in-flight!
+
+  // Verify managed weapon is dehydrated in core
+  uint8_t state_weapon = 0;
+  ork_get_storage_state(managed_weapon_id, &state_weapon);
+  assert(static_cast<ork::StorageState>(state_weapon) == ork::StorageState::Dehydrated);
+
+  // Verify parent is still alive (in-flight) and permanent object is NOT in dehydrator
+  uint8_t state_parent = 0;
+  ork_get_storage_state(parent_id, &state_parent);
+  assert(static_cast<ork::StorageState>(state_parent) != ork::StorageState::Dehydrated);
+
+  uint8_t state_perm = 0;
+  ork_get_storage_state(permanent_id, &state_perm);
+  assert(static_cast<ork::StorageState>(state_perm) != ork::StorageState::Dehydrated);
+
+  // 5. Auto-rehydration test for managed weapon when accessed via parent
+  {
+    auto weapon_ptr = parent->m_weapon.LockAndAcquire();
+    assert((bool)weapon_ptr);
+    assert(weapon_ptr->GetDamage() == 50);  // Default damage
+  }
+
+  // 6. Test Unregister (e.g. converting to permanent or on deletion)
+  mock_dehydrator->Unregister(managed_weapon_id);
+  assert(mock_dehydrator->IsTracked(managed_weapon_id) == false);
+
+  // 7. Shutdown stops plugin
+  ork::Shutdown();
+  assert(mock_dehydrator->IsRunning() == false);
+
+  // 8. Default fallback to NoOpAutoDehydrator when auto_dehydrator is not passed to Init
+  {
+    ork::Init(driver);
+    auto default_dehydrator = ork::GetAutoDehydrator();
+    assert(default_dehydrator != nullptr);
+    assert(default_dehydrator->IsRunning() == false);
+    assert(default_dehydrator->GetTrackedMemoryBytes() == 0);
+    assert(default_dehydrator->TriggerDehydration() == 0);
+
+    auto test_hero = ork::CreateObject<PlayerObject>();
+    assert(default_dehydrator->IsTracked(test_hero.GetTargetID()) == false);
+
+    ork::Shutdown();
+  }
+
+  std::cout << "  Test 11 Passed!\n" << std::endl;
   std::cout.flush();
 }
 
@@ -886,6 +1074,7 @@ int main()
     Test8_Transparent_Auto_Rehydration();
     Test9_InFlight_And_Concurrent_Dehydration_Protection();
     Test10_Concurrent_Rehydration_Thread_Safety();
+    Test11_AutoDehydrator_Plugin_And_Core_Communication();
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();
