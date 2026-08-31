@@ -61,14 +61,21 @@ inline std::shared_ptr<IAutoDehydrator> GetAutoDehydrator()
 
 /**
  * @brief Initialize OuroKore Core with a persistent storage driver and optional auto-dehydrator plugin.
+ * @note One-Way Immutable: Only the host application's first call takes effect.
+ * Subsequent calls from plugins or other modules are safely ignored (no-op).
+ * @return true if successfully initialized by host, false if core has already been initialized.
  */
-inline void Init(std::shared_ptr<IStorageDriver> driver, std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr)
+inline bool Init(std::shared_ptr<IStorageDriver> driver, std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr)
 {
+  if (ork_try_initialize_core() != ORK_STATUS_OK)
+  {
+    return false;  // 已由主程式初始化，外掛重複呼叫安全略過
+  }
+
   detail::GetStorageDriverRef() = std::move(driver);
   if (auto_dehydrator)
   {
     detail::GetAutoDehydratorRef() = std::move(auto_dehydrator);
-    detail::GetAutoDehydratorRef()->Start();
   }
   else
   {
@@ -77,20 +84,7 @@ inline void Init(std::shared_ptr<IStorageDriver> driver, std::shared_ptr<IAutoDe
 
   // 註冊全域物件銷毀勾點：當物件 strong_count 與 weak_count 皆歸零死亡時，自動清除 storage 與通知外掛
   ork_set_object_destroyed_callback(&detail::OnObjectDestroyed);
-}
-
-/**
- * @brief Shutdown OuroKore Core, stop auto-dehydrator plugin and release driver references.
- */
-inline void Shutdown()
-{
-  ork_set_object_destroyed_callback(nullptr);
-  if (auto &dehydrator = detail::GetAutoDehydratorRef())
-  {
-    dehydrator->Stop();
-    dehydrator.reset();
-  }
-  detail::GetStorageDriverRef().reset();
+  return true;
 }
 
 /**

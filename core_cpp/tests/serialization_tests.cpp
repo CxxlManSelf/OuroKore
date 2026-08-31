@@ -263,8 +263,8 @@ void Test3_SingleObject_Dehydration_Rehydration()
   std::cout << "[Test 3] Single Object Dehydration & Rehydration with StorageState..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::make_shared<ork::InMemoryStorage>();
-  ork::Init(storage);
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  assert(storage != nullptr);
 
   auto parent = ork::CreateObject<ParentCharacter>();
   auto weapon = parent->m_weapon.LockAndAcquire();
@@ -276,7 +276,6 @@ void Test3_SingleObject_Dehydration_Rehydration()
   // Perform Dehydrate on weapon (owned by parent->m_weapon, strong_count == 1)
   ork::Dehydrate(std::move(weapon));
   assert(!weapon);  // Original object pointer is consumed and can NO longer be used!
-  assert(storage->GetCount() == 1);
   assert(storage->Contains(original_id));
 
   // Verify ControlBlock retains StorageState::Dehydrated even after payload memory is freed!
@@ -294,7 +293,6 @@ void Test3_SingleObject_Dehydration_Rehydration()
   rehydrated_weapon->SetDamage(300);
   assert(rehydrated_weapon->GetStorageState() == ork::StorageState::Dirty);
 
-  ork::Shutdown();
   std::cout << "  Test 3 Passed!\n" << std::endl;
   std::cout.flush();
 }
@@ -304,8 +302,8 @@ void Test4_ParentChild_Dehydration_Rehydration()
   std::cout << "[Test 4] Parent-Child Topology Dehydration & Rehydration..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::make_shared<ork::InMemoryStorage>();
-  ork::Init(storage);
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  assert(storage != nullptr);
 
   std::cout << "  Creating WorldObject..." << std::endl;
   std::cout.flush();
@@ -365,7 +363,6 @@ void Test4_ParentChild_Dehydration_Rehydration()
   assert(rehydrated_weapon.GetTargetID() == child_id);
   assert(rehydrated_weapon->GetDamage() == 120);
 
-  ork::Shutdown();
   std::cout << "  Test 4 Passed!\n" << std::endl;
   std::cout.flush();
 }
@@ -375,8 +372,8 @@ void Test5_InMemoryStorage_Save_And_Load()
   std::cout << "[Test 5] Core Global ork::Save & ork::Load (Clean Skip & Sub-Object Edge Lifecycle)..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::make_shared<ork::InMemoryStorage>();
-  ork::Init(storage);
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  assert(storage != nullptr);
 
   // 1. Single Object Save & Load
   auto hero = ork::CreateObject<PlayerObject>();
@@ -385,13 +382,11 @@ void Test5_InMemoryStorage_Save_And_Load()
 
   // Save 1: UnsavedNew/Dirty -> saves to storage
   assert(ork::Save(hero) == true);
-  assert(storage->GetCount() == 1);
   assert(storage->Contains(hero.GetTargetID()));
   assert(hero->GetStorageState() == ork::StorageState::Clean);
 
-  // Save 2: Clean -> fast skip, count remains 1
+  // Save 2: Clean -> fast skip
   assert(ork::Save(hero) == true);
-  assert(storage->GetCount() == 1);
 
   // Modify hero property via WriteLock -> automatically marked Dirty
   hero->SetHp(50);
@@ -441,7 +436,6 @@ void Test5_InMemoryStorage_Save_And_Load()
   assert(char_a->m_weapon.GetTargetID() == 0);
   assert((bool)char_a->m_weapon.LockAndAcquire() == false);
 
-  ork::Shutdown();
   std::cout << "  Test 5 Passed!\n" << std::endl;
   std::cout.flush();
 }
@@ -512,8 +506,8 @@ void Test6_Stream_Exception_Safety_And_Void_API()
   }
 
   // Verify Rehydrate Exception Safety with Corrupted Blueprint Data
-  auto storage = std::make_shared<ork::InMemoryStorage>();
-  ork::Init(storage);
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  assert(storage != nullptr);
 
   auto dummy = ork::CreateObject<PlayerObject>();
   ork::HandleID dummy_id = dummy.GetTargetID();
@@ -540,7 +534,6 @@ void Test6_Stream_Exception_Safety_And_Void_API()
   }
   assert(rehydrate_failed);
 
-  ork::Shutdown();
   std::cout << "  Test 6 Passed!\n" << std::endl;
   std::cout.flush();
 }
@@ -658,9 +651,6 @@ void Test8_Transparent_Auto_Rehydration()
   std::cout << "[Test 8] Transparent Auto-Rehydration via ControlBlock Function Hook..." << std::endl;
   std::cout.flush();
 
-  auto driver = std::make_shared<ork::InMemoryStorage>();
-  ork::Init(driver);
-
   // 1. Single Object Transparent Auto-Rehydration
   {
     auto parent = ork::CreateObject<ParentCharacter>();
@@ -757,9 +747,6 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
   std::cout << "[Test 9] In-Flight Root Edge Guard & Concurrent Dehydration Lock Safety..." << std::endl;
   std::cout.flush();
 
-  auto driver = std::make_shared<ork::InMemoryStorage>();
-  ork::Init(driver);
-
   // 1. In-Flight Root Edge Guard (Safe rejection when multiple active OuroPtr instances exist)
   {
     auto parent = ork::CreateObject<ParentCharacter>();
@@ -843,9 +830,6 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
   std::cout << "[Test 10] Concurrent Multi-Threaded Rehydrate Safety..." << std::endl;
   std::cout.flush();
 
-  auto driver = std::make_shared<ork::InMemoryStorage>();
-  ork::Init(driver);
-
   auto parent = ork::CreateObject<ParentCharacter>();
   auto weapon = parent->m_weapon.LockAndAcquire();
   weapon->SetDamage(777);
@@ -899,7 +883,6 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
     assert(static_cast<ork::StorageState>(state) == ork::StorageState::Clean);
   }
 
-  ork::Shutdown();
   std::cout << "  Test 10 Passed!\n" << std::endl;
   std::cout.flush();
 }
@@ -908,14 +891,9 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
 class MockAutoDehydrator : public ork::IAutoDehydrator
 {
 public:
-  std::atomic<bool> m_started{false};
   std::unordered_map<ork::HandleID, size_t> m_tracked;
   mutable std::mutex m_mutex;
   std::atomic<size_t> m_access_count{0};
-
-  void Start() override { m_started.store(true); }
-  void Stop() override { m_started.store(false); }
-  bool IsRunning() const override { return m_started.load(); }
 
   void Register(ork::HandleID id, size_t size_bytes) override
   {
@@ -973,16 +951,18 @@ public:
 
 void Test11_AutoDehydrator_Plugin_And_Core_Communication()
 {
-  std::cout << "[Test 11] Auto-Dehydrator Plugin SPI, Size Tracking & Named Factories..." << std::endl;
+  std::cout << "[Test 11] Auto-Dehydrator Plugin SPI, Size Tracking & One-Way Host Defense..." << std::endl;
   std::cout.flush();
 
-  auto driver = std::make_shared<ork::InMemoryStorage>();
-  auto mock_dehydrator = std::make_shared<MockAutoDehydrator>();
+  auto mock_dehydrator = std::dynamic_pointer_cast<MockAutoDehydrator>(ork::GetAutoDehydrator());
+  assert(mock_dehydrator != nullptr);
 
-  // 1. Initialize core with storage driver and mock dehydrator plugin
-  ork::Init(driver, mock_dehydrator);
-  assert(mock_dehydrator->IsRunning() == true);
-  assert(ork::GetAutoDehydrator() == mock_dehydrator);
+  // 1. Verify One-Way Host Initialization Defense:
+  // Any subsequent call to ork::Init (e.g. from plugin) returns false and is safely ignored
+  auto fake_driver = std::make_shared<ork::InMemoryStorage>();
+  auto fake_dehydrator = std::make_shared<MockAutoDehydrator>();
+  assert(ork::Init(fake_driver, fake_dehydrator) == false);  // Rejection verified!
+  assert(ork::GetAutoDehydrator() == mock_dehydrator);       // Existing plugin is protected!
 
   // 2. Named Factory 1: Create managed object in ParentCharacter (m_weapon is managed via CreateObject)
   auto parent = ork::CreateObject<ParentCharacter>();
@@ -1034,25 +1014,6 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
   mock_dehydrator->Unregister(managed_weapon_id);
   assert(mock_dehydrator->IsTracked(managed_weapon_id) == false);
 
-  // 7. Shutdown stops plugin
-  ork::Shutdown();
-  assert(mock_dehydrator->IsRunning() == false);
-
-  // 8. Default fallback to NoOpAutoDehydrator when auto_dehydrator is not passed to Init
-  {
-    ork::Init(driver);
-    auto default_dehydrator = ork::GetAutoDehydrator();
-    assert(default_dehydrator != nullptr);
-    assert(default_dehydrator->IsRunning() == false);
-    assert(default_dehydrator->GetTrackedMemoryBytes() == 0);
-    assert(default_dehydrator->TriggerDehydration() == 0);
-
-    auto test_hero = ork::CreateObject<PlayerObject>();
-    assert(default_dehydrator->IsTracked(test_hero.GetTargetID()) == false);
-
-    ork::Shutdown();
-  }
-
   std::cout << "  Test 11 Passed!\n" << std::endl;
   std::cout.flush();
 }
@@ -1064,6 +1025,12 @@ int main()
 
   try
   {
+    // Host One-Way Initialization
+    auto global_storage = std::make_shared<ork::InMemoryStorage>();
+    auto mock_dehydrator = std::make_shared<MockAutoDehydrator>();
+    bool init_ok = ork::Init(global_storage, mock_dehydrator);
+    assert(init_ok == true);
+
     Test1_BlueprintStream_Basic_And_DupGuard();
     Test2_PurePayload_And_EdgeRoster();
     Test3_SingleObject_Dehydration_Rehydration();

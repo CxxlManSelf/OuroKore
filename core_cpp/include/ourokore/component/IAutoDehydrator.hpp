@@ -21,12 +21,7 @@ class IAutoDehydrator
 public:
   virtual ~IAutoDehydrator() = default;
 
-  // --- 1. 模組生命週期 ---
-  virtual void Start() = 0;
-  virtual void Stop() = 0;
-  virtual bool IsRunning() const = 0;
-
-  // --- 2. 名冊與大小追蹤 (Info Stream) ---
+  // --- 1. 名冊與大小追蹤 (Info Stream) ---
   /**
    * @brief 將物件納入自動脫水候選名冊，並告知物件大小
    * @param id 物件全域唯一 HandleID

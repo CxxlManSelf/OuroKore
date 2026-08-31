@@ -1,9 +1,26 @@
+#include <atomic>
+
 #include "ourokore/c_api/component_api.h"
 
 #include "Registry.h"
 
+namespace
+{
+std::atomic<bool> g_core_initialized{false};
+}
+
 extern "C"
 {
+  int32_t ORK_CALL ork_try_initialize_core(void)
+  {
+    bool expected = false;
+    if (!g_core_initialized.compare_exchange_strong(expected, true))
+    {
+      return ORK_STATUS_ERROR_ALREADY_EXISTS;
+    }
+    return ORK_STATUS_OK;
+  }
+
   int32_t ORK_CALL ork_register_object(OuroObject *obj, HandleID *out_id)
   {
     if (!obj || !out_id)

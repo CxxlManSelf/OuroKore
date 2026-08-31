@@ -14,10 +14,6 @@ namespace ork
 class NoOpAutoDehydrator : public IAutoDehydrator
 {
 public:
-  void Start() override {}
-  void Stop() override {}
-  bool IsRunning() const override { return false; }
-
   void Register(HandleID /*id*/, size_t /*size_bytes*/) override {}
   void Unregister(HandleID /*id*/) override {}
   bool IsTracked(HandleID /*id*/) const override { return false; }

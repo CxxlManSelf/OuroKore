@@ -31,6 +31,13 @@ extern "C" {
 #endif
 
 /**
+ * @brief Atomically claim one-way host initialization for OuroKore Core across the entire process.
+ * Only the first call returns ORK_STATUS_OK. Subsequent calls from plugins return ORK_STATUS_ERROR_ALREADY_EXISTS.
+ * @return ORK_STATUS_OK on first successful call, ORK_STATUS_ERROR_ALREADY_EXISTS otherwise.
+ */
+ORK_API int32_t ORK_CALL ork_try_initialize_core(void);
+
+/**
  * @brief Reserve a HandleID and create a ControlBlock with a null payload.
  * @param out_id Pointer to receive the allocated HandleID.
  * @return ORK_STATUS_OK on success, or an error code.
