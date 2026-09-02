@@ -8,3 +8,9 @@ target_link_libraries(basic_tests ourokore_core)
 add_executable(serialization_tests serialization_tests.cpp)
 target_link_libraries(serialization_tests ourokore_core)
 
+add_executable(base_sync_tests base_sync_tests.cpp)
+target_link_libraries(base_sync_tests ourokore_base)
+
+add_executable(base_threadpool_tests base_threadpool_tests.cpp)
+target_link_libraries(base_threadpool_tests ourokore_base)
+

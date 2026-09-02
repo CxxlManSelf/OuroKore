@@ -13,7 +13,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in
 include_directories("../include" "include")
 aux_source_directory(src SRC_LIST)
 
-#set(LIBSRC_LIST cxxlcommon)
+set(LIBSRC_LIST ourokore_base)
 if(UNIX)
     set(LIBSRC_LIST ${LIBSRC_LIST} pthread)
 endif()
