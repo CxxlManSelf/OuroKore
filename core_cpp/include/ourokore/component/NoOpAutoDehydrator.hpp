@@ -19,6 +19,9 @@ public:
   bool IsTracked(HandleID /*id*/) const override { return false; }
   size_t GetTrackedMemoryBytes() const override { return 0; }
 
+  void OnObjectDehydrated(HandleID /*id*/) override {}
+  void OnObjectRehydrated(HandleID /*id*/) override {}
+
   void OnObjectAccess(HandleID /*id*/) override {}
   size_t TriggerDehydration() override { return 0; }
 };

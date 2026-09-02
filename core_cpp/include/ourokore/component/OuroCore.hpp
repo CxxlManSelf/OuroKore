@@ -344,6 +344,12 @@ inline bool Dehydrate(HandleID id)
   ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
   delete obj;
   ork_bind_object_payload(id, nullptr);
+
+  // 5. 通知自動脫水模組物件已脫水
+  if (auto dehydrator = GetAutoDehydrator())
+  {
+    dehydrator->OnObjectDehydrated(id);
+  }
   return true;
 }
 
@@ -430,6 +436,12 @@ inline bool Dehydrate(OuroPtr<T> &&ptr)
     ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
     delete obj;
     ork_bind_object_payload(id, nullptr);
+
+    // 通知自動脫水模組物件已脫水
+    if (auto dehydrator = GetAutoDehydrator())
+    {
+      dehydrator->OnObjectDehydrated(id);
+    }
   }
 
   // 3. 【最後一步】此時狀態已是 Dehydrated 墓碑，才安全釋放呼叫者的 ptr
@@ -524,6 +536,12 @@ inline void RehydratePayload(HandleID id)
 
   // Re-register type-specific auto-rehydration callback
   ork_set_rehydrate_fn(id, &RehydrateCallback<T>);
+
+  // 6. 通知自動脫水模組物件已復水
+  if (auto dehydrator = GetAutoDehydrator())
+  {
+    dehydrator->OnObjectRehydrated(id);
+  }
 }
 }  // namespace detail
 

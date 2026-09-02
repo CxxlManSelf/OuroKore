@@ -892,36 +892,65 @@ class MockAutoDehydrator : public ork::IAutoDehydrator
 {
 public:
   std::unordered_map<ork::HandleID, size_t> m_tracked;
-  mutable std::mutex m_mutex;
+  std::unordered_map<ork::HandleID, bool> m_dehydrated_states;
+  mutable std::recursive_mutex m_mutex;
   std::atomic<size_t> m_access_count{0};
+  std::atomic<size_t> m_dehydrate_notify_count{0};
+  std::atomic<size_t> m_rehydrate_notify_count{0};
 
   void Register(ork::HandleID id, size_t size_bytes) override
   {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_tracked[id] = size_bytes;
+    m_dehydrated_states[id] = false;
   }
 
   void Unregister(ork::HandleID id) override
   {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_tracked.erase(id);
+    m_dehydrated_states.erase(id);
   }
 
   bool IsTracked(ork::HandleID id) const override
   {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     return m_tracked.find(id) != m_tracked.end();
   }
 
   size_t GetTrackedMemoryBytes() const override
   {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     size_t total = 0;
     for (const auto &[id, sz] : m_tracked)
     {
-      total += sz;
+      auto it = m_dehydrated_states.find(id);
+      if (it != m_dehydrated_states.end() && !it->second)
+      {
+        total += sz;
+      }
     }
     return total;
+  }
+
+  void OnObjectDehydrated(ork::HandleID id) override
+  {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_dehydrate_notify_count.fetch_add(1);
+    if (m_tracked.find(id) != m_tracked.end())
+    {
+      m_dehydrated_states[id] = true;
+    }
+  }
+
+  void OnObjectRehydrated(ork::HandleID id) override
+  {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    m_rehydrate_notify_count.fetch_add(1);
+    if (m_tracked.find(id) != m_tracked.end())
+    {
+      m_dehydrated_states[id] = false;
+    }
   }
 
   void OnObjectAccess(ork::HandleID /*id*/) override
@@ -931,13 +960,19 @@ public:
 
   size_t TriggerDehydration() override
   {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    size_t count = 0;
     std::vector<ork::HandleID> to_dehydrate;
-    for (const auto &[id, sz] : m_tracked)
     {
-      to_dehydrate.push_back(id);
+      std::lock_guard<std::recursive_mutex> lock(m_mutex);
+      for (const auto &[id, sz] : m_tracked)
+      {
+        auto it = m_dehydrated_states.find(id);
+        if (it != m_dehydrated_states.end() && !it->second)
+        {
+          to_dehydrate.push_back(id);
+        }
+      }
     }
+    size_t count = 0;
     for (ork::HandleID id : to_dehydrate)
     {
       if (ork::DehydrateByID(id))
@@ -965,6 +1000,7 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
   assert(ork::GetAutoDehydrator() == mock_dehydrator);       // Existing plugin is protected!
 
   // 2. Named Factory 1: Create managed object in ParentCharacter (m_weapon is managed via CreateObject)
+  size_t initial_memory = mock_dehydrator->GetTrackedMemoryBytes();
   auto parent = ork::CreateObject<ParentCharacter>();
   ork::HandleID parent_id = parent.GetTargetID();
   ork::HandleID managed_weapon_id = parent->m_weapon.GetTargetID();
@@ -972,7 +1008,8 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
   // Verify both parent and managed weapon are tracked by the dehydrator
   assert(mock_dehydrator->IsTracked(parent_id) == true);
   assert(mock_dehydrator->IsTracked(managed_weapon_id) == true);
-  assert(mock_dehydrator->GetTrackedMemoryBytes() >= sizeof(WeaponObject));
+  size_t before_dehydrate_mem = mock_dehydrator->GetTrackedMemoryBytes();
+  assert(before_dehydrate_mem >= sizeof(ParentCharacter) + sizeof(WeaponObject));
 
   // 3. Named Factory 2: Create permanent object (CreatePermanentObject) -> NOT registered
   ork::HandleID permanent_id = 0;
@@ -983,11 +1020,17 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
 
   assert(mock_dehydrator->IsTracked(permanent_id) == false);
 
-  // 4. In-Flight Protection:
+  // 4. In-Flight Protection & Dehydration Notification:
   // `parent` is currently held by active OuroPtr (root_count == 1) -> DehydrateByID safely skips it (returns false)
   // `managed_weapon_id` has root_count == 0 (no active OuroPtr) and strong_count == 1 (held by parent) -> Dehydrated successfully!
+  size_t dehydrate_notify_before = mock_dehydrator->m_dehydrate_notify_count.load();
   size_t dehydrated_count = mock_dehydrator->TriggerDehydration();
   assert(dehydrated_count == 1);  // Only managed_weapon_id was dehydrated; parent was busy in-flight!
+  assert(mock_dehydrator->m_dehydrate_notify_count.load() == dehydrate_notify_before + 1);
+
+  // Verify tracked memory bytes decreased because managed weapon's memory is freed!
+  size_t after_dehydrate_mem = mock_dehydrator->GetTrackedMemoryBytes();
+  assert(after_dehydrate_mem == before_dehydrate_mem - sizeof(WeaponObject));
 
   // Verify managed weapon is dehydrated in core
   uint8_t state_weapon = 0;
@@ -1003,14 +1046,51 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
   ork_get_storage_state(permanent_id, &state_perm);
   assert(static_cast<ork::StorageState>(state_perm) != ork::StorageState::Dehydrated);
 
-  // 5. Auto-rehydration test for managed weapon when accessed via parent
+  // 5. Auto-rehydration test for managed weapon when accessed via parent -> OnObjectRehydrated notification
+  size_t rehydrate_notify_before = mock_dehydrator->m_rehydrate_notify_count.load();
   {
     auto weapon_ptr = parent->m_weapon.LockAndAcquire();
     assert((bool)weapon_ptr);
     assert(weapon_ptr->GetDamage() == 50);  // Default damage
   }
+  // Verify OnObjectRehydrated was called and tracked memory is restored
+  assert(mock_dehydrator->m_rehydrate_notify_count.load() == rehydrate_notify_before + 1);
+  assert(mock_dehydrator->GetTrackedMemoryBytes() == before_dehydrate_mem);
 
-  // 6. Test Unregister (e.g. converting to permanent or on deletion)
+  // 6. Test permanent object with child weapon
+  {
+    auto perm_parent = ork::CreatePermanentObject<ParentCharacter>();
+    ork::HandleID perm_parent_id = perm_parent.GetTargetID();
+    // Verify permanent parent is NOT tracked by dehydrator
+    assert(mock_dehydrator->IsTracked(perm_parent_id) == false);
+
+    // Weapon created within ParentCharacter constructor defaults to CreateObject, so it is tracked
+    ork::HandleID perm_child_weapon_id = perm_parent->m_weapon.GetTargetID();
+    assert(mock_dehydrator->IsTracked(perm_child_weapon_id) == true);
+
+    // Dehydrate child weapon
+    auto child_ptr = perm_parent->m_weapon.LockAndAcquire();
+    size_t mem_before_dehydrate = mock_dehydrator->GetTrackedMemoryBytes();
+    size_t d_count = mock_dehydrator->m_dehydrate_notify_count.load();
+    ork::Dehydrate(std::move(child_ptr));
+    assert(mock_dehydrator->m_dehydrate_notify_count.load() == d_count + 1);
+    assert(mock_dehydrator->GetTrackedMemoryBytes() == mem_before_dehydrate - sizeof(WeaponObject));
+
+    // Permanent parent remains untracked throughout dehydration & rehydration
+    assert(mock_dehydrator->IsTracked(perm_parent_id) == false);
+
+    // Rehydrate child weapon via access
+    size_t r_count = mock_dehydrator->m_rehydrate_notify_count.load();
+    auto rehydrated_child = perm_parent->m_weapon.LockAndAcquire();
+    assert((bool)rehydrated_child);
+    assert(mock_dehydrator->m_rehydrate_notify_count.load() == r_count + 1);
+    assert(mock_dehydrator->GetTrackedMemoryBytes() == mem_before_dehydrate);
+
+    // Permanent parent is STILL NOT tracked (rehydration does not force registration)
+    assert(mock_dehydrator->IsTracked(perm_parent_id) == false);
+  }
+
+  // 7. Test Unregister (e.g. converting to permanent or on deletion)
   mock_dehydrator->Unregister(managed_weapon_id);
   assert(mock_dehydrator->IsTracked(managed_weapon_id) == false);
 

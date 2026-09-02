@@ -51,6 +51,21 @@ public:
    */
   virtual size_t GetTrackedMemoryBytes() const = 0;
 
+  // --- 2. 脫水與復水生命週期通知 (Dehydration & Rehydration Lifecycle) ---
+  /**
+   * @brief 當物件成功脫水（記憶體肉體釋放）時由核心通知
+   * @param id 物件 HandleID
+   * @note 純狀態通報。模組若有列管該 id，可據此更新其脫水狀態與扣減記憶體統計；未列管物件請直接忽略。
+   */
+  virtual void OnObjectDehydrated(HandleID id) = 0;
+
+  /**
+   * @brief 當物件被復水（重新載入記憶體）時由核心通知
+   * @param id 物件 HandleID
+   * @note 純狀態通報，絕不改變物件列管狀態。模組若有列管該 id，可據此恢復記憶體統計與候選佇列；未列管物件請直接忽略。
+   */
+  virtual void OnObjectRehydrated(HandleID id) = 0;
+
   // --- 3. 存取監聽勾點 ---
   /**
    * @brief 物件存取通知勾點（供未來 LRU 或熱度統計策略使用）
