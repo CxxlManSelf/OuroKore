@@ -503,7 +503,27 @@ inline void RehydratePayload(HandleID id)
   // 3. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
   ActiveOwnerGuard guard(id);
 
-  void *mem = ::operator new(sizeof(T));
+  // 記憶體配置與 OOM 緊急脫水自救重試機制
+  void *mem = nullptr;
+  constexpr int MAX_OOM_RETRIES = 2;
+  for (int attempt = 0; attempt <= MAX_OOM_RETRIES; ++attempt)
+  {
+    try
+    {
+      mem = ::operator new(sizeof(T));
+      break;
+    }
+    catch (const std::bad_alloc &)
+    {
+      auto dehydrator = GetAutoDehydrator();
+      size_t freed_count = dehydrator ? dehydrator->TriggerDehydration() : 0;
+      if (freed_count == 0 || attempt == MAX_OOM_RETRIES)
+      {
+        throw;
+      }
+    }
+  }
+
   T *empty_shell = nullptr;
   try
   {
@@ -566,6 +586,17 @@ OuroPtr<T> Rehydrate(const OuroPtr<T> &ptr)
   return Rehydrate<T>(ptr.GetTargetID());
 }
 
+/**
+ * @brief 型別專屬的自動復水回呼函式（Automatic Rehydration Callback）
+ *
+ * 當受管物件處於脫水狀態（Dehydrated）且底層嘗試存取其指標時（如 ork_acquire_object_pointer），
+ * ControlBlock 會透過預先註冊的函式指標觸發此回呼，自動完成物件之記憶體重建、狀態還原（RehydratePayload）
+ * 與指標重新綁定，實現對呼叫端透明的延遲復水（Transparent On-Demand Rehydration）。
+ *
+ * @tparam T 物件型別
+ * @param id 物件的 HandleID
+ * @return ::OuroObject* 復水後重建的底層物件指標
+ */
 template <typename T>
 inline ::OuroObject *RehydrateCallback(HandleID id)
 {

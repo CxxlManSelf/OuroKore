@@ -807,7 +807,29 @@ HandleID CreateObjectInternal(Args &&...args)
 
   ActiveOwnerGuard guard(reserved_id);
 
-  void *mem = ::operator new(sizeof(T));
+  // 記憶體配置與 OOM 緊急脫水自救重試機制
+  void *mem = nullptr;
+  constexpr int MAX_OOM_RETRIES = 2;
+  for (int attempt = 0; attempt <= MAX_OOM_RETRIES; ++attempt)
+  {
+    try
+    {
+      mem = ::operator new(sizeof(T));
+      break;
+    }
+    catch (const std::bad_alloc &)
+    {
+      // 捕捉到 OOM，請求脫水外掛緊急脫水冷物件以釋放實體記憶體
+      auto dehydrator = GetAutoDehydrator();
+      size_t freed_count = dehydrator ? dehydrator->TriggerDehydration() : 0;
+      if (freed_count == 0 || attempt == MAX_OOM_RETRIES)
+      {
+        ork_unregister_object(reserved_id);
+        throw;
+      }
+    }
+  }
+
   T *obj = nullptr;
   try
   {
