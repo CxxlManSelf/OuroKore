@@ -1,17 +1,13 @@
 #pragma once
 
 #include <stdint.h>
+#include "ourokore/base/export.h"
 
-#if defined(_WIN32) || defined(__WIN32__) || defined(WIN32)
-  #ifdef OUROKORE_EXPORTS
-    #define ORK_API __declspec(dllexport)
-  #else
-    #define ORK_API __declspec(dllimport)
-  #endif
-  #define ORK_CALL __cdecl
+// Core / C API 模組符號匯出巨集
+#if defined(OUROKORE_EXPORTS) || defined(OUROKORE_CORE_EXPORTS)
+  #define ORK_API ORK_DECL_EXPORT
 #else
-  #define ORK_API __attribute__((visibility("default")))
-  #define ORK_CALL
+  #define ORK_API ORK_DECL_IMPORT
 #endif
 
 #define ORK_ROOT_ID 0
