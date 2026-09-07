@@ -1,16 +1,19 @@
 #pragma once
 
+#include <future>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "AsyncResult.hpp"
 #include "Handles.hpp"
 #include "IAutoDehydrator.hpp"
 #include "IStorageDriver.hpp"
 #include "NoOpAutoDehydrator.hpp"
 #include "OuroObject.hpp"
 #include "OuroStream.hpp"
+#include "ourokore/base/ThreadPool.hpp"
 #include "ourokore/c_api/component_api.h"
 #include "ourokore/c_api/core.h"
 
@@ -31,12 +34,26 @@ inline std::shared_ptr<IAutoDehydrator> &GetAutoDehydratorRef()
   return s_dehydrator;
 }
 
+inline std::shared_ptr<ork::base::FixedThreadPool> &GetCoreThreadPoolRef()
+{
+  static std::shared_ptr<ork::base::FixedThreadPool> s_pool = nullptr;
+  return s_pool;
+}
+
 inline void OnObjectDestroyed(HandleID id)
 {
-  auto &driver = GetStorageDriverRef();
+  auto driver = GetStorageDriverRef();
   if (driver)
   {
-    driver->DeleteBlueprint(id);
+    auto pool = GetCoreThreadPoolRef();
+    if (pool && pool->is_running())
+    {
+      pool->submit_detached([driver, id]() { driver->DeleteBlueprint(id); });
+    }
+    else
+    {
+      driver->DeleteBlueprint(id);
+    }
   }
   auto &dehydrator = GetAutoDehydratorRef();
   if (dehydrator)
@@ -60,12 +77,48 @@ inline std::shared_ptr<IAutoDehydrator> GetAutoDehydrator()
 }
 
 /**
- * @brief Initialize OuroKore Core with a persistent storage driver and optional auto-dehydrator plugin.
+ * @brief 取得核心執行緒池（若未配置則可能為 null）
+ */
+inline std::shared_ptr<ork::base::FixedThreadPool> GetCoreThreadPool()
+{
+  return detail::GetCoreThreadPoolRef();
+}
+
+/**
+ * @brief 等待所有排隊中的背景儲存與銷毀任務完全落盤排空 (Flush)
+ */
+inline void FlushStorage()
+{
+  auto pool = detail::GetCoreThreadPoolRef();
+  if (pool && pool->is_running())
+  {
+    pool->wait_idle();
+  }
+}
+
+/**
+ * @brief 優雅終止核心執行緒池與背景任務，確保退出時無死鎖與資料遺失
+ */
+inline void Shutdown()
+{
+  FlushStorage();
+  auto pool = detail::GetCoreThreadPoolRef();
+  if (pool)
+  {
+    pool->stop();
+    detail::GetCoreThreadPoolRef() = nullptr;
+  }
+}
+
+/**
+ * @brief Initialize OuroKore Core with a persistent storage driver, optional auto-dehydrator plugin and optional thread pool.
  * @note One-Way Immutable: Only the host application's first call takes effect.
  * Subsequent calls from plugins or other modules are safely ignored (no-op).
  * @return true if successfully initialized by host, false if core has already been initialized.
  */
-inline bool Init(std::shared_ptr<IStorageDriver> driver, std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr)
+inline bool Init(std::shared_ptr<IStorageDriver> driver,
+                 std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr,
+                 std::shared_ptr<ork::base::FixedThreadPool> thread_pool = nullptr)
 {
   if (ork_try_initialize_core() != ORK_STATUS_OK)
   {
@@ -80,6 +133,15 @@ inline bool Init(std::shared_ptr<IStorageDriver> driver, std::shared_ptr<IAutoDe
   else
   {
     detail::GetAutoDehydratorRef() = std::make_shared<NoOpAutoDehydrator>();
+  }
+
+  if (thread_pool)
+  {
+    detail::GetCoreThreadPoolRef() = std::move(thread_pool);
+  }
+  else
+  {
+    detail::GetCoreThreadPoolRef() = std::make_shared<ork::base::FixedThreadPool>();
   }
 
   // 註冊全域物件銷毀勾點：當物件 strong_count 與 weak_count 皆歸零死亡時，自動清除 storage 與通知外掛
@@ -604,6 +666,335 @@ inline ::OuroObject *RehydrateCallback(HandleID id)
   ::OuroObject *raw_obj = nullptr;
   ork_acquire_object_pointer(id, &raw_obj);
   return raw_obj;
+}
+
+// =========================================================================
+// --- 核心非同步 I/O 操作 (Async I/O with Context Preservation) ---
+// =========================================================================
+
+/**
+ * @brief 非同步儲存物件狀態至儲存體
+ *
+ * 內部透過在任務中建立獨立的 OuroPtr<T> 生命週期守衛，保證在背景寫盤落盤前物件絕不被提前銷毀。
+ * @param ptr 目標物件指標
+ * @return std::future<AsyncResult<T>> 自帶 HandleID、成功狀態與物件指標的 Future 結果
+ */
+template <typename T>
+inline std::future<AsyncResult<T>> SaveAsync(const OuroPtr<T> &ptr)
+{
+  if (!ptr)
+  {
+    throw std::runtime_error("OuroKore SaveAsync Error: Invalid or null OuroPtr.");
+  }
+
+  auto pool = detail::GetCoreThreadPoolRef();
+  if (!pool || !pool->is_running())
+  {
+    throw std::runtime_error("OuroKore SaveAsync Error: Core ThreadPool not initialized or stopped.");
+  }
+
+  HandleID id = ptr.GetTargetID();
+  OuroPtr<T> guard(id);
+
+  return pool->submit([guard = std::move(guard)]() mutable -> AsyncResult<T> {
+    AsyncResult<T> result;
+    result.id = guard.GetTargetID();
+    try
+    {
+      if (Save(guard))
+      {
+        result.success = true;
+        result.ptr = std::move(guard);
+      }
+      else
+      {
+        result.success = false;
+        result.error = "Storage driver save operation returned false.";
+      }
+    }
+    catch (const std::exception &e)
+    {
+      result.success = false;
+      result.error = e.what();
+    }
+    catch (...)
+    {
+      result.success = false;
+      result.error = "Unknown exception occurred during SaveAsync.";
+    }
+    return result;
+  });
+}
+
+/**
+ * @brief 非同步從儲存體載入 / 刷新物件狀態（以寫鎖反序列化覆蓋舊狀態）
+ */
+template <typename T>
+inline std::future<AsyncResult<T>> LoadAsync(const OuroPtr<T> &ptr)
+{
+  if (!ptr)
+  {
+    throw std::runtime_error("OuroKore LoadAsync Error: Invalid or null OuroPtr.");
+  }
+
+  auto pool = detail::GetCoreThreadPoolRef();
+  if (!pool || !pool->is_running())
+  {
+    throw std::runtime_error("OuroKore LoadAsync Error: Core ThreadPool not initialized or stopped.");
+  }
+
+  HandleID id = ptr.GetTargetID();
+  OuroPtr<T> guard(id);
+
+  return pool->submit([guard = std::move(guard)]() mutable -> AsyncResult<T> {
+    AsyncResult<T> result;
+    result.id = guard.GetTargetID();
+    try
+    {
+      if (Load(guard))
+      {
+        result.success = true;
+        result.ptr = std::move(guard);
+      }
+      else
+      {
+        result.success = false;
+        result.error = "Storage driver load operation returned false.";
+      }
+    }
+    catch (const std::exception &e)
+    {
+      result.success = false;
+      result.error = e.what();
+    }
+    catch (...)
+    {
+      result.success = false;
+      result.error = "Unknown exception occurred during LoadAsync.";
+    }
+    return result;
+  });
+}
+
+/**
+ * @brief 非同步復水：背景配置空殼、讀檔反序列化並重新綁定 Payload
+ * @return std::future<AsyncResult<T>> 包含 HandleID、成功狀態與復水後之全新 OuroPtr<T>
+ */
+template <typename T>
+inline std::future<AsyncResult<T>> RehydrateAsync(HandleID id)
+{
+  if (id == 0)
+  {
+    throw std::runtime_error("OuroKore RehydrateAsync Error: Invalid HandleID.");
+  }
+
+  auto pool = detail::GetCoreThreadPoolRef();
+  if (!pool || !pool->is_running())
+  {
+    throw std::runtime_error("OuroKore RehydrateAsync Error: Core ThreadPool not initialized or stopped.");
+  }
+
+  return pool->submit([id]() -> AsyncResult<T> {
+    AsyncResult<T> result;
+    result.id = id;
+    try
+    {
+      result.ptr = Rehydrate<T>(id);
+      result.success = (result.ptr.GetTargetID() != 0);
+      if (!result.success)
+      {
+        result.error = "Rehydrate failed to produce a valid OuroPtr.";
+      }
+    }
+    catch (const std::exception &e)
+    {
+      result.success = false;
+      result.error = e.what();
+    }
+    catch (...)
+    {
+      result.success = false;
+      result.error = "Unknown exception occurred during RehydrateAsync.";
+    }
+    return result;
+  });
+}
+
+/**
+ * @brief 依 HandleID 發起非同步脫水
+ */
+inline std::future<AsyncResult<void>> DehydrateAsync(HandleID id)
+{
+  if (id == 0)
+  {
+    throw std::runtime_error("OuroKore DehydrateAsync Error: Invalid HandleID.");
+  }
+
+  auto pool = detail::GetCoreThreadPoolRef();
+  if (!pool || !pool->is_running())
+  {
+    throw std::runtime_error("OuroKore DehydrateAsync Error: Core ThreadPool not initialized or stopped.");
+  }
+
+  return pool->submit([id]() -> AsyncResult<void> {
+    AsyncResult<void> result;
+    result.id = id;
+    try
+    {
+      result.success = Dehydrate(id);
+      if (!result.success)
+      {
+        result.error = "Dehydrate returned false (object might be in-flight, missing, or already dehydrated).";
+      }
+    }
+    catch (const std::exception &e)
+    {
+      result.success = false;
+      result.error = e.what();
+    }
+    catch (...)
+    {
+      result.success = false;
+      result.error = "Unknown exception occurred during DehydrateAsync.";
+    }
+    return result;
+  });
+}
+
+/**
+ * @brief 透過右值移動 OuroPtr 發起非同步脫水（右值所有權轉移）
+ */
+template <typename T>
+inline std::future<AsyncResult<void>> DehydrateAsync(OuroPtr<T> &&ptr)
+{
+  if (!ptr)
+  {
+    throw std::runtime_error("OuroKore DehydrateAsync Error: Invalid or null OuroPtr.");
+  }
+
+  auto pool = detail::GetCoreThreadPoolRef();
+  if (!pool || !pool->is_running())
+  {
+    throw std::runtime_error("OuroKore DehydrateAsync Error: Core ThreadPool not initialized or stopped.");
+  }
+
+  HandleID id = ptr.GetTargetID();
+  return pool->submit([target_ptr = std::move(ptr), id]() mutable -> AsyncResult<void> {
+    AsyncResult<void> result;
+    result.id = id;
+    try
+    {
+      result.success = Dehydrate(std::move(target_ptr));
+      if (!result.success)
+      {
+        result.error = "Dehydrate with move-ptr failed (other in-flight references may exist).";
+      }
+    }
+    catch (const std::exception &e)
+    {
+      result.success = false;
+      result.error = e.what();
+    }
+    catch (...)
+    {
+      result.success = false;
+      result.error = "Unknown exception occurred during DehydrateAsync.";
+    }
+    return result;
+  });
+}
+
+// =========================================================================
+// --- 多核心批次並行操作 (Parallel Batch APIs) ---
+// =========================================================================
+
+/**
+ * @brief 批次多核心平行儲存
+ * @param batch 要儲存的物件集合
+ * @return 依序回傳各物件之 AsyncResult<T> 結果向量
+ */
+template <typename T>
+inline std::vector<AsyncResult<T>> SaveBatch(const std::vector<OuroPtr<T>> &batch)
+{
+  std::vector<std::future<AsyncResult<T>>> futures;
+  futures.reserve(batch.size());
+  for (const auto &item : batch)
+  {
+    futures.push_back(SaveAsync(item));
+  }
+
+  std::vector<AsyncResult<T>> results;
+  results.reserve(futures.size());
+  for (auto &f : futures)
+  {
+    results.push_back(f.get());
+  }
+  return results;
+}
+
+/**
+ * @brief 批次多核心平行載入
+ */
+template <typename T>
+inline std::vector<AsyncResult<T>> LoadBatch(const std::vector<OuroPtr<T>> &batch)
+{
+  std::vector<std::future<AsyncResult<T>>> futures;
+  futures.reserve(batch.size());
+  for (const auto &item : batch)
+  {
+    futures.push_back(LoadAsync(item));
+  }
+
+  std::vector<AsyncResult<T>> results;
+  results.reserve(futures.size());
+  for (auto &f : futures)
+  {
+    results.push_back(f.get());
+  }
+  return results;
+}
+
+/**
+ * @brief 批次多核心平行復水
+ */
+template <typename T>
+inline std::vector<AsyncResult<T>> RehydrateBatch(const std::vector<HandleID> &ids)
+{
+  std::vector<std::future<AsyncResult<T>>> futures;
+  futures.reserve(ids.size());
+  for (HandleID id : ids)
+  {
+    futures.push_back(RehydrateAsync<T>(id));
+  }
+
+  std::vector<AsyncResult<T>> results;
+  results.reserve(futures.size());
+  for (auto &f : futures)
+  {
+    results.push_back(f.get());
+  }
+  return results;
+}
+
+/**
+ * @brief 批次多核心平行脫水
+ */
+inline std::vector<AsyncResult<void>> DehydrateBatch(const std::vector<HandleID> &ids)
+{
+  std::vector<std::future<AsyncResult<void>>> futures;
+  futures.reserve(ids.size());
+  for (HandleID id : ids)
+  {
+    futures.push_back(DehydrateAsync(id));
+  }
+
+  std::vector<AsyncResult<void>> results;
+  results.reserve(futures.size());
+  for (auto &f : futures)
+  {
+    results.push_back(f.get());
+  }
+  return results;
 }
 
 }  // namespace ork
