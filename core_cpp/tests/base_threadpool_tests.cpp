@@ -135,8 +135,16 @@ void test_dynamic_thread_pool()
   }
 
   // 等待空閒逾時（> 200ms），驗證自動縮容回核心線程數（2）
-  std::this_thread::sleep_for(std::chrono::milliseconds(400));
-  size_t shrunk_workers = dynamic_pool.get_current_worker_count();
+  size_t shrunk_workers = 0;
+  for (int retry = 0; retry < 20; ++retry)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    shrunk_workers = dynamic_pool.get_current_worker_count();
+    if (shrunk_workers == 2)
+    {
+      break;
+    }
+  }
   std::cout << "  -> 空閒縮容後的 Worker 數: " << shrunk_workers << std::endl;
   assert(shrunk_workers == 2);
 

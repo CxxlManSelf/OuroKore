@@ -267,9 +267,12 @@ public:
     m_running.store(true, std::memory_order_release);
 
     // 啟動核心常駐線程
-    for (size_t i = 0; i < m_min_threads; ++i)
     {
-      spawn_worker();
+      std::lock_guard<std::mutex> lock(m_thread_lifecycle_mutex);
+      for (size_t i = 0; i < m_min_threads; ++i)
+      {
+        spawn_worker_locked();
+      }
     }
   }
 
@@ -417,7 +420,7 @@ public:
   }
 
 private:
-  void spawn_worker()
+  void spawn_worker_locked()
   {
     m_current_threads.fetch_add(1, std::memory_order_acq_rel);
     std::thread([this]() { worker_loop(); }).detach();
@@ -425,16 +428,31 @@ private:
 
   void check_and_expand_workers()
   {
-    // 如果佇列有任務且現有 Worker 都在忙碌，且尚未達到 max_threads 上限，則建立新 Worker
-    size_t current = m_current_threads.load(std::memory_order_acquire);
-    size_t active = m_active_workers.load(std::memory_order_acquire);
-
-    if (active >= current && current < m_max_threads)
+    std::lock_guard<std::mutex> lock(m_thread_lifecycle_mutex);
+    if (!m_running.load(std::memory_order_relaxed))
     {
-      std::lock_guard<std::mutex> lock(m_thread_lifecycle_mutex);
-      if (m_current_threads.load(std::memory_order_acquire) < m_max_threads)
+      return;
+    }
+
+    size_t current = m_current_threads.load(std::memory_order_relaxed);
+    if (current >= m_max_threads)
+    {
+      return;
+    }
+
+    size_t active = m_active_workers.load(std::memory_order_relaxed);
+    size_t idle = (current > active) ? (current - active) : 0;
+    size_t q_size = m_task_queue.size();
+
+    // 如果排隊任務數量超過空閒 Worker 數量，且未達最大上限，則補充擴展 Worker
+    if (q_size > idle)
+    {
+      size_t needed = q_size - idle;
+      size_t can_spawn = m_max_threads - current;
+      size_t to_spawn = std::min(needed, can_spawn);
+      for (size_t i = 0; i < to_spawn; ++i)
       {
-        spawn_worker();
+        spawn_worker_locked();
       }
     }
   }
@@ -467,15 +485,21 @@ private:
             break;
           }
 
-          size_t curr = m_current_threads.load(std::memory_order_acquire);
-          if (curr > m_min_threads)
+          std::unique_lock<std::mutex> lock(m_thread_lifecycle_mutex);
+          // 檢查若仍在運行且當前線程數超過最小常駐數，則安全縮容
+          if (m_running.load(std::memory_order_relaxed) &&
+              m_current_threads.load(std::memory_order_relaxed) > m_min_threads)
           {
-            // 超過核心線程數，退出並回收本執行緒
-            break;
+            size_t remaining = m_current_threads.fetch_sub(1, std::memory_order_acq_rel) - 1;
+            if (remaining == 0)
+            {
+              m_all_threads_done_cv.notify_all();
+            }
+            return; // 退出本執行緒以回收資源
           }
           else
           {
-            // 處於核心線程數以內，繼續下一輪等待
+            // 已達核心線程數下限，不可縮容，繼續下一輪等待
             continue;
           }
         }
@@ -502,12 +526,14 @@ private:
       }
     }
 
-    // 執行緒即將終止退出，更新計數並喚醒可能的等待者
-    size_t remaining = m_current_threads.fetch_sub(1, std::memory_order_acq_rel) - 1;
-    if (remaining == 0)
+    // 執行緒因 stop() 或排空終止退出，更新計數並喚醒可能的等待者
     {
       std::lock_guard<std::mutex> lock(m_thread_lifecycle_mutex);
-      m_all_threads_done_cv.notify_all();
+      size_t remaining = m_current_threads.fetch_sub(1, std::memory_order_acq_rel) - 1;
+      if (remaining == 0)
+      {
+        m_all_threads_done_cv.notify_all();
+      }
     }
   }
 

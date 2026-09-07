@@ -14,3 +14,6 @@ target_link_libraries(base_sync_tests ourokore_base)
 add_executable(base_threadpool_tests base_threadpool_tests.cpp)
 target_link_libraries(base_threadpool_tests ourokore_base)
 
+add_executable(ouro_lru_dehydrator_tests ouro_lru_dehydrator_tests.cpp)
+target_link_libraries(ouro_lru_dehydrator_tests ourokore_core ourokore_base)
+
