@@ -66,13 +66,7 @@ public:
    */
   virtual void OnObjectRehydrated(HandleID id) = 0;
 
-  // --- 3. 存取監聽勾點 ---
-  /**
-   * @brief 物件存取通知勾點（供未來 LRU 或熱度統計策略使用）
-   */
-  virtual void OnObjectAccess(HandleID id) = 0;
-
-  // --- 4. 脫水調度入口 ---
+  // --- 3. 脫水調度入口 ---
   /**
    * @brief 觸發一輪自動脫水掃描與評估
    * @return 本輪成功脫水的物件數量

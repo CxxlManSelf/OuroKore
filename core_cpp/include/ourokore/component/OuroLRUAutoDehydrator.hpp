@@ -182,19 +182,6 @@ public:
   }
 
   /**
-   * @brief 存取監聽勾點：以 O(1) 時間將存取物件移至鏈結串列頭部 (MRU)
-   */
-  void OnObjectAccess(HandleID id) override
-  {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    auto it = m_node_map.find(id);
-    if (it != m_node_map.end())
-    {
-      m_lru_list.splice(m_lru_list.begin(), m_lru_list, it->second.lru_iter);
-    }
-  }
-
-  /**
    * @brief 觸發一輪 LRU 脫水評估
    *
    * 從鏈結串列最冷端（LRU Tail）向熱端評估，優先脫水最久未使用的活體物件。
@@ -257,11 +244,32 @@ public:
 
     // 在釋放內部互斥鎖的情況下呼叫核心 Dehydrate，防範死鎖
     size_t successful_dehydrations = 0;
+    std::vector<HandleID> failed_ids;
+
     for (HandleID id : candidates)
     {
       if (ork::Dehydrate(id))
       {
         ++successful_dehydrations;
+      }
+      else
+      {
+        failed_ids.push_back(id);
+      }
+    }
+
+    // 若有物件脫水失敗（通常是因為 In-Flight 活躍使用中或暫時鎖定），
+    // 將其移至 MRU 隊首重新排隊，避免長期霸佔隊尾導致後續冷物件發生飢餓與卡死 (Head-of-Line Blocking)
+    if (!failed_ids.empty())
+    {
+      std::lock_guard<std::mutex> lock(m_mutex);
+      for (HandleID id : failed_ids)
+      {
+        auto it = m_node_map.find(id);
+        if (it != m_node_map.end())
+        {
+          m_lru_list.splice(m_lru_list.begin(), m_lru_list, it->second.lru_iter);
+        }
       }
     }
 
@@ -417,9 +425,12 @@ private:
   mutable std::mutex m_mutex;
   std::list<HandleID> m_lru_list;
   std::unordered_map<HandleID, TrackedNode> m_node_map;
+  // 目前名冊中活體（未脫水）物件所佔用的總記憶體位元組數
   size_t m_tracked_memory_bytes{0};
 
+  // 記憶體目標配額上限（位元組）；若為 0 表示不設上限，改依批次數量進行脫水
   size_t m_memory_limit_bytes{0};
+  // 當未設定記憶體配額上限（0）時，單輪脫水預設處理的候選物件批次數量（預設 10）
   size_t m_batch_size{10};
 
   std::chrono::milliseconds m_interval{0};

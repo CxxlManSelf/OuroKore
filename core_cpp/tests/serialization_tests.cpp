@@ -894,7 +894,6 @@ public:
   std::unordered_map<ork::HandleID, size_t> m_tracked;
   std::unordered_map<ork::HandleID, bool> m_dehydrated_states;
   mutable std::recursive_mutex m_mutex;
-  std::atomic<size_t> m_access_count{0};
   std::atomic<size_t> m_dehydrate_notify_count{0};
   std::atomic<size_t> m_rehydrate_notify_count{0};
 
@@ -951,11 +950,6 @@ public:
     {
       m_dehydrated_states[id] = false;
     }
-  }
-
-  void OnObjectAccess(ork::HandleID /*id*/) override
-  {
-    m_access_count.fetch_add(1);
   }
 
   size_t TriggerDehydration() override

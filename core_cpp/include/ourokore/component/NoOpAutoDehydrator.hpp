@@ -22,7 +22,6 @@ public:
   void OnObjectDehydrated(HandleID /*id*/) override {}
   void OnObjectRehydrated(HandleID /*id*/) override {}
 
-  void OnObjectAccess(HandleID /*id*/) override {}
   size_t TriggerDehydration() override { return 0; }
 };
 

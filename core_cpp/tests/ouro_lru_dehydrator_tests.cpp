@@ -52,7 +52,7 @@ public:
 
 void test_lru_order_and_access()
 {
-  std::cout << "[測試 1] LRU 存取熱度與淘汰順序測試..." << std::endl;
+  std::cout << "[測試 1] LRU 建立、復水熱度更新與淘汰順序測試..." << std::endl;
 
   auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
   detail::GetAutoDehydratorRef() = dehydrator;
@@ -74,41 +74,48 @@ void test_lru_order_and_access()
   assert(dehydrator->IsTracked(id_c));
   assert(dehydrator->GetTrackedMemoryBytes() == sizeof(TestItem) * 3);
 
-  // 2. 存取 A（提升 A 的熱度到最前頭）
-  // 預期順序轉變為：A (最熱) -> C -> B (最冷)
-  dehydrator->OnObjectAccess(id_a);
-
-  // 3. 觸發單個物件脫水（batch_size = 1）
+  // 2. 觸發單個物件脫水（batch_size = 1）
+  // 預期最先建立的最冷物件 A 被脫水
   dehydrator->SetBatchSize(1);
   size_t count = dehydrator->TriggerDehydration();
   assert(count == 1);
 
-  // 驗證最冷的 B 被脫水了
-  uint8_t state_b = 0;
-  ork_get_storage_state(id_b, &state_b);
-  assert(static_cast<StorageState>(state_b) == StorageState::Dehydrated);
-
-  // 驗證 A 與 C 尚未被脫水
-  uint8_t state_c = 0;
-  ork_get_storage_state(id_c, &state_c);
-  assert(static_cast<StorageState>(state_c) != StorageState::Dehydrated);
-
-  // 4. 再次觸發脫水，次冷的 C 應該被脫水
-  count = dehydrator->TriggerDehydration();
-  assert(count == 1);
-  ork_get_storage_state(id_c, &state_c);
-  assert(static_cast<StorageState>(state_c) == StorageState::Dehydrated);
-
-  // 5. 最後觸發脫水，最熱的 A 終於被脫水
-  count = dehydrator->TriggerDehydration();
-  assert(count == 1);
   uint8_t state_a = 0;
   ork_get_storage_state(id_a, &state_a);
   assert(static_cast<StorageState>(state_a) == StorageState::Dehydrated);
 
-  // 6. 驗證全部脫水後列管活體記憶體歸零
+  // 3. 將 A 復水（Rehydrate 自動將 A 拉回 MRU 頭端，成為最熱物件）
+  // 隊列順序應轉變為：A (最熱) -> C -> B (最冷)
+  auto ptr_a = Rehydrate<TestItem>(id_a);
+  assert(ptr_a);
+  assert(dehydrator->GetTrackedMemoryBytes() == sizeof(TestItem) * 3);
+
+  // 4. 再次觸發脫水，此時最冷的 B 應該被脫水
+  count = dehydrator->TriggerDehydration();
+  assert(count == 1);
+  uint8_t state_b = 0;
+  ork_get_storage_state(id_b, &state_b);
+  assert(static_cast<StorageState>(state_b) == StorageState::Dehydrated);
+
+  // 5. 再次觸發脫水，次冷的 C 應該被脫水
+  count = dehydrator->TriggerDehydration();
+  assert(count == 1);
+  uint8_t state_c = 0;
+  ork_get_storage_state(id_c, &state_c);
+  assert(static_cast<StorageState>(state_c) == StorageState::Dehydrated);
+
+  // 6. 釋放 A 的持有指標以允許 A 脫水
+  ptr_a.Release();
+
+  // 最後觸發脫水，最熱的 A 終於被脫水
+  count = dehydrator->TriggerDehydration();
+  assert(count == 1);
+  ork_get_storage_state(id_a, &state_a);
+  assert(static_cast<StorageState>(state_a) == StorageState::Dehydrated);
+
+  // 7. 驗證全部脫水後列管活體記憶體歸零
   assert(dehydrator->GetTrackedMemoryBytes() == 0);
-  std::cout << "  -> LRU 淘汰順序完全符合預期（B -> C -> A）！" << std::endl;
+  std::cout << "  -> LRU 淘汰順序完全符合預期（A -> B -> C -> A(Rehydrated)）！" << std::endl;
 }
 
 void test_memory_quota_eviction()
@@ -119,23 +126,22 @@ void test_memory_quota_eviction()
   detail::GetAutoDehydratorRef() = dehydrator;
 
   auto root = CreatePermanentObject<TestContainer>();
-  root->m_item0 = CreateObject<TestItem>(0, "Q0");
-  root->m_item1 = CreateObject<TestItem>(1, "Q1");
-  root->m_item2 = CreateObject<TestItem>(2, "Q2");
-  root->m_item3 = CreateObject<TestItem>(3, "Q3");
+  root->m_item0 = CreateObject<TestItem>(1, "QuotaA");
+  root->m_item1 = CreateObject<TestItem>(2, "QuotaB");
+  root->m_item2 = CreateObject<TestItem>(3, "QuotaC");
+  root->m_item3 = CreateObject<TestItem>(4, "QuotaD");
 
   size_t single_size = sizeof(TestItem);
   assert(dehydrator->GetTrackedMemoryBytes() == single_size * 4);
 
-  // 設定配額為 2 個物件大小
+  // 設定配額為 2 個物件的大小：應觸發脫水直到記憶體 <= 2 個物件大小
   dehydrator->SetMemoryLimit(single_size * 2);
 
-  // 觸發脫水：應該剛好脫水 2 個物件，使活體記憶體降至 single_size * 2
   size_t freed = dehydrator->TriggerDehydration();
   assert(freed == 2);
   assert(dehydrator->GetTrackedMemoryBytes() == single_size * 2);
 
-  // 再次觸發：因為已經小於等於配額，應該不脫水任何物件
+  // 再次觸發脫水：因為未超標，脫水數量應為 0
   freed = dehydrator->TriggerDehydration();
   assert(freed == 0);
   assert(dehydrator->GetTrackedMemoryBytes() == single_size * 2);
@@ -151,17 +157,15 @@ void test_in_flight_protection()
   detail::GetAutoDehydratorRef() = dehydrator;
 
   auto root = CreatePermanentObject<TestContainer>();
-  root->m_item0 = CreateObject<TestItem>(1, "ColdItem");
-  root->m_item1 = CreateObject<TestItem>(2, "HotItem");
+  // 先建立 hot_item（在串列尾端/較冷），後建立 cold_item（在串列頭端/較熱）
+  root->m_item0 = CreateObject<TestItem>(1, "HotItem");
+  root->m_item1 = CreateObject<TestItem>(2, "ColdItem");
 
-  HandleID cold_id = root->m_item0.GetTargetID();
-  HandleID hot_id = root->m_item1.GetTargetID();
+  HandleID hot_id = root->m_item0.GetTargetID();
+  HandleID cold_id = root->m_item1.GetTargetID();
 
-  // 故意將 cold_id 移到 MRU 頭端，使得 hot_id 處於 LRU 尾端
-  dehydrator->OnObjectAccess(cold_id);
-
-  // 但主執行緒此時正持有 hot 物件的活躍 OuroPtr（In-Flight，root_count == 1）
-  auto hot_ptr = root->m_item1.LockAndAcquire();
+  // 主執行緒此時正持有處於尾端之 hot 物件的活躍 OuroPtr（In-Flight，root_count == 1）
+  auto hot_ptr = root->m_item0.LockAndAcquire();
   assert(hot_ptr);
 
   // 觸發脫水：hot 物件處於 LRU 尾端，但由於正在使用中，脫水必須安全略過它，轉而脫水 cold 物件
@@ -216,6 +220,49 @@ void test_background_thread_and_stop()
   std::cout << "  -> 背景排程運作正常，且 Stop() 在 " << elapsed_stop.count() << " ms 內極速退出！" << std::endl;
 }
 
+void test_failed_dehydration_requeue()
+{
+  std::cout << "[測試 5] 脫水失敗物件重排（防止隊頭阻塞 Head-of-Line Blocking）測試..." << std::endl;
+
+  auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
+  detail::GetAutoDehydratorRef() = dehydrator;
+
+  auto root = CreatePermanentObject<TestContainer>();
+  root->m_item0 = CreateObject<TestItem>(1, "BusyTailItem");
+  root->m_item1 = CreateObject<TestItem>(2, "IdleItem");
+
+  HandleID busy_id = root->m_item0.GetTargetID();
+  HandleID idle_id = root->m_item1.GetTargetID();
+
+  // busy_id 在建立時較早，處於 LRU 最冷端 (Tail)；idle_id 在 MRU 頭端
+  // 主執行緒此時鎖定並持有 busy_id (In-Flight)
+  auto busy_ptr = root->m_item0.LockAndAcquire();
+  assert(busy_ptr);
+
+  // 設定批次大小為 1
+  dehydrator->SetBatchSize(1);
+
+  // 第一輪脫水：評估 Tail (busy_id)，因 In-Flight 脫水失敗
+  // 機制應將其重排至 MRU 頭端，使得 idle_id 晉升至尾端
+  size_t freed_round1 = dehydrator->TriggerDehydration();
+  assert(freed_round1 == 0);
+
+  // 驗證 busy_id 依然存活
+  uint8_t state_busy = 0;
+  ork_get_storage_state(busy_id, &state_busy);
+  assert(static_cast<StorageState>(state_busy) != StorageState::Dehydrated);
+
+  // 第二輪脫水：現在尾端是 idle_id，應能順利脫水，絕不被卡死！
+  size_t freed_round2 = dehydrator->TriggerDehydration();
+  assert(freed_round2 == 1);
+
+  uint8_t state_idle = 0;
+  ork_get_storage_state(idle_id, &state_idle);
+  assert(static_cast<StorageState>(state_idle) == StorageState::Dehydrated);
+
+  std::cout << "  -> 脫水失敗重排機制驗證成功，完美防止隊頭阻塞（Head-of-Line Blocking）！" << std::endl;
+}
+
 int main()
 {
   try
@@ -230,6 +277,7 @@ int main()
     test_memory_quota_eviction();
     test_in_flight_protection();
     test_background_thread_and_stop();
+    test_failed_dehydration_requeue();
 
     std::cout << "=== OuroLRUAutoDehydrator 所有測試全部通過！ ===" << std::endl;
     return 0;
