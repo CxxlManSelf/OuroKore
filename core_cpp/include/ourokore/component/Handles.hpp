@@ -819,10 +819,19 @@ HandleID CreateObjectInternal(Args &&...args)
     }
     catch (const std::bad_alloc &)
     {
-      // 捕捉到 OOM，請求脫水外掛緊急脫水冷物件以釋放實體記憶體
+      // 捕捉到 OOM，向脫水模組提出精確的目標需求以釋放實體記憶體
       auto dehydrator = GetAutoDehydrator();
-      size_t freed_count = dehydrator ? dehydrator->TriggerDehydration() : 0;
-      if (freed_count == 0 || attempt == MAX_OOM_RETRIES)
+      if (!dehydrator)
+      {
+        ork_unregister_object(reserved_id);
+        throw;
+      }
+
+      size_t bytes_needed = sizeof(T);
+      auto report = dehydrator->TriggerDehydration(bytes_needed);
+
+      // 若未釋放任何記憶體，或者釋放量未達標且已無更多可用候選者，立即 Fail-Fast 拋出例外，杜絕無效盲目重試
+      if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed) || attempt == MAX_OOM_RETRIES)
       {
         ork_unregister_object(reserved_id);
         throw;

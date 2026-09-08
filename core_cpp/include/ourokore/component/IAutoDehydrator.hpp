@@ -9,6 +9,18 @@ namespace ork
 using HandleID = uint64_t;
 
 /**
+ * @brief 脫水作業成效報告 (Dehydration Execution Report)
+ */
+struct DehydrationReport
+{
+  size_t freed_bytes{0};           ///< 本輪實際釋放的實體記憶體位元組數
+  size_t dehydrated_count{0};      ///< 成功脫水的物件總數
+  bool has_more_candidates{false}; ///< 佇列中是否仍有可脫水的候選冷物件（若為 false 代表全數已脫水或正被鎖定）
+
+  explicit operator bool() const noexcept { return freed_bytes > 0; }
+};
+
+/**
  * @brief 自動脫水外掛模組抽象介面 (Auto-Dehydration Plugin SPI)
  *
  * 職責定義：
@@ -69,9 +81,13 @@ public:
   // --- 3. 脫水調度入口 ---
   /**
    * @brief 觸發一輪自動脫水掃描與評估
-   * @return 本輪成功脫水的物件數量
+   * @param target_bytes_to_free 期望釋放的記憶體位元組數：
+   *        - 若為 0：常態常規巡檢，依據模組自身配額門檻或預設批次大小執行。
+   *        - 若 > 0：緊急/需求驅動（例如 OOM 緊急自救），繞過常規配額門檻，
+   *                  優先淘汰最冷物件直到釋放量達到目標或所有候選者耗盡。
+   * @return 本輪脫水的詳細成效報告 (DehydrationReport)
    */
-  virtual size_t TriggerDehydration() = 0;
+  virtual DehydrationReport TriggerDehydration(size_t target_bytes_to_free = 0) = 0;
 };
 
 }  // namespace ork

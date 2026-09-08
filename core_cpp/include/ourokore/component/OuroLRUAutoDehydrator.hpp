@@ -185,27 +185,48 @@ public:
    * @brief 觸發一輪 LRU 脫水評估
    *
    * 從鏈結串列最冷端（LRU Tail）向熱端評估，優先脫水最久未使用的活體物件。
-   * @return 本輪成功脫水的物件數量
+   * @param target_bytes_to_free 期望釋放的記憶體位元組數（0 表示常規配額/批次巡檢；> 0 表示需求驅動自救）
+   * @return 本輪成功脫水的詳細成效報告 (DehydrationReport)
    */
-  size_t TriggerDehydration() override
+  DehydrationReport TriggerDehydration(size_t target_bytes_to_free = 0) override
   {
-    std::vector<HandleID> candidates;
+    DehydrationReport report;
+    struct Candidate
+    {
+      HandleID id;
+      size_t size_bytes;
+    };
+    std::vector<Candidate> candidates;
+
     {
       std::lock_guard<std::mutex> lock(m_mutex);
       if (m_node_map.empty())
       {
-        return 0;
+        return report;
       }
 
-      bool check_quota = (m_memory_limit_bytes > 0);
+      bool is_targeted = (target_bytes_to_free > 0);
+      bool check_quota = (!is_targeted && m_memory_limit_bytes > 0);
       size_t quota = m_memory_limit_bytes;
       size_t current_mem = m_tracked_memory_bytes;
 
-      // 若設定了配額且目前未超標，則無須脫水
+      // 若為常態常規巡檢，且設定了配額且目前未超標，則無須脫水
       if (check_quota && current_mem <= quota)
       {
-        return 0;
+        return report;
       }
+
+      size_t bytes_to_reclaim = 0;
+      if (is_targeted)
+      {
+        bytes_to_reclaim = target_bytes_to_free;
+      }
+      else if (check_quota)
+      {
+        bytes_to_reclaim = current_mem - quota;
+      }
+
+      size_t accumulated_bytes = 0;
 
       // 從尾端（最冷資料）向前收集未脫水的候選物件
       for (auto it = m_lru_list.rbegin(); it != m_lru_list.rend(); ++it)
@@ -214,25 +235,19 @@ public:
         auto node_it = m_node_map.find(id);
         if (node_it != m_node_map.end() && !node_it->second.is_dehydrated)
         {
-          candidates.push_back(id);
+          candidates.push_back({id, node_it->second.size_bytes});
+          accumulated_bytes += node_it->second.size_bytes;
 
-          if (check_quota)
+          if (is_targeted || check_quota)
           {
-            if (current_mem > node_it->second.size_bytes)
-            {
-              current_mem -= node_it->second.size_bytes;
-            }
-            else
-            {
-              current_mem = 0;
-            }
-            if (current_mem <= quota)
+            if (accumulated_bytes >= bytes_to_reclaim)
             {
               break;
             }
           }
           else
           {
+            // 無配額且非指定目標模式，依 batch_size 收集
             if (candidates.size() >= m_batch_size)
             {
               break;
@@ -242,27 +257,38 @@ public:
       }
     }
 
+    if (candidates.empty())
+    {
+      return report;
+    }
+
     // 在釋放內部互斥鎖的情況下呼叫核心 Dehydrate，防範死鎖
-    size_t successful_dehydrations = 0;
     std::vector<HandleID> failed_ids;
 
-    for (HandleID id : candidates)
+    for (const auto &cand : candidates)
     {
-      if (ork::Dehydrate(id))
+      if (ork::Dehydrate(cand.id))
       {
-        ++successful_dehydrations;
+        report.freed_bytes += cand.size_bytes;
+        report.dehydrated_count++;
+
+        // 若為需求驅動模式且已釋放足額，提前結束脫水循環
+        if (target_bytes_to_free > 0 && report.freed_bytes >= target_bytes_to_free)
+        {
+          break;
+        }
       }
       else
       {
-        failed_ids.push_back(id);
+        failed_ids.push_back(cand.id);
       }
     }
 
-    // 若有物件脫水失敗（通常是因為 In-Flight 活躍使用中或暫時鎖定），
-    // 將其移至 MRU 隊首重新排隊，避免長期霸佔隊尾導致後續冷物件發生飢餓與卡死 (Head-of-Line Blocking)
-    if (!failed_ids.empty())
+    // 處理失敗物件並檢查名冊中是否仍有可脫水的候選冷物件
     {
       std::lock_guard<std::mutex> lock(m_mutex);
+      // 若有物件脫水失敗（通常是因為 In-Flight 活躍使用中或暫時鎖定），
+      // 將其移至 MRU 隊首重新排隊，避免長期霸佔隊尾導致後續冷物件飢餓
       for (HandleID id : failed_ids)
       {
         auto it = m_node_map.find(id);
@@ -271,11 +297,38 @@ public:
           m_lru_list.splice(m_lru_list.begin(), m_lru_list, it->second.lru_iter);
         }
       }
+
+      // 檢查是否仍有未脫水且非本次失敗的候選物件
+      if (m_tracked_memory_bytes > 0)
+      {
+        for (auto it = m_lru_list.rbegin(); it != m_lru_list.rend(); ++it)
+        {
+          HandleID id = *it;
+          auto node_it = m_node_map.find(id);
+          if (node_it != m_node_map.end() && !node_it->second.is_dehydrated)
+          {
+            bool was_failed = false;
+            for (HandleID fid : failed_ids)
+            {
+              if (fid == id)
+              {
+                was_failed = true;
+                break;
+              }
+            }
+            if (!was_failed)
+            {
+              report.has_more_candidates = true;
+              break;
+            }
+          }
+        }
+      }
     }
 
-    m_total_dehydrated_count.fetch_add(successful_dehydrations, std::memory_order_relaxed);
+    m_total_dehydrated_count.fetch_add(report.dehydrated_count, std::memory_order_relaxed);
     m_total_runs.fetch_add(1, std::memory_order_relaxed);
-    return successful_dehydrations;
+    return report;
   }
 
   // =========================================================================

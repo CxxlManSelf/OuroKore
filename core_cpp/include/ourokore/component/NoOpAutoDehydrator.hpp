@@ -22,7 +22,7 @@ public:
   void OnObjectDehydrated(HandleID /*id*/) override {}
   void OnObjectRehydrated(HandleID /*id*/) override {}
 
-  size_t TriggerDehydration() override { return 0; }
+  DehydrationReport TriggerDehydration(size_t /*target_bytes_to_free*/ = 0) override { return DehydrationReport{}; }
 };
 
 }  // namespace ork

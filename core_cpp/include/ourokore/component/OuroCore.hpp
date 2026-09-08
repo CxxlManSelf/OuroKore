@@ -578,8 +578,15 @@ inline void RehydratePayload(HandleID id)
     catch (const std::bad_alloc &)
     {
       auto dehydrator = GetAutoDehydrator();
-      size_t freed_count = dehydrator ? dehydrator->TriggerDehydration() : 0;
-      if (freed_count == 0 || attempt == MAX_OOM_RETRIES)
+      if (!dehydrator)
+      {
+        throw;
+      }
+
+      size_t bytes_needed = sizeof(T);
+      auto report = dehydrator->TriggerDehydration(bytes_needed);
+
+      if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed) || attempt == MAX_OOM_RETRIES)
       {
         throw;
       }

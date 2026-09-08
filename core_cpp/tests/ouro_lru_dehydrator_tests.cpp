@@ -77,8 +77,10 @@ void test_lru_order_and_access()
   // 2. 觸發單個物件脫水（batch_size = 1）
   // 預期最先建立的最冷物件 A 被脫水
   dehydrator->SetBatchSize(1);
-  size_t count = dehydrator->TriggerDehydration();
-  assert(count == 1);
+  auto report = dehydrator->TriggerDehydration();
+  assert(report.dehydrated_count == 1);
+  assert(report.freed_bytes == sizeof(TestItem));
+  assert(report.has_more_candidates == true);
 
   uint8_t state_a = 0;
   ork_get_storage_state(id_a, &state_a);
@@ -91,15 +93,15 @@ void test_lru_order_and_access()
   assert(dehydrator->GetTrackedMemoryBytes() == sizeof(TestItem) * 3);
 
   // 4. 再次觸發脫水，此時最冷的 B 應該被脫水
-  count = dehydrator->TriggerDehydration();
-  assert(count == 1);
+  report = dehydrator->TriggerDehydration();
+  assert(report.dehydrated_count == 1);
   uint8_t state_b = 0;
   ork_get_storage_state(id_b, &state_b);
   assert(static_cast<StorageState>(state_b) == StorageState::Dehydrated);
 
   // 5. 再次觸發脫水，次冷的 C 應該被脫水
-  count = dehydrator->TriggerDehydration();
-  assert(count == 1);
+  report = dehydrator->TriggerDehydration();
+  assert(report.dehydrated_count == 1);
   uint8_t state_c = 0;
   ork_get_storage_state(id_c, &state_c);
   assert(static_cast<StorageState>(state_c) == StorageState::Dehydrated);
@@ -108,8 +110,9 @@ void test_lru_order_and_access()
   ptr_a.Release();
 
   // 最後觸發脫水，最熱的 A 終於被脫水
-  count = dehydrator->TriggerDehydration();
-  assert(count == 1);
+  report = dehydrator->TriggerDehydration();
+  assert(report.dehydrated_count == 1);
+  assert(report.has_more_candidates == false); // 所有物件均已脫水
   ork_get_storage_state(id_a, &state_a);
   assert(static_cast<StorageState>(state_a) == StorageState::Dehydrated);
 
@@ -137,13 +140,15 @@ void test_memory_quota_eviction()
   // 設定配額為 2 個物件的大小：應觸發脫水直到記憶體 <= 2 個物件大小
   dehydrator->SetMemoryLimit(single_size * 2);
 
-  size_t freed = dehydrator->TriggerDehydration();
-  assert(freed == 2);
+  auto report = dehydrator->TriggerDehydration();
+  assert(report.dehydrated_count == 2);
+  assert(report.freed_bytes == single_size * 2);
   assert(dehydrator->GetTrackedMemoryBytes() == single_size * 2);
 
   // 再次觸發脫水：因為未超標，脫水數量應為 0
-  freed = dehydrator->TriggerDehydration();
-  assert(freed == 0);
+  report = dehydrator->TriggerDehydration();
+  assert(report.dehydrated_count == 0);
+  assert(report.freed_bytes == 0);
   assert(dehydrator->GetTrackedMemoryBytes() == single_size * 2);
 
   std::cout << "  -> 記憶體配額控制完全符合預期！" << std::endl;
@@ -170,7 +175,7 @@ void test_in_flight_protection()
 
   // 觸發脫水：hot 物件處於 LRU 尾端，但由於正在使用中，脫水必須安全略過它，轉而脫水 cold 物件
   dehydrator->SetBatchSize(10);
-  size_t freed = dehydrator->TriggerDehydration();
+  auto report = dehydrator->TriggerDehydration();
 
   // hot 物件免疫於脫水
   uint8_t state_hot = 0;
@@ -182,7 +187,8 @@ void test_in_flight_protection()
   ork_get_storage_state(cold_id, &state_cold);
   assert(static_cast<StorageState>(state_cold) == StorageState::Dehydrated);
 
-  assert(freed == 1);
+  assert(report.dehydrated_count == 1);
+  assert(report.freed_bytes == sizeof(TestItem));
   std::cout << "  -> In-Flight 活躍物件安全略過驗證成功！" << std::endl;
 }
 
@@ -244,8 +250,9 @@ void test_failed_dehydration_requeue()
 
   // 第一輪脫水：評估 Tail (busy_id)，因 In-Flight 脫水失敗
   // 機制應將其重排至 MRU 頭端，使得 idle_id 晉升至尾端
-  size_t freed_round1 = dehydrator->TriggerDehydration();
-  assert(freed_round1 == 0);
+  auto report_round1 = dehydrator->TriggerDehydration();
+  assert(report_round1.dehydrated_count == 0);
+  assert(report_round1.freed_bytes == 0);
 
   // 驗證 busy_id 依然存活
   uint8_t state_busy = 0;
@@ -253,14 +260,63 @@ void test_failed_dehydration_requeue()
   assert(static_cast<StorageState>(state_busy) != StorageState::Dehydrated);
 
   // 第二輪脫水：現在尾端是 idle_id，應能順利脫水，絕不被卡死！
-  size_t freed_round2 = dehydrator->TriggerDehydration();
-  assert(freed_round2 == 1);
+  auto report_round2 = dehydrator->TriggerDehydration();
+  assert(report_round2.dehydrated_count == 1);
+  assert(report_round2.freed_bytes == sizeof(TestItem));
 
   uint8_t state_idle = 0;
   ork_get_storage_state(idle_id, &state_idle);
   assert(static_cast<StorageState>(state_idle) == StorageState::Dehydrated);
 
   std::cout << "  -> 脫水失敗重排機制驗證成功，完美防止隊頭阻塞（Head-of-Line Blocking）！" << std::endl;
+}
+
+void test_target_driven_dehydration_and_report()
+{
+  std::cout << "[測試 6] 需求目標驅動（Target-driven）與成效回報（DehydrationReport）精準測試..." << std::endl;
+
+  auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
+  detail::GetAutoDehydratorRef() = dehydrator;
+
+  auto root = CreatePermanentObject<TestContainer>();
+  root->m_item0 = CreateObject<TestItem>(1, "TargetA");
+  root->m_item1 = CreateObject<TestItem>(2, "TargetB");
+  root->m_item2 = CreateObject<TestItem>(3, "TargetC");
+  root->m_item3 = CreateObject<TestItem>(4, "TargetD");
+
+  size_t single_sz = sizeof(TestItem);
+  assert(dehydrator->GetTrackedMemoryBytes() == single_sz * 4);
+
+  // 1. 設定極高配額 (100MB)，模擬常規配額未超標的情境
+  dehydrator->SetMemoryLimit(100 * 1024 * 1024);
+
+  // 常規巡檢：因為未超標，脫水報告應為空
+  auto report_routine = dehydrator->TriggerDehydration(0);
+  assert(report_routine.dehydrated_count == 0);
+  assert(report_routine.freed_bytes == 0);
+
+  // 2. 緊急需求驅動：呼叫端請求精確釋放 2 個物件大小 (single_sz * 2) 的空間
+  // 機制應繞過配額門檻，精準淘汰最冷端的 2 個物件
+  auto report_demand = dehydrator->TriggerDehydration(single_sz * 2);
+  assert(report_demand.dehydrated_count == 2);
+  assert(report_demand.freed_bytes == single_sz * 2);
+  assert(report_demand.has_more_candidates == true); // 仍有 2 個物件未脫水
+  assert(dehydrator->GetTrackedMemoryBytes() == single_sz * 2);
+
+  // 3. 再次請求精確釋放 2 個物件大小：此時應把剩下的 2 個物件全數脫水
+  auto report_demand2 = dehydrator->TriggerDehydration(single_sz * 2);
+  assert(report_demand2.dehydrated_count == 2);
+  assert(report_demand2.freed_bytes == single_sz * 2);
+  assert(report_demand2.has_more_candidates == false); // 已無候選物件！
+  assert(dehydrator->GetTrackedMemoryBytes() == 0);
+
+  // 4. 候選物件耗盡後的防呆驗證：已無物件可脫水，應立即回傳空且 has_more_candidates == false，不進行無效操作
+  auto report_exhausted = dehydrator->TriggerDehydration(single_sz);
+  assert(report_exhausted.dehydrated_count == 0);
+  assert(report_exhausted.freed_bytes == 0);
+  assert(report_exhausted.has_more_candidates == false);
+
+  std::cout << "  -> 需求目標驅動與報告欄位（freed_bytes, has_more_candidates）驗證成功！" << std::endl;
 }
 
 int main()
@@ -278,6 +334,7 @@ int main()
     test_in_flight_protection();
     test_background_thread_and_stop();
     test_failed_dehydration_requeue();
+    test_target_driven_dehydration_and_report();
 
     std::cout << "=== OuroLRUAutoDehydrator 所有測試全部通過！ ===" << std::endl;
     return 0;

@@ -952,9 +952,10 @@ public:
     }
   }
 
-  size_t TriggerDehydration() override
+  ork::DehydrationReport TriggerDehydration(size_t target_bytes_to_free = 0) override
   {
-    std::vector<ork::HandleID> to_dehydrate;
+    ork::DehydrationReport report;
+    std::vector<std::pair<ork::HandleID, size_t>> to_dehydrate;
     {
       std::lock_guard<std::recursive_mutex> lock(m_mutex);
       for (const auto &[id, sz] : m_tracked)
@@ -962,19 +963,23 @@ public:
         auto it = m_dehydrated_states.find(id);
         if (it != m_dehydrated_states.end() && !it->second)
         {
-          to_dehydrate.push_back(id);
+          to_dehydrate.push_back({id, sz});
         }
       }
     }
-    size_t count = 0;
-    for (ork::HandleID id : to_dehydrate)
+    for (const auto &[id, sz] : to_dehydrate)
     {
       if (ork::DehydrateByID(id))
       {
-        count++;
+        report.freed_bytes += sz;
+        report.dehydrated_count++;
+        if (target_bytes_to_free > 0 && report.freed_bytes >= target_bytes_to_free)
+        {
+          break;
+        }
       }
     }
-    return count;
+    return report;
   }
 };
 
@@ -1018,8 +1023,9 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
   // `parent` is currently held by active OuroPtr (root_count == 1) -> DehydrateByID safely skips it (returns false)
   // `managed_weapon_id` has root_count == 0 (no active OuroPtr) and strong_count == 1 (held by parent) -> Dehydrated successfully!
   size_t dehydrate_notify_before = mock_dehydrator->m_dehydrate_notify_count.load();
-  size_t dehydrated_count = mock_dehydrator->TriggerDehydration();
-  assert(dehydrated_count == 1);  // Only managed_weapon_id was dehydrated; parent was busy in-flight!
+  auto report = mock_dehydrator->TriggerDehydration();
+  assert(report.dehydrated_count == 1);  // Only managed_weapon_id was dehydrated; parent was busy in-flight!
+  assert(report.freed_bytes == sizeof(WeaponObject));
   assert(mock_dehydrator->m_dehydrate_notify_count.load() == dehydrate_notify_before + 1);
 
   // Verify tracked memory bytes decreased because managed weapon's memory is freed!
