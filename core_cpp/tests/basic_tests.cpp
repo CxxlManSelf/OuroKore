@@ -1,10 +1,12 @@
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #include "ourokore/c_api/core.h"
 #include "ourokore/component/Handles.hpp"
+#include "ourokore/component/OuroCore.hpp"  // IWYU pragma: keep
 #include "ourokore/component/OuroObject.hpp"
 
 static int g_deconstruct_count = 0;
@@ -768,6 +770,89 @@ int main()
     }
   }
   std::cout << "Test 15 Passed." << std::endl;
+
+  // ==========================================
+  // Test 16: OuroPtr 模板轉換移動賦值與同目標 Move 安全測試
+  // ==========================================
+  std::cout << "\nTest 16: OuroPtr 模板轉換移動賦值與同目標 Move 安全測試..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    auto get_root_count = [](HandleID id) {
+      uint32_t count = 0;
+      ork_get_root_edge_count(id, &count);
+      return count;
+    };
+
+    auto obj = ork::CreateObject<SimpleObject>();
+    HandleID target_id = obj.GetTargetID();
+
+    // 建立第二個指向同一物件的 OuroPtr
+    ork::OuroPtr<SimpleObject> ptr_same(target_id);
+
+    // 驗證物件目前有 2 條 Root Edge
+    assert(get_root_count(target_id) == 2);
+
+    // 宣告 OuroPtr<const SimpleObject>，並以模板轉換 move assignment 接管 ptr_same
+    ork::OuroPtr<const SimpleObject> const_ptr;
+    const_ptr = std::move(ptr_same);
+
+    assert(ptr_same.GetTargetID() == 0);          // 來源置空
+    assert(const_ptr.GetTargetID() == target_id);  // 目標接管
+    assert(get_root_count(target_id) == 2);
+
+    // 測試自我移動賦值安全（Self-move assignment）
+    const_ptr = std::move(const_ptr);
+    assert(const_ptr.GetTargetID() == target_id);
+    assert(get_root_count(target_id) == 2);
+
+    // 測試：以指向同一目標的 const_ptr 再次模板賦值給一個原本已持有該目標的指標
+    ork::OuroPtr<const SimpleObject> another_const_ptr(target_id);
+    assert(get_root_count(target_id) == 3);
+
+    another_const_ptr = std::move(obj); // 同目標轉換 move assignment
+    assert(obj.GetTargetID() == 0);
+    assert(another_const_ptr.GetTargetID() == target_id);
+    // 釋放舊邊、接管新邊，總 Root Edge 應由 3 條正確降為 2 條（絕無 Root Edge 洩漏！）
+    assert(get_root_count(target_id) == 2);
+  }
+  // 所有指標離開作用域後，物件正確解構
+  assert(g_deconstruct_count == 1);
+  std::cout << "Test 16 Passed." << std::endl;
+
+  // ==========================================
+  // Test 17: WeakHandle 併發 LockAndAcquire 與物件銷毀安全測試 (Anti-TOCTOU)
+  // ==========================================
+  std::cout << "\nTest 17: WeakHandle 併發 LockAndAcquire 與物件銷毀安全測試 (Anti-TOCTOU)..." << std::endl;
+  {
+    constexpr int ITERATIONS = 200;
+    for (int i = 0; i < ITERATIONS; ++i)
+    {
+      auto obj = ork::CreateObject<SimpleObject>();
+      obj->SetValue(42 + i);
+      ork::WeakHandle<SimpleObject> weak_handle(obj);
+
+      std::atomic<bool> start_flag{false};
+      std::thread worker([&]() {
+        while (!start_flag.load(std::memory_order_acquire))
+        {
+          std::this_thread::yield();
+        }
+        auto locked_ptr = weak_handle.LockAndAcquire();
+        if (locked_ptr)
+        {
+          // 若成功晉升鎖定，物件必定完好存活且值必定正確，絕無 UAF！
+          assert(locked_ptr->GetValue() == 42 + i);
+        }
+      });
+
+      start_flag.store(true, std::memory_order_release);
+      // 主執行緒立即釋放最後的強引用 (strong_count 歸零)
+      obj.Release();
+
+      worker.join();
+    }
+  }
+  std::cout << "Test 17 Passed." << std::endl;
 
   std::cout << "\n=== All Tests Passed Successfully! ===" << std::endl;
   return 0;

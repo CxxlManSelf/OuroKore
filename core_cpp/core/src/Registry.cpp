@@ -279,6 +279,36 @@ bool Registry::CheckAlive(HandleID target_id, bool perform_pruning)
   return alive;
 }
 
+bool Registry::TryLockWeak(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+
+  // Atomic Increment If Non-Zero (Lock-free CAS Loop)
+  uint32_t count = cb->m_strong_count.load(std::memory_order_relaxed);
+  while (count > 0)
+  {
+    if (cb->m_strong_count.compare_exchange_weak(count, count + 1,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_relaxed))
+    {
+      std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
+      cb->m_owners.push_back(ORK_ROOT_ID);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 bool Registry::LockObject(HandleID target_id)
 {
   ControlBlock *cb = nullptr;

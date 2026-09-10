@@ -1,6 +1,6 @@
 #pragma once
 
-#include "IAutoDehydrator.hpp"
+#include "ourokore/component/IAutoDehydrator.hpp"
 
 namespace ork
 {

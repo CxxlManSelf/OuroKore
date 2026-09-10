@@ -10,9 +10,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "IAutoDehydrator.hpp"
-#include "OuroCore.hpp"
 #include "ourokore/base/Semaphore.hpp"
+#include "ourokore/component/IAutoDehydrator.hpp"
+// 引入 OuroCore 核心（提供 ork::Dehydrate API）
+#include "ourokore/component/OuroCore.hpp"
 
 namespace ork
 {

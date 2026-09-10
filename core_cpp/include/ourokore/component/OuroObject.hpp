@@ -5,12 +5,11 @@
 #include <unordered_map>
 
 #include "OuroStream.hpp"
+#include "Types.hpp"
 #include "ourokore/c_api/component_api.h"
 
 namespace ork
 {
-
-using HandleID = uint64_t;
 
 // Forward declarations
 class OwningContainerHandle;
@@ -19,16 +18,6 @@ class OwningHandle;
 template <typename T>
 class OuroPtr;
 
-/**
- * @brief Storage lifecycle states for an OuroObject.
- */
-enum class StorageState : uint8_t
-{
-  UnsavedNew = 0,  ///< Freshly created object, never saved to storage.
-  Clean = 1,       ///< Saved in storage and memory payload is unmodified.
-  Dirty = 2,       ///< Saved in storage but memory payload has been modified.
-  Dehydrated = 3   ///< Saved in storage and payload memory freed (empty shell).
-};
 
 /**
  * @brief Base class for all managed objects in OuroKore.

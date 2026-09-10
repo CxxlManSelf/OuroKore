@@ -85,6 +85,15 @@ ORK_API int32_t ORK_CALL ork_unregister_weak(HandleID target_id);
  */
 ORK_API int32_t ORK_CALL ork_check_alive(HandleID target_id, int32_t* out_alive, int32_t perform_pruning);
 
+/**
+ * @brief Atomically attempts to lock a weak reference and register a root edge.
+ * Only succeeds if the target object is currently alive (strong_count > 0).
+ * If the object is already dead (strong_count == 0), returns ORK_STATUS_ERROR_OBJECT_DEAD.
+ * @param target_id The HandleID of the target object.
+ * @return ORK_STATUS_OK on success, ORK_STATUS_ERROR_OBJECT_DEAD if dead, or other error code.
+ */
+ORK_API int32_t ORK_CALL ork_try_lock_weak(HandleID target_id);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,14 +1,12 @@
 #pragma once
 
-#include <cstdint>
 #include <memory>
 
 #include "OuroStream.hpp"
+#include "Types.hpp"
 
 namespace ork
 {
-
-using HandleID = uint64_t;
 
 /**
  * @brief OuroKore 核心持久化儲存驅動抽象介面 (Stream-based Storage Driver SPI)

@@ -117,6 +117,14 @@ public:
     }
   }
 
+  struct PreLockedTag {};
+
+  // Construct from pre-locked root edge (e.g. from WeakHandle::LockAndAcquire atomic promotion)
+  explicit OuroPtr(HandleID target_id, PreLockedTag) noexcept :
+      m_target_id(target_id)
+  {
+  }
+
   ~OuroPtr()
   {
     Release();
@@ -156,12 +164,12 @@ public:
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
   OuroPtr &operator=(OuroPtr<U> &&other) noexcept
   {
-    if (this->m_target_id != other.m_target_id)
+    if (static_cast<const void *>(this) != static_cast<const void *>(&other))
     {
       Release();
       m_target_id = other.m_target_id;
+      other.m_target_id = 0;
     }
-    other.m_target_id = 0;
     return *this;
   }
 
@@ -239,6 +247,12 @@ public:
       m_slot_name(other.m_slot_name),
       m_owner_id(GetActiveOwnerHelper())
   {
+    OuroObject *active_obj = detail::GetActiveObject();
+    if (active_obj)
+    {
+      active_obj->RegisterHandle(this);
+    }
+
     for (HandleID tid : other.m_target_ids)
     {
       AddTarget(tid);
@@ -773,11 +787,25 @@ public:
   template <typename TargetT = T>
   OuroPtr<TargetT> LockAndAcquire() const
   {
-    if (!IsAlive())
+    HandleID tid = m_target_id.load(std::memory_order_relaxed);
+    if (tid == 0)
     {
       return OuroPtr<TargetT>();
     }
-    return OuroPtr<TargetT>(m_target_id.load(std::memory_order_relaxed));
+
+    if (ork_try_lock_weak(tid) == ORK_STATUS_OK)
+    {
+      return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
+    }
+
+    // Object is dead or not found:
+    // Atomically claim the right to prune this WeakHandle instance (CAS tid -> 0).
+    if (m_target_id.compare_exchange_strong(tid, 0, std::memory_order_relaxed))
+    {
+      int32_t alive = 0;
+      ork_check_alive(tid, &alive, 1);
+    }
+    return OuroPtr<TargetT>();
   }
 
   HandleID GetTargetID() const
@@ -807,10 +835,9 @@ HandleID CreateObjectInternal(Args &&...args)
 
   ActiveOwnerGuard guard(reserved_id);
 
-  // 記憶體配置與 OOM 緊急脫水自救重試機制
+  // 記憶體配置與 OOM 緊急脫水自救重試機制（以候選冷物件存亡為終止條件，防範並發搶奪）
   void *mem = nullptr;
-  constexpr int MAX_OOM_RETRIES = 2;
-  for (int attempt = 0; attempt <= MAX_OOM_RETRIES; ++attempt)
+  while (true)
   {
     try
     {
@@ -830,8 +857,8 @@ HandleID CreateObjectInternal(Args &&...args)
       size_t bytes_needed = sizeof(T);
       auto report = dehydrator->TriggerDehydration(bytes_needed);
 
-      // 若未釋放任何記憶體，或者釋放量未達標且已無更多可用候選者，立即 Fail-Fast 拋出例外，杜絕無效盲目重試
-      if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed) || attempt == MAX_OOM_RETRIES)
+      // 若未釋放任何記憶體，或者釋放量未達標且已無更多可用候選者，立即 Fail-Fast 拋出例外退出
+      if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed))
       {
         ork_unregister_object(reserved_id);
         throw;
@@ -875,11 +902,12 @@ template <typename T, typename... Args>
 OuroPtr<T> CreateObject(Args &&...args)
 {
   HandleID id = detail::CreateObjectInternal<T>(std::forward<Args>(args)...);
+  OuroPtr<T> ptr(id);
   if (auto dehydrator = GetAutoDehydrator())
   {
     dehydrator->Register(id, sizeof(T));
   }
-  return OuroPtr<T>(id);
+  return ptr;
 }
 
 /**
@@ -893,6 +921,4 @@ OuroPtr<T> CreatePermanentObject(Args &&...args)
 }
 
 }  // namespace ork
-
-#include "OuroCore.hpp"
 

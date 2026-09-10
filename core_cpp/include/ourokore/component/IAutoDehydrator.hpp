@@ -1,12 +1,11 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
+
+#include "Types.hpp"
 
 namespace ork
 {
-
-using HandleID = uint64_t;
 
 /**
  * @brief 脫水作業成效報告 (Dehydration Execution Report)

@@ -193,6 +193,26 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_try_lock_weak(HandleID target_id)
+  {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      if (ork::Registry::GetInstance().TryLockWeak(target_id))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_OBJECT_DEAD;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
   int32_t ORK_CALL ork_lock_object(HandleID target_id)
   {
     if (target_id == ORK_ROOT_ID)

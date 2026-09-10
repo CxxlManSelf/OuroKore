@@ -4,9 +4,9 @@
 #include <thread>
 
 #include "ourokore/component/Handles.hpp"
-#include "ourokore/component/InMemoryStorage.hpp"
 #include "ourokore/component/OuroCore.hpp"
-#include "ourokore/component/OuroLRUAutoDehydrator.hpp"
+#include "ourokore/component/builtin/InMemoryStorage.hpp"
+#include "ourokore/component/builtin/OuroLRUAutoDehydrator.hpp"
 
 using namespace ork;
 

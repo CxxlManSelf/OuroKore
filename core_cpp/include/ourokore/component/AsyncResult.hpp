@@ -1,15 +1,12 @@
 #pragma once
 
-#include <cstdint>
 #include <string>
+
+#include "Handles.hpp"
+#include "Types.hpp"
 
 namespace ork
 {
-
-using HandleID = uint64_t;
-
-template <typename T>
-class OuroPtr;
 
 /**
  * @brief 非同步操作通用回傳結果封裝

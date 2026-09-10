@@ -74,6 +74,14 @@ public:
   virtual size_t GetRemainingBytes() const = 0;
   virtual void ResetCursors() = 0;
 
+  // --- Transactional Stream Lifecycle ---
+  /**
+   * @brief 顯式提交寫入串流 (Commit Transaction)
+   * 預設空實作。寫入串流實作端應在 Commit 時將緩衝區寫入底層儲存；
+   * 若串流在未呼叫 Commit() 的情況下解構，應視為失敗並自動丟棄緩衝區（Rollback）。
+   */
+  virtual void Commit() {}
+
   // --- Key Alignment & Duplicate Guard ---
   virtual void CheckAndRegisterKey(std::string_view key) = 0;
   virtual void VerifyKey(std::string_view expected_key) = 0;

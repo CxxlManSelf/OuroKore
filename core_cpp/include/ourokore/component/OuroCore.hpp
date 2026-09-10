@@ -6,13 +6,13 @@
 #include <string>
 #include <vector>
 
-#include "AsyncResult.hpp"
-#include "Handles.hpp"
-#include "IAutoDehydrator.hpp"
-#include "IStorageDriver.hpp"
-#include "NoOpAutoDehydrator.hpp"
-#include "OuroObject.hpp"
-#include "OuroStream.hpp"
+#include "ourokore/component/AsyncResult.hpp"
+#include "ourokore/component/Handles.hpp"
+#include "ourokore/component/IAutoDehydrator.hpp"
+#include "ourokore/component/IStorageDriver.hpp"
+#include "ourokore/component/OuroObject.hpp"
+#include "ourokore/component/OuroStream.hpp"
+#include "ourokore/component/builtin/NoOpAutoDehydrator.hpp"
 #include "ourokore/base/ThreadPool.hpp"
 #include "ourokore/c_api/component_api.h"
 #include "ourokore/c_api/core.h"
@@ -281,6 +281,9 @@ bool Save(const OuroPtr<T> &ptr)
     PackBlueprint(*obj, *stream);
   }
 
+  // 顯式提交串流（若 PackBlueprint 拋出例外，stream 自動解構回滾丟棄，不執行 Commit）
+  stream->Commit();
+
   obj->SetStorageState(StorageState::Clean);
   return true;
 }
@@ -400,6 +403,7 @@ inline bool Dehydrate(HandleID id)
       return false;
     }
     PackBlueprint(*obj, *stream);
+    stream->Commit();
   }
 
   // 4. 標記為 Dehydrated 並釋放 Payload 肉體記憶體
@@ -493,6 +497,7 @@ inline bool Dehydrate(OuroPtr<T> &&ptr)
         return false;
       }
       PackBlueprint(*obj, *stream);
+      stream->Commit();
     }
 
     ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
@@ -565,10 +570,9 @@ inline void RehydratePayload(HandleID id)
   // 3. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
   ActiveOwnerGuard guard(id);
 
-  // 記憶體配置與 OOM 緊急脫水自救重試機制
+  // 記憶體配置與 OOM 緊急脫水自救重試機制（以候選冷物件存亡為終止條件，防範並發搶奪）
   void *mem = nullptr;
-  constexpr int MAX_OOM_RETRIES = 2;
-  for (int attempt = 0; attempt <= MAX_OOM_RETRIES; ++attempt)
+  while (true)
   {
     try
     {
@@ -586,7 +590,7 @@ inline void RehydratePayload(HandleID id)
       size_t bytes_needed = sizeof(T);
       auto report = dehydrator->TriggerDehydration(bytes_needed);
 
-      if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed) || attempt == MAX_OOM_RETRIES)
+      if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed))
       {
         throw;
       }

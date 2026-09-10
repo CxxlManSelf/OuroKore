@@ -5,8 +5,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "IStorageDriver.hpp"
-#include "OuroStream.hpp"
+#include "ourokore/component/IStorageDriver.hpp"
+#include "ourokore/component/OuroStream.hpp"
 
 namespace ork
 {
@@ -37,10 +37,11 @@ private:
 
     ~InMemoryWriteStream() override
     {
-      Commit();
+      // ⚠️ 事務原子性保證：解構時若未顯式 Commit()，表示中途拋出例外或被取消，
+      // 自動將緩衝區直接拋棄（Rollback），絕不覆蓋破壞儲存區中既有的完好存檔！
     }
 
-    void Commit()
+    void Commit() override
     {
       if (!m_committed)
       {

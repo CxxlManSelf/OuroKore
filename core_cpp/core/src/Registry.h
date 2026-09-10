@@ -68,6 +68,11 @@ public:
   bool CheckAlive(HandleID target_id, bool perform_pruning);
 
   /**
+   * @brief Atomically attempts to lock a weak reference by registering a root edge if strong_count > 0.
+   */
+  bool TryLockWeak(HandleID target_id);
+
+  /**
    * @brief Lock object's control block in exclusive mode.
    */
   bool LockObject(HandleID target_id);

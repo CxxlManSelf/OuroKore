@@ -7,9 +7,8 @@
 #include <vector>
 
 #include "ourokore/component/Handles.hpp"
-#include "ourokore/component/IStorageDriver.hpp"
-#include "ourokore/component/InMemoryStorage.hpp"
 #include "ourokore/component/OuroCore.hpp"
+#include "ourokore/component/builtin/InMemoryStorage.hpp"
 #include "ourokore/component/OuroObject.hpp"
 #include "ourokore/component/OuroStream.hpp"
 
@@ -1098,6 +1097,97 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
   std::cout.flush();
 }
 
+class FaultyObject : public ork::OuroObject
+{
+public:
+  bool should_throw = false;
+  int data = 100;
+
+  void SerializePayload(ork::OuroStream &stream) const override
+  {
+    stream.WriteProperty("data", data);
+    if (should_throw)
+    {
+      throw std::runtime_error("Simulated serialization failure mid-stream!");
+    }
+  }
+
+  void DeserializePayload(ork::OuroStream &stream) override
+  {
+    stream.ReadProperty("data", data);
+  }
+};
+
+void Test12_WriteStream_Commit_Rollback_On_Exception()
+{
+  std::cout << "[Test 12] WriteStream Commit/Rollback & Anti-Corruption on Exception..." << std::endl;
+  std::cout.flush();
+
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  assert(storage != nullptr);
+
+  // 1. 建立正常物件並成功存檔一次 (Initial good save with data = 100)
+  auto faulty_obj = ork::CreateObject<FaultyObject>();
+  faulty_obj->data = 100;
+  faulty_obj->should_throw = false;
+  ork::HandleID id = faulty_obj.GetTargetID();
+
+  bool save_ok = ork::Save(faulty_obj);
+  assert(save_ok == true);
+
+  // 驗證 Storage 內有完好存檔
+  auto read_stream = storage->OpenReadStream(id);
+  assert(read_stream != nullptr);
+  int read_val = 0;
+  read_stream->ReadProperty("data", read_val);
+  assert(read_val == 100);
+
+  // 2. 修改資料為 999，但設定中途拋出例外模擬寫入失敗
+  faulty_obj->data = 999;
+  faulty_obj->should_throw = true;
+  faulty_obj->MarkDirty();
+
+  bool caught_exception = false;
+  try
+  {
+    ork::Save(faulty_obj);
+  }
+  catch (const std::runtime_error &ex)
+  {
+    caught_exception = true;
+    assert(std::string(ex.what()).find("Simulated serialization failure") != std::string::npos);
+  }
+  assert(caught_exception == true);
+
+  // 3. 關鍵驗證：失敗的半殘資料【絕對不能覆蓋舊存檔】！
+  // 檢查 Storage 內的資料，依然完好無損且等於原本的 100
+  auto read_stream_after_fail = storage->OpenReadStream(id);
+  assert(read_stream_after_fail != nullptr);
+  int read_val_after_fail = 0;
+  read_stream_after_fail->ReadProperty("data", read_val_after_fail);
+  assert(read_val_after_fail == 100); // 舊存檔 100% 毫髮無損！
+
+  // 4. 驗證全新未存檔物件在中途失敗時，Storage 絕不殘留任何半殘垃圾
+  auto brand_new_faulty = ork::CreateObject<FaultyObject>();
+  brand_new_faulty->data = 555;
+  brand_new_faulty->should_throw = true;
+  ork::HandleID new_id = brand_new_faulty.GetTargetID();
+
+  try
+  {
+    ork::Save(brand_new_faulty);
+  }
+  catch (...)
+  {
+  }
+
+  // 驗證 Storage 裡完全沒有 new_id 的任何資料
+  auto empty_stream = storage->OpenReadStream(new_id);
+  assert(empty_stream == nullptr);
+
+  std::cout << "  -> 事務回滾驗證成功，例外發生時絕不損毀舊存檔亦不殘留垃圾！" << std::endl;
+}
+
 int main()
 {
   std::cout << "=== OuroKore Phase 3 Serialization & Dehydration/Rehydration Tests ===" << std::endl;
@@ -1122,6 +1212,7 @@ int main()
     Test9_InFlight_And_Concurrent_Dehydration_Protection();
     Test10_Concurrent_Rehydration_Thread_Safety();
     Test11_AutoDehydrator_Plugin_And_Core_Communication();
+    Test12_WriteStream_Commit_Rollback_On_Exception();
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();
