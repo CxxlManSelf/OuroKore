@@ -194,6 +194,36 @@ private:
   ork::OwningContainerHandle m_children{"children_slot"};
 };
 
+class ParentMoveConstructible : public ork::OuroObject
+{
+public:
+  ParentMoveConstructible() = default;
+  ParentMoveConstructible(ParentMoveConstructible &&other) noexcept :
+      m_child1(std::move(other.m_child1)),
+      m_container(std::move(other.m_container))
+  {
+  }
+
+  ork::OwningHandle<SimpleObject> m_child1{"child1_slot"};
+  ork::OwningContainerHandle m_container{"container_slot"};
+};
+
+class DerivedSimpleObject : public SimpleObject
+{
+public:
+  DerivedSimpleObject() = default;
+  int m_extra{123};
+};
+
+class ParentWithPolymorphicChild : public ork::OuroObject
+{
+public:
+  ParentWithPolymorphicChild() = default;
+
+  ork::OwningHandle<SimpleObject> m_base_handle{"base_slot"};
+  ork::OwningHandle<DerivedSimpleObject> m_derived_handle{"derived_slot"};
+};
+
 int main()
 {
   std::cout << "=== Running OuroKore Basic Tests ===" << std::endl;
@@ -853,6 +883,133 @@ int main()
     }
   }
   std::cout << "Test 17 Passed." << std::endl;
+
+  // ==========================================
+  // Test 18: 跨宿主 Move 建構子 (Move Constructor) 所有權轉移與邊緣註冊測試
+  // ==========================================
+  std::cout << "\nTest 18: 跨宿主 Move 建構子所有權轉移與邊緣註冊測試..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    HandleID child1_id = 0;
+    HandleID child2_id = 0;
+    HandleID parent1_id = 0;
+    HandleID parent2_id = 0;
+
+    {
+      ork::OuroPtr<ParentMoveConstructible> parent1 = ork::CreateObject<ParentMoveConstructible>();
+      parent1_id = parent1.GetTargetID();
+
+      {
+        ork::OuroPtr<SimpleObject> c1 = ork::CreateObject<SimpleObject>();
+        ork::OuroPtr<SimpleObject> c2 = ork::CreateObject<SimpleObject>();
+        child1_id = c1.GetTargetID();
+        child2_id = c2.GetTargetID();
+
+        parent1->m_child1 = c1;
+        parent1->m_container.AddTarget(child2_id);
+      }
+
+      assert(parent1->m_child1.GetOwnerID() == parent1_id);
+      assert(parent1->m_container.GetOwnerID() == parent1_id);
+      assert(parent1->m_child1.GetTargetID() == child1_id);
+      assert(parent1->m_container.GetTargetCount() == 1);
+      assert(g_deconstruct_count == 0);
+
+      // 執行跨宿主移動建構：建立全新 parent2，將 parent1 移動建構進 parent2
+      ork::OuroPtr<ParentMoveConstructible> parent2 =
+          ork::CreateObject<ParentMoveConstructible>(std::move(*parent1));
+      parent2_id = parent2.GetTargetID();
+
+      assert(parent2_id != parent1_id);
+
+      // 1. 驗證 parent2 的 Handle 其 Owner ID 已正確更新為 parent2_id（而非舊的 parent1_id）
+      assert(parent2->m_child1.GetOwnerID() == parent2_id);
+      assert(parent2->m_container.GetOwnerID() == parent2_id);
+
+      // 2. 驗證 Target ID 成功移交，來源被置零
+      assert(parent2->m_child1.GetTargetID() == child1_id);
+      assert(parent2->m_container.GetTargetCount() == 1);
+      assert(parent1->m_child1.GetTargetID() == 0);
+      assert(parent1->m_container.GetTargetCount() == 0);
+
+      // 3. 驗證 parent2 名下註冊名冊已包含 child1_slot 與 container_slot
+      const auto &roster = parent2->GetRegisteredHandles();
+      assert(roster.find("child1_slot") != roster.end());
+      assert(roster.find("container_slot") != roster.end());
+
+      // 4. parent1 析構釋放，因為子物件已移轉給 parent2，故子物件不應被銷毀
+      parent1.Release();
+      assert(g_deconstruct_count == 0);
+
+      int32_t alive1 = 0, alive2 = 0;
+      ork_check_alive(child1_id, &alive1, 0);
+      ork_check_alive(child2_id, &alive2, 0);
+      assert(alive1 == 1);
+      assert(alive2 == 1);
+
+      // 5. parent2 析構釋放，此時 child1 與 child2 失去唯一擁有者，應隨 parent2 同步銷毀
+      parent2.Release();
+      assert(g_deconstruct_count == 2);
+    }
+  }
+  assert(g_deconstruct_count == 2);
+  std::cout << "Test 18 Passed." << std::endl;
+
+  // ==========================================
+  // Test 19: OwningHandle 多型轉換移動建構與轉換移動賦值測試
+  // ==========================================
+  std::cout << "\nTest 19: OwningHandle 多型轉換移動建構與轉換移動賦值測試..." << std::endl;
+  g_deconstruct_count = 0;
+  {
+    HandleID derived_id = 0;
+    {
+      ork::OuroPtr<ParentWithPolymorphicChild> parent =
+          ork::CreateObject<ParentWithPolymorphicChild>();
+
+      {
+        ork::OuroPtr<DerivedSimpleObject> derived_obj =
+            ork::CreateObject<DerivedSimpleObject>();
+        derived_id = derived_obj.GetTargetID();
+        parent->m_derived_handle = derived_obj;
+      }
+
+      assert(parent->m_derived_handle.GetTargetID() == derived_id);
+      assert(parent->m_base_handle.GetTargetID() == 0);
+      assert(g_deconstruct_count == 0);
+
+      // 1. 同宿主多型轉換移動賦值：m_base_handle = std::move(m_derived_handle)
+      // 驗證來源 m_derived_handle 確實被清空置零（絕非退化為 Copy！），且 m_base_handle 順利接管
+      parent->m_base_handle = std::move(parent->m_derived_handle);
+      assert(parent->m_base_handle.GetTargetID() == derived_id);
+      assert(parent->m_derived_handle.GetTargetID() == 0);  // 關鍵：來源必須置零！
+      assert(g_deconstruct_count == 0);  // 過程中無析構
+
+      // 2. 跨宿主多型轉換移動賦值：parent2->m_base_handle = std::move(parent->m_base_handle)
+      {
+        ork::OuroPtr<ParentWithPolymorphicChild> parent2 =
+            ork::CreateObject<ParentWithPolymorphicChild>();
+        HandleID parent2_id = parent2.GetTargetID();
+
+        parent2->m_base_handle = std::move(parent->m_base_handle);
+        assert(parent2->m_base_handle.GetTargetID() == derived_id);
+        assert(parent2->m_base_handle.GetOwnerID() == parent2_id);
+        assert(parent->m_base_handle.GetTargetID() == 0);
+
+        // 3. 多型轉換移動建構子：OwningHandle<SimpleObject>(std::move(other_derived))
+        parent->m_derived_handle = ork::CreateObject<DerivedSimpleObject>();
+        HandleID another_derived_id = parent->m_derived_handle.GetTargetID();
+
+        // 透過多型轉換移動建構建立全新 handle
+        ork::OwningHandle<SimpleObject> moved_base_handle(std::move(parent->m_derived_handle));
+        assert(moved_base_handle.GetTargetID() == another_derived_id);
+        assert(parent->m_derived_handle.GetTargetID() == 0);  // 來源必須置零！
+      }
+      // parent2 及 moved_base_handle 出作用域，derived_id 與 another_derived_id 析構 (+2)
+      assert(g_deconstruct_count == 2);
+    }
+    // parent 本身析構 (+1)
+  }
+  std::cout << "Test 19 Passed." << std::endl;
 
   std::cout << "\n=== All Tests Passed Successfully! ===" << std::endl;
   return 0;

@@ -3,27 +3,23 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <memory>
-#include <new>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "IAutoDehydrator.hpp"
 #include "OuroObject.hpp"
 #include "ourokore/c_api/component_api.h"
 
 namespace ork
 {
 
-// Forward declaration
-class IAutoDehydrator;
-std::shared_ptr<IAutoDehydrator> GetAutoDehydrator();
-
 namespace detail
 {
+/// @brief 執行緒區域（Thread-Local）作用中物件堆疊。
+/// 在物件建構期間（由 OuroObject 基類建構子 Push），讓內部成員欄位（如 OwningHandle / OwningContainerHandle）
+/// 能自動取得當前正在建構的父物件指標並向其註冊（RegisterHandle），待物件本體建構完成後再行 Pop。
 inline thread_local std::vector<OuroObject *> g_active_object_stack;
 
 inline void PushActiveObject(OuroObject *obj)
@@ -59,8 +55,6 @@ template <typename T>
 class OwningHandle;
 template <typename T>
 class WeakHandle;
-template <typename T>
-::OuroObject *RehydrateCallback(HandleID id);
 
 /**
  * @brief RAII Guard for Thread-Local Active Owner context.
@@ -272,12 +266,37 @@ public:
     return *this;
   }
 
-  // Move semantics (Zero-Cost Reallocation for same-owner moves)
+  // Move semantics (Zero-Cost for same-owner moves, Edge-Transfer for cross-owner moves)
   OwningContainerHandle(OwningContainerHandle &&other) noexcept :
       m_slot_name(std::move(other.m_slot_name)),
-      m_owner_id(other.m_owner_id)
+      m_owner_id(DetermineMoveOwner(other.m_owner_id))
   {
-    m_target_ids = std::move(other.m_target_ids);
+    OuroObject *active_obj = detail::GetActiveObject();
+    if (active_obj && m_owner_id != other.m_owner_id)
+    {
+      active_obj->RegisterHandle(this);
+    }
+
+    if (m_owner_id == other.m_owner_id)
+    {
+      // Same-host move: Zero-Cost move without Registry edge overhead
+      m_target_ids = std::move(other.m_target_ids);
+    }
+    else
+    {
+      // Cross-host move: transfer edges from other.m_owner_id to this->m_owner_id
+      m_target_ids.reserve(other.m_target_ids.size());
+      for (HandleID tid : other.m_target_ids)
+      {
+        if (tid != 0)
+        {
+          CheckEnforceRules(tid);
+          ork_register_edge(m_owner_id, tid);
+          ork_unregister_edge(other.m_owner_id, tid);
+          m_target_ids.push_back(tid);
+        }
+      }
+    }
     other.m_target_ids.clear();
   }
 
@@ -422,6 +441,16 @@ protected:
     return owner;
   }
 
+  static HandleID DetermineMoveOwner(HandleID other_owner)
+  {
+    HandleID current_owner = GetActiveOwnerHelper();
+    if (current_owner != ORK_ROOT_ID && current_owner != 0 && current_owner != other_owner)
+    {
+      return current_owner;
+    }
+    return other_owner;
+  }
+
   std::string m_slot_name;
   const HandleID m_owner_id = 0;
   std::vector<HandleID> m_target_ids;
@@ -477,7 +506,15 @@ public:
     SetTarget(other.GetTargetID());
   }
 
-  // Converting Copy Constructor
+  // Converting Copy Constructor (inherits other's slot_name)
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle(const OwningHandle<U> &other) :
+      OwningContainerHandle(other.m_slot_name)
+  {
+    SetTarget(other.GetTargetID());
+  }
+
+  // Converting Copy Constructor with explicit slot_name
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
   OwningHandle(std::string slot_name, const OwningHandle<U> &other) :
       OwningContainerHandle(std::move(slot_name))
@@ -511,16 +548,78 @@ public:
     return *this;
   }
 
-  // Move Constructor (inherits same m_owner_id & slot_name)
+  // Move Constructor (Zero-Cost for same-owner, Edge-Transfer for cross-owner)
   OwningHandle(OwningHandle &&other) noexcept :
       OwningContainerHandle(std::move(other))
   {
   }
 
+  // Converting Move Constructor (Zero-Cost for same-owner, Edge-Transfer for cross-owner)
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle(OwningHandle<U> &&other) noexcept :
+      OwningContainerHandle(std::move(other))
+  {
+  }
+
+  // Converting Move Constructor with explicit slot_name
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle(std::string slot_name, OwningHandle<U> &&other) noexcept :
+      OwningContainerHandle(std::move(slot_name))
+  {
+    MoveAssignImpl(other);
+  }
+
   // Move Assignment (Strong Exception Guarantee: Step 1 Check -> Step 2 Register -> Step 3 Release)
   OwningHandle &operator=(OwningHandle &&other) noexcept
   {
-    if (this != &other)
+    MoveAssignImpl(other);
+    return *this;
+  }
+
+  // Converting Move Assignment from OwningHandle<U>
+  template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
+  OwningHandle &operator=(OwningHandle<U> &&other) noexcept
+  {
+    MoveAssignImpl(other);
+    return *this;
+  }
+
+  void SetTarget(HandleID target_id)
+  {
+    if (GetTargetID() == target_id) return;
+    Release();
+    if (target_id != 0)
+    {
+      AddTarget(target_id);
+    }
+  }
+
+  void Release()
+  {
+    ReleaseAll();
+  }
+
+  HandleID GetTargetID() const
+  {
+    return m_target_ids.empty() ? 0 : m_target_ids[0];
+  }
+
+  template <typename TargetT = T>
+  OuroPtr<TargetT> LockAndAcquire() const
+  {
+    HandleID tid = GetTargetID();
+    if (tid == 0)
+    {
+      return OuroPtr<TargetT>();
+    }
+    return OuroPtr<TargetT>(tid);
+  }
+
+private:
+  template <typename OtherHandleT>
+  void MoveAssignImpl(OtherHandleT &other) noexcept
+  {
+    if (static_cast<const void *>(this) != static_cast<const void *>(&other))
     {
       HandleID target_id = other.GetTargetID();
       HandleID old_target_id = GetTargetID();
@@ -557,41 +656,8 @@ public:
         }
       }
     }
-    return *this;
   }
 
-  void SetTarget(HandleID target_id)
-  {
-    if (GetTargetID() == target_id) return;
-    Release();
-    if (target_id != 0)
-    {
-      AddTarget(target_id);
-    }
-  }
-
-  void Release()
-  {
-    ReleaseAll();
-  }
-
-  HandleID GetTargetID() const
-  {
-    return m_target_ids.empty() ? 0 : m_target_ids[0];
-  }
-
-  template <typename TargetT = T>
-  OuroPtr<TargetT> LockAndAcquire() const
-  {
-    HandleID tid = GetTargetID();
-    if (tid == 0)
-    {
-      return OuroPtr<TargetT>();
-    }
-    return OuroPtr<TargetT>(tid);
-  }
-
-private:
   friend class OuroObject;
 
   void *operator new(size_t) = delete;
@@ -816,109 +882,6 @@ public:
 private:
   mutable std::atomic<HandleID> m_target_id{0};
 };
-
-namespace detail
-{
-template <typename T, typename... Args>
-HandleID CreateObjectInternal(Args &&...args)
-{
-  static_assert(std::is_base_of_v<OuroObject, T>, "T must inherit from OuroObject");
-  static_assert(
-      std::is_convertible_v<T *, OuroObject *>, "T* must be convertible to OuroObject* (Diamond Inheritance forbidden)"
-  );
-
-  HandleID reserved_id = 0;
-  if (ork_reserve_object_id(&reserved_id) != ORK_STATUS_OK)
-  {
-    throw std::runtime_error("OuroKore Error: Failed to reserve HandleID from Registry.");
-  }
-
-  ActiveOwnerGuard guard(reserved_id);
-
-  // 記憶體配置與 OOM 緊急脫水自救重試機制（以候選冷物件存亡為終止條件，防範並發搶奪）
-  void *mem = nullptr;
-  while (true)
-  {
-    try
-    {
-      mem = ::operator new(sizeof(T));
-      break;
-    }
-    catch (const std::bad_alloc &)
-    {
-      // 捕捉到 OOM，向脫水模組提出精確的目標需求以釋放實體記憶體
-      auto dehydrator = GetAutoDehydrator();
-      if (!dehydrator)
-      {
-        ork_unregister_object(reserved_id);
-        throw;
-      }
-
-      size_t bytes_needed = sizeof(T);
-      auto report = dehydrator->TriggerDehydration(bytes_needed);
-
-      // 若未釋放任何記憶體，或者釋放量未達標且已無更多可用候選者，立即 Fail-Fast 拋出例外退出
-      if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed))
-      {
-        ork_unregister_object(reserved_id);
-        throw;
-      }
-    }
-  }
-
-  T *obj = nullptr;
-  try
-  {
-    obj = ::new (mem) T(std::forward<Args>(args)...);
-    detail::PopActiveObject();
-  }
-  catch (...)
-  {
-    detail::PopActiveObject();
-    ::operator delete(mem);
-    ork_unregister_object(reserved_id);
-    throw;
-  }
-
-  if (ork_bind_object_payload(reserved_id, reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(obj))) !=
-      ORK_STATUS_OK)
-  {
-    delete obj;
-    ork_unregister_object(reserved_id);
-    throw std::runtime_error("OuroKore Error: Failed to bind payload to reserved HandleID.");
-  }
-
-  // Register type-specific auto-rehydration callback
-  ork_set_rehydrate_fn(reserved_id, &RehydrateCallback<T>);
-
-  return reserved_id;
-}
-}  // namespace detail
-
-/**
- * @brief 建立受管物件（預設自動通報脫水外掛模組進行追蹤與大小登記）
- */
-template <typename T, typename... Args>
-OuroPtr<T> CreateObject(Args &&...args)
-{
-  HandleID id = detail::CreateObjectInternal<T>(std::forward<Args>(args)...);
-  OuroPtr<T> ptr(id);
-  if (auto dehydrator = GetAutoDehydrator())
-  {
-    dehydrator->Register(id, sizeof(T));
-  }
-  return ptr;
-}
-
-/**
- * @brief 建立永久常駐物件（完全不通報脫水模組，生生世世常駐於記憶體）
- */
-template <typename T, typename... Args>
-OuroPtr<T> CreatePermanentObject(Args &&...args)
-{
-  HandleID id = detail::CreateObjectInternal<T>(std::forward<Args>(args)...);
-  return OuroPtr<T>(id);
-}
 
 }  // namespace ork
 

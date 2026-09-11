@@ -46,6 +46,18 @@ public:
   void DeserializePayload(OuroStream &) override {}
 };
 
+class AsyncDerivedEntity : public AsyncTestEntity
+{
+public:
+  AsyncDerivedEntity() = default;
+  AsyncDerivedEntity(int id_val, std::string tag, double extra) :
+      AsyncTestEntity(id_val, std::move(tag)),
+      m_extra(extra)
+  {
+  }
+  double m_extra{3.14};
+};
+
 void test_single_async_save_load()
 {
   std::cout << "[測試 1] 單一物件非同步 SaveAsync 與 LoadAsync 測試..." << std::endl;
@@ -212,6 +224,52 @@ void test_async_destruction_and_flush()
   std::cout << "  -> 非同步物件清理與 FlushStorage 運作正常！" << std::endl;
 }
 
+void test_async_result_converting_move()
+{
+  std::cout << "[測試 6] AsyncResult 多型轉換移動與 Move-Only 語意測試..." << std::endl;
+
+  // 靜態驗證 Move-Only 特性
+  static_assert(!std::is_copy_constructible_v<AsyncResult<AsyncDerivedEntity>>, "AsyncResult must be move-only");
+  static_assert(!std::is_copy_assignable_v<AsyncResult<AsyncDerivedEntity>>, "AsyncResult must be move-only");
+  static_assert(std::is_move_constructible_v<AsyncResult<AsyncDerivedEntity>>, "AsyncResult must be movable");
+  static_assert(std::is_move_assignable_v<AsyncResult<AsyncDerivedEntity>>, "AsyncResult must be movable");
+
+  auto derived_ptr = CreateObject<AsyncDerivedEntity>(123, "DerivedAsync", 99.9);
+  HandleID id = derived_ptr.GetTargetID();
+
+  auto fut = SaveAsync(derived_ptr);
+  AsyncResult<AsyncDerivedEntity> derived_res = fut.get();
+
+  assert(derived_res);
+  assert(derived_res.id == id);
+  assert(derived_res.ptr->m_extra == 99.9);
+
+  // 1. 測試 AsyncResult<Derived> -> AsyncResult<Base> 轉換移動建構
+  AsyncResult<AsyncTestEntity> base_res(std::move(derived_res));
+  assert(base_res);
+  assert(base_res.id == id);
+  assert(base_res.ptr.GetTargetID() == id);
+  assert(derived_res.ptr.GetTargetID() == 0);  // 來源 ptr 已被移出清空
+
+  // 2. 測試 AsyncResult<Derived> -> AsyncResult<Base> 轉換移動賦值
+  auto derived_ptr2 = CreateObject<AsyncDerivedEntity>(456, "DerivedAsync2", 88.8);
+  HandleID id2 = derived_ptr2.GetTargetID();
+  auto fut2 = SaveAsync(derived_ptr2);
+  AsyncResult<AsyncDerivedEntity> derived_res2 = fut2.get();
+
+  base_res = std::move(derived_res2);
+  assert(base_res);
+  assert(base_res.id == id2);
+  assert(derived_res2.ptr.GetTargetID() == 0);
+
+  // 3. 測試 AsyncResult<Base> -> AsyncResult<void> 型別抹除轉換
+  AsyncResult<void> void_res(std::move(base_res));
+  assert(void_res);
+  assert(void_res.id == id2);
+
+  std::cout << "  -> AsyncResult 多型轉換移動與 Move-Only 驗證通過！" << std::endl;
+}
+
 int main()
 {
   try
@@ -226,6 +284,7 @@ int main()
     test_failure_handling();
     test_parallel_batch_operations();
     test_async_destruction_and_flush();
+    test_async_result_converting_move();
 
     ork::Shutdown();
 
