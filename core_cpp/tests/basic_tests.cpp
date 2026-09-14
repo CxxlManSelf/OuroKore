@@ -4,10 +4,8 @@
 #include <thread>
 #include <vector>
 
+#include "ourokore/component/OuroCore.hpp"
 #include "ourokore/c_api/core.h"
-#include "ourokore/component/Handles.hpp"
-#include "ourokore/component/OuroCore.hpp"  // IWYU pragma: keep
-#include "ourokore/component/OuroObject.hpp"
 
 static int g_deconstruct_count = 0;
 
@@ -227,6 +225,7 @@ public:
 int main()
 {
   std::cout << "=== Running OuroKore Basic Tests ===" << std::endl;
+  ork::SetDeferredDeleteMode(true);
 
   // ==========================================
   // Test 1: Object Creation and Lifecycle

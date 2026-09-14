@@ -20,3 +20,6 @@ target_link_libraries(ouro_lru_dehydrator_tests ourokore_core ourokore_base)
 add_executable(core_async_tests core_async_tests.cpp)
 target_link_libraries(core_async_tests ourokore_core ourokore_base)
 
+add_executable(cycle_collector_tests cycle_collector_tests.cpp)
+target_link_libraries(cycle_collector_tests ourokore_core ourokore_base)
+

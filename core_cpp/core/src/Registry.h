@@ -49,8 +49,19 @@ public:
 
   /**
    * @brief Unregisters an ownership edge.
+   * @param silent If true, do not enqueue to suspect queue (used during cycle island destruction).
    */
-  bool UnregisterEdge(HandleID owner_id, HandleID target_id);
+  bool UnregisterEdge(HandleID owner_id, HandleID target_id, bool silent = false);
+
+  /**
+   * @brief Directly acquire a ControlBlock pointer (Registry shared-lock must be held or thread-safe access).
+   */
+  ControlBlock *GetControlBlock(HandleID target_id) const;
+
+  /**
+   * @brief Checks and performs cleanup of ControlBlock if both strong and weak counts are 0.
+   */
+  bool DestroyControlBlockIfDead(HandleID target_id);
 
   /**
    * @brief Registers a weak reference to target_id.

@@ -36,6 +36,12 @@ struct ControlBlock
   std::vector<HandleID> m_owners;
   std::mutex m_owners_mutex;
 
+  // 循環參照嫌疑犯佇列防重複入隊原子旗標 (CAS Guard)
+  std::atomic<bool> m_in_suspect_queue{false};
+
+  // 孤島拆解中旗標（防止併發加邊與殭屍復活）
+  std::atomic<bool> m_is_destructing{false};
+
   explicit ControlBlock(OuroObject *payload) : m_payload(payload) {}
 
   ~ControlBlock()

@@ -1120,4 +1120,28 @@ inline std::vector<AsyncResult<void>> DehydrateBatch(const std::vector<HandleID>
   return results;
 }
 
+/**
+ * @brief 觸發同步執行一輪循環參照收集判定
+ */
+inline void CollectCycles()
+{
+  ork_collect_cycles();
+}
+
+/**
+ * @brief 同步排空並等待目前背景佇列中的所有延遲銷毀任務完成
+ */
+inline void FlushDeferredDeletions()
+{
+  ork_flush_deferred_deletions();
+}
+
+/**
+ * @brief 設定延遲銷毀模式（sync: 同步即時執行；async: 背景執行緒池）
+ */
+inline void SetDeferredDeleteMode(bool sync)
+{
+  ork_set_deferred_delete_mode(sync ? ORK_DEFERRED_DELETE_SYNC : ORK_DEFERRED_DELETE_ASYNC);
+}
+
 }  // namespace ork

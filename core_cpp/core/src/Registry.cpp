@@ -2,6 +2,9 @@
 
 #include <algorithm>
 
+#include "ControlBlock.h"
+#include "CycleCollector.h"
+#include "DeferredDeleteQueue.h"
 #include "ourokore/c_api/core.h"
 #include "ourokore/component/OuroObject.hpp"
 
@@ -122,8 +125,19 @@ bool Registry::RegisterEdge(HandleID owner_id, HandleID target_id)
     cb = it->second;
   }
 
+  // 孤島拆解中防線：若目標物件處於拆解態，拒絕加邊
+  if (cb->m_is_destructing.load(std::memory_order_acquire))
+  {
+    return false;
+  }
+
   {
     std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
+    // 再次在名冊鎖保護下確認拆解狀態
+    if (cb->m_is_destructing.load(std::memory_order_acquire))
+    {
+      return false;
+    }
     cb->m_owners.push_back(owner_id);
   }
 
@@ -131,7 +145,7 @@ bool Registry::RegisterEdge(HandleID owner_id, HandleID target_id)
   return true;
 }
 
-bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id)
+bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id, bool silent)
 {
   ControlBlock *cb = nullptr;
   {
@@ -145,48 +159,77 @@ bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id)
   }
 
   // 1. Remove the edge from owner list
+  bool edge_found = false;
   {
     std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
     auto it = std::find(cb->m_owners.begin(), cb->m_owners.end(), owner_id);
     if (it != cb->m_owners.end())
     {
       cb->m_owners.erase(it);
+      edge_found = true;
     }
+  }
+
+  if (!edge_found)
+  {
+    return false;
   }
 
   // 2. Decrement strong reference count
   uint32_t prev_strong = cb->m_strong_count.fetch_sub(1);
   if (prev_strong == 1)
   {
-    // Strong count transitioned to 0: free payload
-    std::unique_lock<std::shared_mutex> payload_lock(cb->m_rw_lock);
-    if (cb->m_payload)
+    // Strong count transitioned to 0: 移交 DeferredDeleteQueue 背景多執行緒平行銷毀
+    // 徹底消滅遞迴解構造成的呼叫堆疊溢位 (Stack Overflow)
+    DeferredDeleteQueue::GetInstance().Push(target_id);
+  }
+  else if (prev_strong > 1 && !silent)
+  {
+    // 扣減後 StrongCount 仍大於 0：可能構成自娛自樂的閉環孤島
+    // 透過原子 CAS 去重旗標，成功搶入者推入 CycleCollector 嫌疑犯佇列
+    bool expected = false;
+    if (cb->m_in_suspect_queue.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
     {
-      delete cb->m_payload;
-      cb->m_payload = nullptr;
+      CycleCollector::GetInstance().PushSuspect(target_id);
     }
   }
 
-  // 3. Clean up the ControlBlock if completely dead (strong == 0 && weak == 0)
-  if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
-  {
-    std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
-    // Double-check under exclusive registry lock
-    if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
-    {
-      auto it = m_object_map.find(target_id);
-      if (it != m_object_map.end())
-      {
-        m_object_map.erase(it);
-        delete cb;
-        if (m_object_destroyed_cb)
-        {
-          m_object_destroyed_cb(target_id);
-        }
-      }
-    }
-  }
   return true;
+}
+
+ControlBlock *Registry::GetControlBlock(HandleID target_id) const
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    return it->second;
+  }
+  return nullptr;
+}
+
+bool Registry::DestroyControlBlockIfDead(HandleID target_id)
+{
+  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
+  {
+    return false;
+  }
+
+  ControlBlock *cb = it->second;
+  if (cb->m_strong_count.load(std::memory_order_acquire) == 0 &&
+      cb->m_weak_count.load(std::memory_order_acquire) == 0)
+  {
+    m_object_map.erase(it);
+    delete cb;
+    if (m_object_destroyed_cb)
+    {
+      m_object_destroyed_cb(target_id);
+    }
+    return true;
+  }
+  return false;
 }
 
 bool Registry::RegisterWeak(HandleID target_id)

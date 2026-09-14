@@ -2,6 +2,8 @@
 
 #include "ourokore/c_api/component_api.h"
 
+#include "CycleCollector.h"
+#include "DeferredDeleteQueue.h"
 #include "Registry.h"
 
 namespace
@@ -103,6 +105,16 @@ extern "C"
     }
     try
     {
+      auto *cb = ork::Registry::GetInstance().GetControlBlock(target_id);
+      if (!cb)
+      {
+        return ORK_STATUS_ERROR_NOT_FOUND;
+      }
+      if (cb->m_is_destructing.load(std::memory_order_acquire))
+      {
+        return ORK_STATUS_ERROR_DESTRUCTING;
+      }
+
       if (ork::Registry::GetInstance().RegisterEdge(owner_id, target_id))
       {
         return ORK_STATUS_OK;
@@ -435,6 +447,45 @@ extern "C"
   {
     ork::Registry::GetInstance().SetObjectDestroyedCallback(fn);
     return ORK_STATUS_OK;
+  }
+
+  int32_t ORK_CALL ork_collect_cycles(void)
+  {
+    try
+    {
+      ork::CycleCollector::GetInstance().CollectCyclesExplicit();
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_flush_deferred_deletions(void)
+  {
+    try
+    {
+      ork::DeferredDeleteQueue::GetInstance().Flush();
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_set_deferred_delete_mode(int32_t mode)
+  {
+    try
+    {
+      ork::DeferredDeleteQueue::GetInstance().SetSyncMode(mode == ORK_DEFERRED_DELETE_SYNC);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
   }
 
 }  // extern "C"

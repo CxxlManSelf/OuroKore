@@ -19,6 +19,7 @@
 #define ORK_STATUS_ERROR_ALREADY_EXISTS -3
 #define ORK_STATUS_ERROR_EXCEPTION -4
 #define ORK_STATUS_ERROR_OBJECT_DEAD -5
+#define ORK_STATUS_ERROR_DESTRUCTING -6
 
 typedef uint64_t HandleID;
 
@@ -93,6 +94,30 @@ ORK_API int32_t ORK_CALL ork_check_alive(HandleID target_id, int32_t* out_alive,
  * @return ORK_STATUS_OK on success, ORK_STATUS_ERROR_OBJECT_DEAD if dead, or other error code.
  */
 ORK_API int32_t ORK_CALL ork_try_lock_weak(HandleID target_id);
+
+/**
+ * @brief Explicitly trigger one pass of cycle collection (synchronous).
+ * Inspects all pending suspects in the queue and breaks unreferenced cyclic islands.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_collect_cycles(void);
+
+/**
+ * @brief Explicitly flush and wait for all pending deferred deletions in the pool to complete.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_flush_deferred_deletions(void);
+
+// Deferred deletion execution modes
+#define ORK_DEFERRED_DELETE_ASYNC 0  // Default: Background thread-pool
+#define ORK_DEFERRED_DELETE_SYNC  1  // Synchronous: Immediate execution (e.g. for unit tests)
+
+/**
+ * @brief Configure deferred deletion execution mode (0: async background pool, 1: immediate synchronous).
+ * @param mode The deletion mode to set.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_set_deferred_delete_mode(int32_t mode);
 
 #ifdef __cplusplus
 }
