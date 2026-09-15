@@ -101,13 +101,13 @@ bool Registry::UnregisterObject(HandleID id)
   if (it != m_object_map.end())
   {
     ControlBlock *cb = it->second;
-    m_object_map.erase(it);
-    delete cb;
-    if (m_object_destroyed_cb)
+    // 取消預留 (Rollback Reservation)：若已有 payload 實體先行釋放
+    if (cb->m_payload)
     {
-      m_object_destroyed_cb(id);
+      delete cb->m_payload;
+      cb->m_payload = nullptr;
     }
-    return true;
+    return TryDestroyControlBlockLocked(id, cb);
   }
   return false;
 }
@@ -208,6 +208,37 @@ ControlBlock *Registry::GetControlBlock(HandleID target_id) const
   return nullptr;
 }
 
+bool Registry::TryDestroyControlBlockLocked(HandleID id, ControlBlock *cb)
+{
+  if (!cb)
+  {
+    return false;
+  }
+
+  // 核心銷毀天條：
+  // 1. 強引用歸零 (m_strong_count == 0)
+  // 2. 弱引用歸零 (m_weak_count == 0)
+  // 3. 肉體實體已被物理銷毀置空 (m_payload == nullptr)
+  // 此三者同時滿足，方可安全將 ControlBlock 抹除並 delete，防止與 DeferredDeleteQueue 搶跑引發 UAF
+  if (cb->m_strong_count.load(std::memory_order_acquire) == 0 &&
+      cb->m_weak_count.load(std::memory_order_acquire) == 0 &&
+      cb->m_payload == nullptr)
+  {
+    auto it = m_object_map.find(id);
+    if (it != m_object_map.end() && it->second == cb)
+    {
+      m_object_map.erase(it);
+      delete cb;
+      if (m_object_destroyed_cb)
+      {
+        m_object_destroyed_cb(id);
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 bool Registry::DestroyControlBlockIfDead(HandleID target_id)
 {
   std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
@@ -216,20 +247,7 @@ bool Registry::DestroyControlBlockIfDead(HandleID target_id)
   {
     return false;
   }
-
-  ControlBlock *cb = it->second;
-  if (cb->m_strong_count.load(std::memory_order_acquire) == 0 &&
-      cb->m_weak_count.load(std::memory_order_acquire) == 0)
-  {
-    m_object_map.erase(it);
-    delete cb;
-    if (m_object_destroyed_cb)
-    {
-      m_object_destroyed_cb(target_id);
-    }
-    return true;
-  }
-  return false;
+  return TryDestroyControlBlockLocked(target_id, it->second);
 }
 
 bool Registry::RegisterWeak(HandleID target_id)
@@ -268,24 +286,13 @@ bool Registry::UnregisterWeak(HandleID target_id)
     cb = it->second;
   }
 
-  cb->m_weak_count.fetch_sub(1);
+  uint32_t prev_weak = cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
 
-  if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+  // 僅當弱計數剛好歸零，且強計數亦為零時，嘗試獲取寫鎖收割 ControlBlock
+  if (prev_weak == 1 && cb->m_strong_count.load(std::memory_order_acquire) == 0)
   {
     std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
-    if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
-    {
-      auto it = m_object_map.find(target_id);
-      if (it != m_object_map.end())
-      {
-        m_object_map.erase(it);
-        delete cb;
-        if (m_object_destroyed_cb)
-        {
-          m_object_destroyed_cb(target_id);
-        }
-      }
-    }
+    TryDestroyControlBlockLocked(target_id, cb);
   }
   return true;
 }
@@ -307,23 +314,11 @@ bool Registry::CheckAlive(HandleID target_id, bool perform_pruning)
   bool alive = (cb->m_strong_count.load(std::memory_order_acquire) > 0) && !is_destructing;
   if (!alive && perform_pruning)
   {
-    cb->m_weak_count.fetch_sub(1);
-    if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
+    uint32_t prev_weak = cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
+    if (prev_weak == 1 && cb->m_strong_count.load(std::memory_order_acquire) == 0)
     {
       std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
-      if (cb->m_strong_count == 0 && cb->m_weak_count == 0)
-      {
-        auto it = m_object_map.find(target_id);
-        if (it != m_object_map.end())
-        {
-          m_object_map.erase(it);
-          delete cb;
-          if (m_object_destroyed_cb)
-          {
-            m_object_destroyed_cb(target_id);
-          }
-        }
-      }
+      TryDestroyControlBlockLocked(target_id, cb);
     }
   }
   return alive;
@@ -366,8 +361,14 @@ bool Registry::TryLockWeak(HandleID target_id)
       // 在名冊鎖保護下進行二次確認
       if (cb->m_is_destructing.load(std::memory_order_acquire))
       {
-        // 遭遇併發拆解搶跑，回滾強計數並宣告晉升失敗
-        cb->m_strong_count.fetch_sub(1, std::memory_order_release);
+        // 遭遇併發拆解搶跑，回滾強計數
+        uint32_t prev = cb->m_strong_count.fetch_sub(1, std::memory_order_acq_rel);
+        if (prev == 1)
+        {
+          // 關鍵防禦：若併發的 UnregisterEdge 因我們先前的 CAS +1 而誤判未歸零且未入隊，
+          // 此處回滾後 StrongCount 剛好歸零，必須由本執行緒補交 DeferredDeleteQueue 銷毀，徹底杜絕記憶體洩漏！
+          DeferredDeleteQueue::GetInstance().Push(target_id);
+        }
         return false;
       }
       cb->m_owners.push_back(ORK_ROOT_ID);

@@ -132,6 +132,15 @@ private:
 
   HandleID GenerateUniqueID();
 
+  /**
+   * @brief 在持有 m_registry_mutex 獨佔寫入鎖的前提下，嚴格判定並銷毀 ControlBlock。
+   * 銷毀天條：
+   * 1. m_strong_count == 0
+   * 2. m_weak_count == 0
+   * 3. m_payload == nullptr（保證肉體已銷毀，防止搶跑 UAF）
+   */
+  bool TryDestroyControlBlockLocked(HandleID id, ControlBlock *cb);
+
   // Map protecting the registry structure
   mutable std::shared_mutex m_registry_mutex;
   std::unordered_map<HandleID, ControlBlock *> m_object_map;
