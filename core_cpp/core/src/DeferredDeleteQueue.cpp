@@ -58,14 +58,16 @@ void DeferredDeleteQueue::Push(HandleID id)
     return;
   }
 
+  // 無論後續是就地同步執行或非同步排隊，統一在此遞增任務計數，
+  // 確保與 ProcessItem 結尾的 fetch_sub(1) 嚴格成對，防止同步模式下溢 (Underflow)
+  m_pending_tasks.fetch_add(1, std::memory_order_relaxed);
+
   if (m_sync_mode.load(std::memory_order_acquire))
   {
     // 同步模式：直接就地執行銷毀
     ProcessItem(id);
     return;
   }
-
-  m_pending_tasks.fetch_add(1, std::memory_order_relaxed);
 
   if (m_thread_pool && m_running.load(std::memory_order_acquire))
   {

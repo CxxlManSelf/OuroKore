@@ -245,6 +245,12 @@ bool Registry::RegisterWeak(HandleID target_id)
     cb = it->second;
   }
 
+  // 若目標物件已被判定為循環孤島或正處於拆解態，禁止新增弱引用
+  if (cb->m_is_destructing.load(std::memory_order_acquire))
+  {
+    return false;
+  }
+
   cb->m_weak_count.fetch_add(1);
   return true;
 }
@@ -297,7 +303,8 @@ bool Registry::CheckAlive(HandleID target_id, bool perform_pruning)
     cb = it->second;
   }
 
-  bool alive = (cb->m_strong_count > 0);
+  bool is_destructing = cb->m_is_destructing.load(std::memory_order_acquire);
+  bool alive = (cb->m_strong_count.load(std::memory_order_acquire) > 0) && !is_destructing;
   if (!alive && perform_pruning)
   {
     cb->m_weak_count.fetch_sub(1);
@@ -335,15 +342,34 @@ bool Registry::TryLockWeak(HandleID target_id)
     cb = it->second;
   }
 
-  // Atomic Increment If Non-Zero (Lock-free CAS Loop)
+  // 1. 若物件已被標記為正在拆解中，嚴禁弱引用晉升（防止死者甦醒與 UAF）
+  if (cb->m_is_destructing.load(std::memory_order_acquire))
+  {
+    return false;
+  }
+
+  // 2. Atomic Increment If Non-Zero (Lock-free CAS Loop)
   uint32_t count = cb->m_strong_count.load(std::memory_order_relaxed);
   while (count > 0)
   {
+    // CAS 過程中若偵測到拆解旗標，立即退出
+    if (cb->m_is_destructing.load(std::memory_order_acquire))
+    {
+      return false;
+    }
+
     if (cb->m_strong_count.compare_exchange_weak(count, count + 1,
                                                  std::memory_order_acq_rel,
                                                  std::memory_order_relaxed))
     {
       std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
+      // 在名冊鎖保護下進行二次確認
+      if (cb->m_is_destructing.load(std::memory_order_acquire))
+      {
+        // 遭遇併發拆解搶跑，回滾強計數並宣告晉升失敗
+        cb->m_strong_count.fetch_sub(1, std::memory_order_release);
+        return false;
+      }
       cb->m_owners.push_back(ORK_ROOT_ID);
       return true;
     }
