@@ -252,90 +252,85 @@ bool Registry::DestroyControlBlockIfDead(HandleID target_id)
 
 bool Registry::RegisterWeak(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
   }
+  ControlBlock *cb = it->second;
 
-  // 若目標物件已被判定為循環孤島或正處於拆解態，禁止新增弱引用
+  // 在讀鎖保護下檢查拆解態並遞增弱引用，防止 cb 逃逸被並發刪除
   if (cb->m_is_destructing.load(std::memory_order_acquire))
   {
     return false;
   }
 
-  cb->m_weak_count.fetch_add(1);
+  cb->m_weak_count.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 
 bool Registry::UnregisterWeak(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  // 持有獨佔寫鎖進行扣減與銷毀收割，保證 cb 存取期間絕對無任何線程並發 delete
+  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
   }
+  ControlBlock *cb = it->second;
 
-  uint32_t prev_weak = cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
-
-  // 僅當弱計數剛好歸零，且強計數亦為零時，嘗試獲取寫鎖收割 ControlBlock
-  if (prev_weak == 1 && cb->m_strong_count.load(std::memory_order_acquire) == 0)
-  {
-    std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
-    TryDestroyControlBlockLocked(target_id, cb);
-  }
+  cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
+  TryDestroyControlBlockLocked(target_id, cb);
   return true;
 }
 
 bool Registry::CheckAlive(HandleID target_id, bool perform_pruning)
 {
-  ControlBlock *cb = nullptr;
+  if (!perform_pruning)
   {
+    // 唯讀查詢路徑：持有 shared_lock 保證 cb 絕對不被銷毀，並發零阻塞
     std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
     auto it = m_object_map.find(target_id);
     if (it == m_object_map.end())
     {
       return false;
     }
-    cb = it->second;
+    ControlBlock *cb = it->second;
+    bool is_destructing = cb->m_is_destructing.load(std::memory_order_acquire);
+    return (cb->m_strong_count.load(std::memory_order_acquire) > 0) && !is_destructing;
   }
+
+  // 剪枝修剪路徑：持有 unique_lock，安全扣減並收割 ControlBlock，徹底杜絕鎖外逃逸與 UAF
+  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
+  {
+    return false;
+  }
+  ControlBlock *cb = it->second;
 
   bool is_destructing = cb->m_is_destructing.load(std::memory_order_acquire);
   bool alive = (cb->m_strong_count.load(std::memory_order_acquire) > 0) && !is_destructing;
-  if (!alive && perform_pruning)
+  if (!alive)
   {
-    uint32_t prev_weak = cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
-    if (prev_weak == 1 && cb->m_strong_count.load(std::memory_order_acquire) == 0)
-    {
-      std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
-      TryDestroyControlBlockLocked(target_id, cb);
-    }
+    cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
+    TryDestroyControlBlockLocked(target_id, cb);
   }
   return alive;
 }
 
 bool Registry::TryLockWeak(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  // 持有 shared_lock 全程守護 cb 生命週期，嚴禁 cb 在 CAS 期間被背後銷毀
+  std::shared_lock<std::shared_mutex> registry_lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
   }
+  ControlBlock *cb = it->second;
 
   // 1. 若物件已被標記為正在拆解中，嚴禁弱引用晉升（防止死者甦醒與 UAF）
   if (cb->m_is_destructing.load(std::memory_order_acquire))

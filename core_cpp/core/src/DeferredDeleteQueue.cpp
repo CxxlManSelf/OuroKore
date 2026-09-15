@@ -8,8 +8,8 @@ namespace ork
 
 DeferredDeleteQueue &DeferredDeleteQueue::GetInstance()
 {
-  static DeferredDeleteQueue instance;
-  return instance;
+  static DeferredDeleteQueue *instance = new DeferredDeleteQueue();
+  return *instance;
 }
 
 DeferredDeleteQueue::DeferredDeleteQueue()
@@ -69,13 +69,15 @@ void DeferredDeleteQueue::Push(HandleID id)
     return;
   }
 
+  bool submitted = false;
   if (m_thread_pool && m_running.load(std::memory_order_acquire))
   {
-    m_thread_pool->submit_detached([this, id]() { ProcessItem(id); });
+    submitted = m_thread_pool->submit_detached([this, id]() { ProcessItem(id); });
   }
-  else
+
+  if (!submitted)
   {
-    // 若執行緒池尚未啟動或已關閉，降級為直接處理
+    // 若執行緒池未啟動、已停止或佇列拒絕，降級為當前執行緒就地銷毀，確保任務必達且計數不洩漏
     ProcessItem(id);
   }
 }

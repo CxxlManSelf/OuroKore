@@ -488,4 +488,18 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_shutdown_core(void)
+  {
+    try
+    {
+      ork::CycleCollector::GetInstance().Stop();
+      ork::DeferredDeleteQueue::GetInstance().Stop();
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
 }  // extern "C"

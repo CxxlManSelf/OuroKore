@@ -34,20 +34,11 @@ public:
    * @param thread_count 執行緒數量（預設為硬體核心數，若無法取得則為 4）
    */
   explicit FixedThreadPool(size_t thread_count = 0)
+      : m_worker_count(thread_count == 0 ? (std::thread::hardware_concurrency() == 0 ? 4 : std::thread::hardware_concurrency()) : thread_count),
+        m_running(true)
   {
-    if (thread_count == 0)
-    {
-      thread_count = std::thread::hardware_concurrency();
-      if (thread_count == 0)
-      {
-        thread_count = 4;
-      }
-    }
-    m_worker_count = thread_count;
-    m_running.store(true, std::memory_order_release);
-
-    m_workers.reserve(thread_count);
-    for (size_t i = 0; i < thread_count; ++i)
+    m_workers.reserve(m_worker_count);
+    for (size_t i = 0; i < m_worker_count; ++i)
     {
       m_workers.emplace_back([this]() { worker_loop(); });
     }

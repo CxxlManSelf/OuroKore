@@ -98,6 +98,14 @@ inline void FlushStorage()
 }
 
 /**
+ * @brief 於應用程式退出或測試結尾統一呼叫，優雅終止底層循環收集器與延遲銷毀隊列
+ */
+inline void ShutdownCore()
+{
+  ork_shutdown_core();
+}
+
+/**
  * @brief 優雅終止核心執行緒池與背景任務，確保退出時無死鎖與資料遺失
  */
 inline void Shutdown()
@@ -109,6 +117,7 @@ inline void Shutdown()
     pool->stop();
     detail::GetCoreThreadPoolRef() = nullptr;
   }
+  ShutdownCore();
 }
 
 /**
@@ -149,6 +158,75 @@ inline bool Init(std::shared_ptr<IStorageDriver> driver,
   ork_set_object_destroyed_callback(&detail::OnObjectDestroyed);
   return true;
 }
+
+/**
+ * @brief OuroKore 核心生命週期 RAII 範疇守衛
+ *
+ * 建構時自動初始化核心，離開作用域（例如 main 函式退出或解構）時自動安全呼叫 Shutdown()。
+ * 保證即使發生提前 return 或例外拋出，必定安全執行 Flush 與 ShutdownCore，
+ * 並且在 main() 棧展開階段執行，100% 避開 Windows Loader Lock 退出死鎖。
+ */
+class OuroCoreScope
+{
+public:
+  explicit OuroCoreScope(std::shared_ptr<IStorageDriver> driver = nullptr,
+                         std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr,
+                         std::shared_ptr<ork::base::FixedThreadPool> thread_pool = nullptr)
+    : m_is_owner(Init(std::move(driver), std::move(auto_dehydrator), std::move(thread_pool)))
+  {
+  }
+
+  ~OuroCoreScope()
+  {
+    if (m_is_owner)
+    {
+      Shutdown();
+      m_is_owner = false;
+    }
+  }
+
+  /**
+   * @brief 檢查當前 Scope 是否為成功初始化核心的主程式（Primary Host）
+   * 若核心已在先前被初始化（例如外掛或次要模組宣告此物件），則回傳 false，且解構時不會破壞主程式環境。
+   */
+  bool IsOwner() const noexcept
+  {
+    return m_is_owner;
+  }
+
+  explicit operator bool() const noexcept
+  {
+    return m_is_owner;
+  }
+
+  // 唯一擁有權：禁止複製
+  OuroCoreScope(const OuroCoreScope &) = delete;
+  OuroCoreScope &operator=(const OuroCoreScope &) = delete;
+
+  // 支援移動語意（轉移主程式關閉責任）
+  OuroCoreScope(OuroCoreScope &&other) noexcept
+    : m_is_owner(other.m_is_owner)
+  {
+    other.m_is_owner = false;
+  }
+
+  OuroCoreScope &operator=(OuroCoreScope &&other) noexcept
+  {
+    if (this != &other)
+    {
+      if (m_is_owner)
+      {
+        Shutdown();
+      }
+      m_is_owner = other.m_is_owner;
+      other.m_is_owner = false;
+    }
+    return *this;
+  }
+
+private:
+  bool m_is_owner{false};
+};
 
 /**
  * @brief Get currently registered storage driver.

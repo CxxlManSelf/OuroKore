@@ -11,8 +11,8 @@ namespace ork
 
 CycleCollector &CycleCollector::GetInstance()
 {
-  static CycleCollector instance;
-  return instance;
+  static CycleCollector *instance = new CycleCollector();
+  return *instance;
 }
 
 CycleCollector::CycleCollector()
@@ -49,6 +49,11 @@ void CycleCollector::Stop()
     m_cv.notify_all();
   }
 
+  {
+    std::lock_guard<std::mutex> lock(m_drain_mutex);
+    m_drain_cv.notify_all();
+  }
+
   if (m_worker_thread.joinable())
   {
     m_worker_thread.join();
@@ -65,6 +70,7 @@ void CycleCollector::PushSuspect(HandleID target_id)
   {
     std::lock_guard<std::mutex> lock(m_queue_mutex);
     m_suspect_queue.push_back(target_id);
+    ++m_submitted_batches;
     m_cv.notify_one();
   }
 }
@@ -77,21 +83,23 @@ size_t CycleCollector::SuspectCount() const
 
 void CycleCollector::CollectCyclesExplicit()
 {
-  // 取出當前所有排隊中的嫌疑犯進行批次分析
-  std::vector<HandleID> current_batch;
+  if (!m_running.load(std::memory_order_acquire))
+  {
+    return;
+  }
+
+  uint64_t target_batch = 0;
   {
     std::lock_guard<std::mutex> lock(m_queue_mutex);
-    current_batch.swap(m_suspect_queue);
+    target_batch = m_submitted_batches;
+    m_cv.notify_one();
   }
 
-  m_known_alive_in_run.clear();
-
-  for (HandleID suspect_id : current_batch)
-  {
-    ProcessSuspect(suspect_id);
-  }
-
-  m_known_alive_in_run.clear();
+  // 方案一屏障等待：委託單一背景執行緒處理，呼叫端僅在此安全阻塞等待消化完畢，徹底消滅 Data Race
+  std::unique_lock<std::mutex> lock(m_drain_mutex);
+  m_drain_cv.wait(lock, [this, target_batch]() {
+    return !m_running.load(std::memory_order_acquire) || (m_completed_batches >= target_batch);
+  });
 }
 
 void CycleCollector::WorkerLoop()
@@ -99,6 +107,7 @@ void CycleCollector::WorkerLoop()
   while (m_running.load(std::memory_order_acquire))
   {
     std::vector<HandleID> current_batch;
+    uint64_t batch_id = 0;
     {
       std::unique_lock<std::mutex> lock(m_queue_mutex);
       m_cv.wait(lock, [this]() {
@@ -111,20 +120,31 @@ void CycleCollector::WorkerLoop()
       }
 
       current_batch.swap(m_suspect_queue);
+      batch_id = m_submitted_batches;
     }
 
-    m_known_alive_in_run.clear();
-
+    // 進行批次內去重，消除同環多節點重複觸發冗餘圖論走訪
+    std::unordered_set<HandleID> seen_in_batch;
     for (HandleID suspect_id : current_batch)
     {
-      if (!m_running.load(std::memory_order_acquire))
+      if (seen_in_batch.insert(suspect_id).second)
       {
-        break;
+        ProcessSuspect(suspect_id);
       }
-      ProcessSuspect(suspect_id);
     }
 
-    m_known_alive_in_run.clear();
+    // 通知可能正在阻塞等待的 CollectCyclesExplicit
+    {
+      std::lock_guard<std::mutex> lock(m_drain_mutex);
+      m_completed_batches = std::max(m_completed_batches, batch_id);
+      m_drain_cv.notify_all();
+    }
+  }
+
+  // 執行緒退出時喚醒所有等待者，防止 shutdown 時懸掛
+  {
+    std::lock_guard<std::mutex> lock(m_drain_mutex);
+    m_drain_cv.notify_all();
   }
 }
 
@@ -164,15 +184,15 @@ void CycleCollector::ProcessSuspect(HandleID suspect_id)
     q.pop();
     component.push_back(curr);
 
-    // 若當前節點已被確認存活（觸及之前的存活快取），則整條路徑存活
-    if (m_known_alive_in_run.find(curr) != m_known_alive_in_run.end())
-    {
-      has_external_root = true;
-      break;
-    }
-
     ControlBlock *curr_cb = Registry::GetInstance().GetControlBlock(curr);
     if (!curr_cb)
+    {
+      continue;
+    }
+
+    // 雙重存活檢查：若上游節點已被標記拆解或其強計數歸零（已被 DeferredDeleteQueue 接管），略過擴展
+    if (curr_cb->m_is_destructing.load(std::memory_order_acquire) ||
+        curr_cb->m_strong_count.load(std::memory_order_acquire) == 0)
     {
       continue;
     }
@@ -208,13 +228,6 @@ void CycleCollector::ProcessSuspect(HandleID suspect_id)
         break;
       }
 
-      // 若該 owner 已被標記為已知存活，亦直接存活
-      if (m_known_alive_in_run.find(owner) != m_known_alive_in_run.end())
-      {
-        has_external_root = true;
-        break;
-      }
-
       // 單次走訪防環標記 (Visited Set)
       if (visited.find(owner) == visited.end())
       {
@@ -231,11 +244,6 @@ void CycleCollector::ProcessSuspect(HandleID suspect_id)
 
   if (has_external_root)
   {
-    // 跨次走訪快取標記：將本次已走訪確認連向 Root/外部的節點加入 known_alive 快取
-    for (HandleID id : visited)
-    {
-      m_known_alive_in_run.insert(id);
-    }
     return;
   }
 
@@ -290,6 +298,15 @@ void CycleCollector::DestructIsland(const std::vector<HandleID> &island_nodes)
   {
     HandleID target_id = pair.first;
     ControlBlock *cb = pair.second;
+
+    // 二階段鎖定雙重存活審查：若孤島內任何節點已被標記為正在拆解，
+    // 或其 StrongCount 已經歸零（已被業務執行緒或 DeferredDeleteQueue 接管），立刻放棄拆解！
+    if (cb->m_is_destructing.load(std::memory_order_acquire) ||
+        cb->m_strong_count.load(std::memory_order_acquire) == 0)
+    {
+      return;
+    }
+
     if (cb->m_owners.empty())
     {
       // 入度為 0 但仍在孤島佇列，可能為過渡狀態，放棄拆解

@@ -119,6 +119,12 @@ ORK_API int32_t ORK_CALL ork_flush_deferred_deletions(void);
  */
 ORK_API int32_t ORK_CALL ork_set_deferred_delete_mode(int32_t mode);
 
+/**
+ * @brief 優雅終止核心背景執行緒池（包含 CycleCollector 與 DeferredDeleteQueue），確保退出時無懸掛執行緒
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_shutdown_core(void);
+
 #ifdef __cplusplus
 }
 #endif

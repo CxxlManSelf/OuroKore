@@ -4,7 +4,6 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
-#include <unordered_set>
 #include <vector>
 
 #include "ourokore/c_api/core.h"
@@ -20,9 +19,9 @@ namespace ork
  * 架構規範：
  * 1. 嚴格單一背景執行緒：消滅反向走訪時產生的鎖順序死鎖（哲學家就餐問題）與快取顛簸。
  * 2. 嚴格純物理銷毀：嚴禁觸碰脫水（Dehydration）與藍圖打包（PackBlueprint）。
- * 3. 雙層標記防禦：
- *    - visited 集合：單次走訪防無限循環。
- *    - 已知存活快取：碰觸到 ORK_ROOT_ID 或已知存活節點時 Early Exit。
+ * 3. 標記防禦：
+ *    - visited 集合：單次走訪防無限循環，基於即時名冊快照嚴格審查，無跨次過期快取毒化風險。
+ *    - 存活早退：碰觸到 ORK_ROOT_ID 或無 owner / 非受管節點時 Early Exit。
  * 4. 併發變更防禦（二階段確認）：
  *    - 判定為孤島後，按 HandleID 升冪排序鎖定名冊，確認無外部連線後標記 Destructing 態。
  *    - 靜音模式解除內部連線，強引用自然跌至 0，交由 DeferredDeleteQueue 處理物理釋放。
@@ -75,9 +74,11 @@ private:
   std::condition_variable m_cv;
   std::thread m_worker_thread;
 
-  // 走訪時單執行緒私有的本地容器（零鎖開銷）
-  std::unordered_set<HandleID> m_visited_in_run;
-  std::unordered_set<HandleID> m_known_alive_in_run;
+  // 方案一：委託單一背景執行緒之同步完成屏障 (Sequence Barrier)
+  uint64_t m_submitted_batches{0};
+  uint64_t m_completed_batches{0};
+  mutable std::mutex m_drain_mutex;
+  std::condition_variable m_drain_cv;
 };
 
 }  // namespace ork

@@ -39,14 +39,12 @@ public:
    */
   bool push(T item)
   {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (m_stopped)
     {
-      std::unique_lock<std::mutex> lock(m_mutex);
-      if (m_stopped)
-      {
-        return false;
-      }
-      m_queue.push(std::move(item));
+      return false;
     }
+    m_queue.push(std::move(item));
     m_cv.notify_one();
     return true;
   }
@@ -57,14 +55,12 @@ public:
   template <typename... Args>
   bool emplace(Args &&...args)
   {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (m_stopped)
     {
-      std::unique_lock<std::mutex> lock(m_mutex);
-      if (m_stopped)
-      {
-        return false;
-      }
-      m_queue.emplace(std::forward<Args>(args)...);
+      return false;
     }
+    m_queue.emplace(std::forward<Args>(args)...);
     m_cv.notify_one();
     return true;
   }
@@ -134,10 +130,8 @@ public:
    */
   void stop()
   {
-    {
-      std::unique_lock<std::mutex> lock(m_mutex);
-      m_stopped = true;
-    }
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_stopped = true;
     m_cv.notify_all();
   }
 
