@@ -91,18 +91,33 @@ void DeferredDeleteQueue::ProcessItem(HandleID id)
     // 壓平遞迴解構：若 payload 解構時引發子物件 ork_unregister_edge 且 Strong==0，
     // 子物件會被 Push 進 DeferredDeleteQueue，而不是在當前呼叫棧深處遞迴！
     OuroObject *to_delete = nullptr;
+    bool should_notify = false;
     {
       std::unique_lock<std::shared_mutex> payload_lock(cb->m_rw_lock);
-      if (cb->m_strong_count.load(std::memory_order_acquire) == 0 && cb->m_payload)
+      if (cb->m_strong_count.load(std::memory_order_acquire) == 0)
       {
-        to_delete = cb->m_payload;
-        cb->m_payload = nullptr;
+        if (cb->m_payload)
+        {
+          to_delete = cb->m_payload;
+          cb->m_payload = nullptr;
+        }
+        bool expected = false;
+        if (cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        {
+          should_notify = true;
+        }
       }
     }
 
     if (to_delete)
     {
       delete to_delete;
+    }
+
+    // 邏輯銷毀通知：在無任何核心/讀寫鎖保護下觸發全域銷毀回呼（通知 IAutoDehydrator 與 IStorageDriver）
+    if (should_notify)
+    {
+      Registry::GetInstance().NotifyObjectDestroyed(id);
     }
 
     // 第二階段：若 WeakCount 亦為 0，自 Registry 抹除 ControlBlock

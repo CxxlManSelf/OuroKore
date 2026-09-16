@@ -120,11 +120,33 @@ ORK_API int32_t ORK_CALL ork_flush_deferred_deletions(void);
 ORK_API int32_t ORK_CALL ork_set_deferred_delete_mode(int32_t mode);
 
 /**
+ * @brief 取得目前排隊等待物理銷毀之任務數量
+ */
+ORK_API uint64_t ORK_CALL ork_get_deferred_delete_pending_count(void);
+
+/**
+ * @brief 停止循環參照收集器背景巡檢執行緒
+ */
+ORK_API int32_t ORK_CALL ork_stop_cycle_collector(void);
+
+/**
+ * @brief 停止延遲銷毀執行緒池並等待排隊任務排空退出
+ */
+ORK_API int32_t ORK_CALL ork_stop_deferred_deletions(void);
+
+/**
  * @brief 優雅終止核心背景執行緒池（包含 CycleCollector 與 DeferredDeleteQueue），確保退出時無懸掛執行緒
  * @return ORK_STATUS_OK on success, or an error code.
  */
 ORK_API int32_t ORK_CALL ork_shutdown_core(void);
 
+/**
+ * @brief 復位核心初始化旗標，允許在同進程中重新初始化核心（支援熱重啟與測試重用）
+ * @return ORK_STATUS_OK on success.
+ */
+ORK_API int32_t ORK_CALL ork_reset_core_state(void);
+
 #ifdef __cplusplus
 }
 #endif
+

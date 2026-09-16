@@ -428,6 +428,7 @@ void Test5_InMemoryStorage_Save_And_Load()
 
   // Explicitly release sword, causing sword strong count to drop to 0 and get deleted from Registry
   char_a->m_weapon.Release();
+  ork_flush_deferred_deletions();
 
   // Load char_a from storage: char_a blueprint has sword_id, but sword is dead in Registry
   assert(ork::Load(char_a) == true);
@@ -1188,6 +1189,59 @@ void Test12_WriteStream_Commit_Rollback_On_Exception()
   std::cout << "  -> 事務回滾驗證成功，例外發生時絕不損毀舊存檔亦不殘留垃圾！" << std::endl;
 }
 
+void Test13_Object_Deletion_Notification_Under_Weak_References(std::shared_ptr<ork::InMemoryStorage> storage,
+                                                              std::shared_ptr<MockAutoDehydrator> dehydrator)
+{
+  std::cout << "[Test 13] Object Deletion Notification to Dehydrator & Storage Under Weak References..." << std::endl;
+  std::cout.flush();
+
+  // 1. 建立受管物件並儲存
+  ork::HandleID target_id = 0;
+  ork::WeakHandle<WeaponObject> weak_handle;
+  {
+    auto weapon = ork::CreateObject<WeaponObject>();
+    target_id = weapon.GetTargetID();
+    weapon->SetDamage(350);
+
+    // 登記至脫水器
+    dehydrator->Register(target_id, sizeof(WeaponObject));
+    assert(dehydrator->IsTracked(target_id) == true);
+
+    // 存入儲存體 (產生藍圖)
+    assert(ork::Save(weapon) == true);
+    assert(storage->Contains(target_id) == true);
+
+    // 建立弱引用
+    weak_handle = weapon;
+    assert(weak_handle.IsAlive() == true);
+    assert(weak_handle.GetTargetID() == target_id);
+
+    // weapon (OuroPtr) 離開此範疇，強引用歸零！
+    // 但 weak_handle 依然存活 (weak_count > 0)
+  }
+
+  // 等待 DeferredDeleteQueue 與非同步儲存清理任務全部排空
+  ork_flush_deferred_deletions();
+  ork::FlushStorage();
+
+  // 2. 核心斷言：即使 weak_handle 仍存活，通知必須已經觸發！
+  // A. 脫水器名冊已成功移除，且記憶體配額已扣除
+  assert(dehydrator->IsTracked(target_id) == false);
+
+  // B. 儲存體中的藍圖已成功刪除
+  assert(storage->Contains(target_id) == false);
+
+  // C. 弱引用正確感知實體死亡
+  assert(weak_handle.IsAlive() == false);
+  assert(!weak_handle.LockAndAcquire());
+
+  // 3. 弱引用亦釋放，驗證墓碑正常銷毀
+  weak_handle.Release();
+  ork_flush_deferred_deletions();
+
+  std::cout << "  -> 弱引用存活情境下之邏輯銷毀通知（Dehydrator 與 Storage 清理）驗證成功！\n" << std::endl;
+}
+
 int main()
 {
   std::cout << "=== OuroKore Phase 3 Serialization & Dehydration/Rehydration Tests ===" << std::endl;
@@ -1213,6 +1267,7 @@ int main()
     Test10_Concurrent_Rehydration_Thread_Safety();
     Test11_AutoDehydrator_Plugin_And_Core_Communication();
     Test12_WriteStream_Commit_Rollback_On_Exception();
+    Test13_Object_Deletion_Notification_Under_Weak_References(global_storage, mock_dehydrator);
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();

@@ -41,6 +41,13 @@ inline std::shared_ptr<ork::base::FixedThreadPool> &GetCoreThreadPoolRef()
   return s_pool;
 }
 
+inline bool &IsCoreOwnedThreadPoolRef()
+{
+  static bool s_is_core_owned = false;
+  return s_is_core_owned;
+}
+
+
 inline void OnObjectDestroyed(HandleID id)
 {
   auto driver = GetStorageDriverRef();
@@ -91,9 +98,22 @@ inline std::shared_ptr<ork::base::FixedThreadPool> GetCoreThreadPool()
 inline void FlushStorage()
 {
   auto pool = detail::GetCoreThreadPoolRef();
-  if (pool && pool->is_running())
+  while (true)
   {
-    pool->wait_idle();
+    // 1. 同步排空延遲物理銷毀隊列（將所有待銷毀物件完成析構並分派 DeleteBlueprint 給 ThreadPool）
+    ork_flush_deferred_deletions();
+
+    // 2. 若有儲存執行緒池，等待所有藍圖寫入與刪除任務完成
+    if (pool && pool->is_running())
+    {
+      pool->wait_idle();
+    }
+
+    // 3. 檢查在 ThreadPool 執行過程中，是否又有 OuroPtr 解構產生了新的延遲銷毀任務
+    if (ork_get_deferred_delete_pending_count() == 0)
+    {
+      break;
+    }
   }
 }
 
@@ -107,17 +127,62 @@ inline void ShutdownCore()
 
 /**
  * @brief 優雅終止核心執行緒池與背景任務，確保退出時無死鎖與資料遺失
+ * 依循嚴格由上而下的依賴拓撲時序進行終止：
+ * 1. 停用 CycleCollector 背景巡檢並同步外科手術收集一次殘留孤島（防止 Last-Mile 孤島洩漏）
+ * 2. 雙管線收斂排空 FlushStorage()（保證所有已解鏈物件之銷毀任務與藍圖落盤）
+ * 3. 立即解除全域銷毀回呼（防止退出階段的新解構向執行緒池分派新任務）
+ * 4. 停止延遲銷毀執行緒池（等待銷毀執行緒退出）
+ * 5. 處理儲存執行緒池（自建者 stop 回收，外部注入者 wait_idle 排空）
+ * 6. 確認所有執行緒徹底終止後，才重置靜態指標以防退出期懸掛
+ * 7. 復位底層初始化標記，支援熱重啟與測試重用
  */
 inline void Shutdown()
 {
+  // 防重入與併發守衛：保證全生命週期僅單一執行緒執行關閉流程
+  static std::atomic<bool> s_is_shutdown_running{false};
+  bool expected = false;
+  if (!s_is_shutdown_running.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+  {
+    return; // 已在關閉中或已完成關閉，安全直接早退
+  }
+
+  // 1. 先停用循環參照收集器背景巡檢，並執行一次最後的同步外科手術收集，解開所有殘留孤島
+  ork_stop_cycle_collector();
+  ork_collect_cycles();
+
+  // 2. 雙管線收斂排空：確保延遲銷毀與執行緒池任務全部完成落盤
   FlushStorage();
+
+  // 3. 立即解除全域銷毀通知回呼：關閉水龍頭，防止後續任何解構引發新任務被分發至執行緒池
+  ork_set_object_destroyed_callback(nullptr);
+
+  // 4. 停止延遲銷毀執行緒池並等待其工作執行緒安全退出
+  ork_stop_deferred_deletions();
+
+  // 5. 處理儲存執行緒池：依所有權決定是否強制 stop
   auto pool = detail::GetCoreThreadPoolRef();
   if (pool)
   {
-    pool->stop();
-    detail::GetCoreThreadPoolRef() = nullptr;
+    if (detail::IsCoreOwnedThreadPoolRef())
+    {
+      pool->stop();
+    }
+    else
+    {
+      pool->wait_idle();
+    }
   }
-  ShutdownCore();
+
+  // 6. 確認所有執行緒徹底終止後，才安全重置靜態指標以防退出期懸掛
+  detail::GetCoreThreadPoolRef() = nullptr;
+  detail::GetStorageDriverRef() = nullptr;
+  detail::GetAutoDehydratorRef() = nullptr;
+  detail::IsCoreOwnedThreadPoolRef() = false;
+
+  // 7. 復位底層初始化狀態，支援同進程多次重新初始化
+  ork_reset_core_state();
+
+  s_is_shutdown_running.store(false, std::memory_order_release);
 }
 
 /**
@@ -148,11 +213,14 @@ inline bool Init(std::shared_ptr<IStorageDriver> driver,
   if (thread_pool)
   {
     detail::GetCoreThreadPoolRef() = std::move(thread_pool);
+    detail::IsCoreOwnedThreadPoolRef() = false;
   }
   else
   {
     detail::GetCoreThreadPoolRef() = std::make_shared<ork::base::FixedThreadPool>();
+    detail::IsCoreOwnedThreadPoolRef() = true;
   }
+
 
   // 註冊全域物件銷毀勾點：當物件 strong_count 與 weak_count 皆歸零死亡時，自動清除 storage 與通知外掛
   ork_set_object_destroyed_callback(&detail::OnObjectDestroyed);

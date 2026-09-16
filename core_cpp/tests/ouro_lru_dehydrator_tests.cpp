@@ -337,6 +337,7 @@ int main()
     test_target_driven_dehydration_and_report();
 
     std::cout << "=== OuroLRUAutoDehydrator 所有測試全部通過！ ===" << std::endl;
+    ork::Shutdown();
     return 0;
   }
   catch (const std::exception &e)

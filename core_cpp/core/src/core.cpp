@@ -1,5 +1,6 @@
 #include <atomic>
 
+#include "ourokore/c_api/core.h"
 #include "ourokore/c_api/component_api.h"
 
 #include "CycleCollector.h"
@@ -16,10 +17,12 @@ extern "C"
   int32_t ORK_CALL ork_try_initialize_core(void)
   {
     bool expected = false;
-    if (!g_core_initialized.compare_exchange_strong(expected, true))
+    if (!g_core_initialized.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
     {
       return ORK_STATUS_ERROR_ALREADY_EXISTS;
     }
+    ork::CycleCollector::GetInstance().Start();
+    ork::DeferredDeleteQueue::GetInstance().Start();
     return ORK_STATUS_OK;
   }
 
@@ -488,11 +491,35 @@ extern "C"
     }
   }
 
-  int32_t ORK_CALL ork_shutdown_core(void)
+  uint64_t ORK_CALL ork_get_deferred_delete_pending_count(void)
+  {
+    try
+    {
+      return static_cast<uint64_t>(ork::DeferredDeleteQueue::GetInstance().PendingCount());
+    }
+    catch (...)
+    {
+      return 0;
+    }
+  }
+
+  int32_t ORK_CALL ork_stop_cycle_collector(void)
   {
     try
     {
       ork::CycleCollector::GetInstance().Stop();
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_stop_deferred_deletions(void)
+  {
+    try
+    {
       ork::DeferredDeleteQueue::GetInstance().Stop();
       return ORK_STATUS_OK;
     }
@@ -502,4 +529,37 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_shutdown_core(void)
+  {
+    // 直接調用完整版的核心復位函式，確保背景執行緒終止、名冊清空與狀態復位一次到位
+    return ork_reset_core_state();
+  }
+
+  int32_t ORK_CALL ork_reset_core_state(void)
+  {
+    try
+    {
+      // 1. 防禦性確保所有背景工作執行緒皆已終止（若已停止則為安全 No-Op）
+      ork::CycleCollector::GetInstance().Stop();
+      ork::DeferredDeleteQueue::GetInstance().Stop();
+
+      // 2. 復位延遲銷毀隊列配置（還原為預設非同步模式）
+      ork::DeferredDeleteQueue::GetInstance().SetSyncMode(false);
+
+      // 3. 徹底清空註冊表殘留物件與墓碑，還原為白紙狀態（兩階段無鎖置換防死鎖）
+      ork::Registry::GetInstance().Clear();
+
+      // 4. 原子復位核心初始化旗標，保證跨執行緒完全可見
+      g_core_initialized.store(false, std::memory_order_seq_cst);
+
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
 }  // extern "C"
+
+

@@ -107,23 +107,30 @@ bool Registry::UnregisterObject(HandleID id)
       delete cb->m_payload;
       cb->m_payload = nullptr;
     }
-    return TryDestroyControlBlockLocked(id, cb);
+    bool expected = false;
+    bool should_notify = cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+    bool destroyed = TryDestroyControlBlockLocked(id, cb);
+    lock.unlock();
+
+    if (should_notify)
+    {
+      NotifyObjectDestroyed(id);
+    }
+    return destroyed;
   }
   return false;
 }
 
 bool Registry::RegisterEdge(HandleID owner_id, HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  // 全程持有 shared_lock 保證 target_id 對應之 ControlBlock 絕對不會在加邊期間被並發銷毀
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
   }
+  ControlBlock *cb = it->second;
 
   // 孤島拆解中防線：若目標物件處於拆解態，拒絕加邊
   if (cb->m_is_destructing.load(std::memory_order_acquire))
@@ -148,7 +155,10 @@ bool Registry::RegisterEdge(HandleID owner_id, HandleID target_id)
 bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id, bool silent)
 {
   ControlBlock *cb = nullptr;
+  uint32_t prev_strong = 0;
+  bool should_suspect = false;
   {
+    // 在 shared_lock 保護下完成邊緣移除、強計數原子扣減與嫌疑犯標記
     std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
     auto it = m_object_map.find(target_id);
     if (it == m_object_map.end())
@@ -156,42 +166,47 @@ bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id, bool silent
       return false;
     }
     cb = it->second;
-  }
 
-  // 1. Remove the edge from owner list
-  bool edge_found = false;
-  {
-    std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
-    auto it = std::find(cb->m_owners.begin(), cb->m_owners.end(), owner_id);
-    if (it != cb->m_owners.end())
+    // 1. Remove the edge from owner list
+    bool edge_found = false;
     {
-      cb->m_owners.erase(it);
-      edge_found = true;
+      std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
+      auto edge_it = std::find(cb->m_owners.begin(), cb->m_owners.end(), owner_id);
+      if (edge_it != cb->m_owners.end())
+      {
+        cb->m_owners.erase(edge_it);
+        edge_found = true;
+      }
+    }
+
+    if (!edge_found)
+    {
+      return false;
+    }
+
+    // 2. Decrement strong reference count
+    prev_strong = cb->m_strong_count.fetch_sub(1);
+    if (prev_strong > 1 && !silent)
+    {
+      // 扣減後 StrongCount 仍大於 0：可能構成自娛自樂的閉環孤島
+      // 透過原子 CAS 去重旗標，成功搶入者標記入隊
+      bool expected = false;
+      if (cb->m_in_suspect_queue.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+      {
+        should_suspect = true;
+      }
     }
   }
 
-  if (!edge_found)
-  {
-    return false;
-  }
-
-  // 2. Decrement strong reference count
-  uint32_t prev_strong = cb->m_strong_count.fetch_sub(1);
   if (prev_strong == 1)
   {
     // Strong count transitioned to 0: 移交 DeferredDeleteQueue 背景多執行緒平行銷毀
     // 徹底消滅遞迴解構造成的呼叫堆疊溢位 (Stack Overflow)
     DeferredDeleteQueue::GetInstance().Push(target_id);
   }
-  else if (prev_strong > 1 && !silent)
+  else if (should_suspect)
   {
-    // 扣減後 StrongCount 仍大於 0：可能構成自娛自樂的閉環孤島
-    // 透過原子 CAS 去重旗標，成功搶入者推入 CycleCollector 嫌疑犯佇列
-    bool expected = false;
-    if (cb->m_in_suspect_queue.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-    {
-      CycleCollector::GetInstance().PushSuspect(target_id);
-    }
+    CycleCollector::GetInstance().PushSuspect(target_id);
   }
 
   return true;
@@ -229,10 +244,6 @@ bool Registry::TryDestroyControlBlockLocked(HandleID id, ControlBlock *cb)
     {
       m_object_map.erase(it);
       delete cb;
-      if (m_object_destroyed_cb)
-      {
-        m_object_destroyed_cb(id);
-      }
       return true;
     }
   }
@@ -376,15 +387,16 @@ bool Registry::TryLockWeak(HandleID target_id)
 
 bool Registry::LockObject(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
+  }
+  ControlBlock *cb = it->second;
+  if (cb->m_is_destructing.load(std::memory_order_acquire))
+  {
+    return false;
   }
   cb->m_rw_lock.lock();
   return true;
@@ -392,31 +404,28 @@ bool Registry::LockObject(HandleID target_id)
 
 bool Registry::UnlockObject(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
   }
-  cb->m_rw_lock.unlock();
+  it->second->m_rw_lock.unlock();
   return true;
 }
 
 bool Registry::LockObjectShared(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
+  }
+  ControlBlock *cb = it->second;
+  if (cb->m_is_destructing.load(std::memory_order_acquire))
+  {
+    return false;
   }
   cb->m_rw_lock.lock_shared();
   return true;
@@ -424,50 +433,57 @@ bool Registry::LockObjectShared(HandleID target_id)
 
 bool Registry::UnlockObjectShared(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
   }
-  cb->m_rw_lock.unlock_shared();
+  it->second->m_rw_lock.unlock_shared();
   return true;
 }
 
 OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return nullptr;
-    }
-    cb = it->second;
+    return nullptr;
   }
-  // Return null if object is dead (strong count == 0)
-  if (cb->m_strong_count == 0)
+  ControlBlock *cb = it->second;
+
+  // 1. 在 shared_lock 保護下確認物件存活態與非拆解態
+  if (cb->m_strong_count.load(std::memory_order_acquire) == 0 ||
+      cb->m_is_destructing.load(std::memory_order_acquire))
   {
     return nullptr;
   }
 
-  // Automatic Rehydration Check:
-  // If payload is null or state is Dehydrated, invoke registered rehydrate callback
-  if (cb->m_payload == nullptr ||
-      cb->m_storage_state.load(std::memory_order_acquire) == static_cast<uint8_t>(StorageState::Dehydrated))
+  // 2. 熱路徑（常態記憶體常駐物件）：全程在 shared_lock 保護下直接回傳，杜絕鎖外逃逸與 UAF
+  if (cb->m_payload != nullptr &&
+      cb->m_storage_state.load(std::memory_order_acquire) != static_cast<uint8_t>(StorageState::Dehydrated))
   {
-    if (cb->m_rehydrate_fn != nullptr)
-    {
-      cb->m_rehydrate_fn(target_id);
-    }
+    return cb->m_payload;
   }
 
-  return cb->m_payload;
+  // 3. 冷路徑（自動復水）：在讀鎖內安全拷貝復水回呼指標，解鎖後執行以徹底防止遞迴重入死鎖
+  RehydrateFn rehydrate_fn = cb->m_rehydrate_fn;
+  lock.unlock();
+
+  if (rehydrate_fn != nullptr)
+  {
+    rehydrate_fn(target_id);
+  }
+
+  // 4. 復水完成後，重新在 shared_lock 守護下獲取剛重綁的 payload 指標並安全回傳
+  std::shared_lock<std::shared_mutex> recheck_lock(m_registry_mutex);
+  it = m_object_map.find(target_id);
+  if (it != m_object_map.end() && it->second->m_strong_count.load(std::memory_order_acquire) > 0)
+  {
+    return it->second->m_payload;
+  }
+  return nullptr;
 }
 
 uint8_t Registry::GetStorageState(HandleID target_id) const
@@ -520,16 +536,14 @@ bool Registry::SetRehydrateFn(HandleID target_id, RehydrateFn fn)
 
 uint32_t Registry::GetRootEdgeCount(HandleID target_id) const
 {
-  ControlBlock *cb = nullptr;
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return 0;
-    }
-    cb = it->second;
+    return 0;
   }
+  ControlBlock *cb = it->second;
+
   std::lock_guard<std::mutex> owners_lock(cb->m_owners_mutex);
   uint32_t count = 0;
   for (HandleID owner : cb->m_owners)
@@ -550,6 +564,49 @@ void Registry::SetActiveOwner(HandleID owner_id)
 HandleID Registry::GetActiveOwner() const
 {
   return g_active_owner_id;
+}
+
+void Registry::NotifyObjectDestroyed(HandleID id)
+{
+  if (m_object_destroyed_cb)
+  {
+    m_object_destroyed_cb(id);
+  }
+}
+
+void Registry::Clear()
+{
+  std::unordered_map<HandleID, ControlBlock *> to_cleanup;
+  {
+    std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+    // 1. 在獨佔鎖內極速換出整張名冊，並清空銷毀回呼
+    to_cleanup.swap(m_object_map);
+    m_object_destroyed_cb = nullptr;
+  }
+
+  // 2. 第一階段：在無鎖狀態下，先釋放所有殘留的 payload 實體
+  // 即使 payload 解構引發子物件呼叫 UnregisterEdge，因 m_registry_mutex 已解鎖，絕不死鎖
+  for (auto &pair : to_cleanup)
+  {
+    ControlBlock *cb = pair.second;
+    if (cb && cb->m_payload)
+    {
+      delete cb->m_payload;
+      cb->m_payload = nullptr;
+    }
+  }
+
+  // 3. 第二階段：在無鎖狀態下，徹底釋放所有 ControlBlock 墓碑
+  for (auto &pair : to_cleanup)
+  {
+    delete pair.second;
+  }
+
+  // 4. 清理持久化映射名冊
+  {
+    std::unique_lock<std::shared_mutex> p_lock(m_persistent_mutex);
+    m_persistent_map.clear();
+  }
 }
 
 }  // namespace ork

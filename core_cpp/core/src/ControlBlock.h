@@ -42,6 +42,9 @@ struct ControlBlock
   // 孤島拆解中旗標（防止併發加邊與殭屍復活）
   std::atomic<bool> m_is_destructing{false};
 
+  // 銷毀通知已觸發原子旗標（保證邏輯銷毀通知只觸發一次，防重複通知）
+  std::atomic<bool> m_destruction_notified{false};
+
   explicit ControlBlock(OuroObject *payload) : m_payload(payload) {}
 
   ~ControlBlock()

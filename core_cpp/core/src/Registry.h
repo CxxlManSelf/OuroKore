@@ -122,6 +122,18 @@ public:
     m_object_destroyed_cb = fn;
   }
 
+  /**
+   * @brief 在無鎖狀態下觸發全域物件邏輯銷毀通知回呼
+   * @param id 被銷毀物件的 HandleID
+   */
+  void NotifyObjectDestroyed(HandleID id);
+
+  /**
+   * @brief 徹底清空註冊表殘留物件與墓碑，還原為初始白紙狀態
+   * 採用兩階段無鎖置換技術（Swap-out Two-Phase Destruction），確保重入解構時絕不死鎖。
+   */
+  void Clear();
+
   // Thread-Local Active Owner context
   void SetActiveOwner(HandleID owner_id);
   HandleID GetActiveOwner() const;
