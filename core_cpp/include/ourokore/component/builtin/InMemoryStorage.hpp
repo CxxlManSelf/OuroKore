@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "ourokore/component/IStorageDriver.hpp"
-#include "ourokore/component/OuroStream.hpp"
+#include "ourokore/component/builtin/BlueprintStream.hpp"
 
 namespace ork
 {

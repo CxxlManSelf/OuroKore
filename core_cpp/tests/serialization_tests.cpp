@@ -11,6 +11,7 @@
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
 #include "ourokore/component/OuroObject.hpp"
 #include "ourokore/component/OuroStream.hpp"
+#include "ourokore/component/builtin/BlueprintStream.hpp"
 
 static int g_deconstruct_count = 0;
 

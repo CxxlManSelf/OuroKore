@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <queue>
+#include <unordered_set>
 
 #include "ControlBlock.h"
 #include "Registry.h"
