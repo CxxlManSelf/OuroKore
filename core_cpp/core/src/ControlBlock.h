@@ -11,6 +11,7 @@ namespace ork
 {
 
 using RehydrateFn = OuroObject *(*)(HandleID id);
+using DestroyFn = void (*)(OuroObject *payload);
 
 /**
  * @brief 私有控制區塊，代表受管理物件的「核心」或「墓碑」。
@@ -32,6 +33,9 @@ struct ControlBlock
   // Auto-rehydration function pointer callback (persisted across dehydration)
   RehydrateFn m_rehydrate_fn{nullptr};
 
+  // In-place deleter callback function pointer (executes in creating module's CRT)
+  DestroyFn m_destroy_fn{nullptr};
+
   // Owner ID Roster for Upstream Cycle Search
   std::vector<HandleID> m_owners;
   std::mutex m_owners_mutex;
@@ -45,17 +49,36 @@ struct ControlBlock
   // 銷毀通知已觸發原子旗標（保證邏輯銷毀通知只觸發一次，防重複通知）
   std::atomic<bool> m_destruction_notified{false};
 
-  explicit ControlBlock(OuroObject *payload) : m_payload(payload) {}
+  explicit ControlBlock(OuroObject *payload = nullptr, DestroyFn destroy_fn = nullptr) :
+      m_payload(payload),
+      m_destroy_fn(destroy_fn)
+  {}
+
+  /**
+   * @brief 安全釋放 Payload 記憶體，必定回到物件所屬模組的 CRT 堆疊釋放
+   */
+  void DeletePayload()
+  {
+    OuroObject *to_delete = m_payload;
+    m_payload = nullptr;
+    DestroyFn destroy_fn = m_destroy_fn;
+    m_destroy_fn = nullptr;
+    if (to_delete)
+    {
+      if (destroy_fn)
+      {
+        destroy_fn(to_delete);
+      }
+      else
+      {
+        to_delete->DestroySelf();
+      }
+    }
+  }
 
   ~ControlBlock()
   {
-    // Payload should already be deleted when m_strong_count hits 0.
-    // Doing a safety check here.
-    if (m_payload)
-    {
-      delete m_payload;
-      m_payload = nullptr;
-    }
+    DeletePayload();
   }
 };
 

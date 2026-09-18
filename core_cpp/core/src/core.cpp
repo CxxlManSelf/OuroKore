@@ -6,6 +6,8 @@
 #include "CycleCollector.h"
 #include "DeferredDeleteQueue.h"
 #include "Registry.h"
+#include "RuntimeContext.h"
+#include "ourokore/component/RuntimeAPI.hpp"
 
 namespace
 {
@@ -26,7 +28,7 @@ extern "C"
     return ORK_STATUS_OK;
   }
 
-  int32_t ORK_CALL ork_register_object(OuroObject *obj, HandleID *out_id)
+  int32_t ORK_CALL ork_register_object(OuroObject *obj, ork_destroy_fn_t destroy_fn, HandleID *out_id)
   {
     if (!obj || !out_id)
     {
@@ -34,7 +36,8 @@ extern "C"
     }
     try
     {
-      *out_id = ork::Registry::GetInstance().RegisterObject(reinterpret_cast<ork::OuroObject *>(obj));
+      *out_id = ork::Registry::GetInstance().RegisterObject(reinterpret_cast<ork::OuroObject *>(obj),
+                                                            reinterpret_cast<ork::DestroyFn>(destroy_fn));
       return ORK_STATUS_OK;
     }
     catch (...)
@@ -60,7 +63,7 @@ extern "C"
     }
   }
 
-  int32_t ORK_CALL ork_bind_object_payload(HandleID id, OuroObject *obj)
+  int32_t ORK_CALL ork_bind_object_payload(HandleID id, OuroObject *obj, ork_destroy_fn_t destroy_fn)
   {
     if (id == ORK_ROOT_ID)
     {
@@ -68,7 +71,8 @@ extern "C"
     }
     try
     {
-      if (ork::Registry::GetInstance().BindPayload(id, reinterpret_cast<ork::OuroObject *>(obj)))
+      if (ork::Registry::GetInstance().BindPayload(id, reinterpret_cast<ork::OuroObject *>(obj),
+                                                   reinterpret_cast<ork::DestroyFn>(destroy_fn)))
       {
         return ORK_STATUS_OK;
       }
@@ -429,6 +433,46 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_set_destroy_fn(HandleID target_id, ork_destroy_fn_t fn)
+  {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      if (ork::Registry::GetInstance().SetDestroyFn(target_id, reinterpret_cast<ork::DestroyFn>(fn)))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_destroy_payload(HandleID target_id)
+  {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      if (ork::Registry::GetInstance().DestroyPayload(target_id))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
   int32_t ORK_CALL ork_get_root_edge_count(HandleID target_id, uint32_t *out_count)
   {
     if (!out_count)
@@ -549,7 +593,10 @@ extern "C"
       // 3. 徹底清空註冊表殘留物件與墓碑，還原為白紙狀態（兩階段無鎖置換防死鎖）
       ork::Registry::GetInstance().Clear();
 
-      // 4. 原子復位核心初始化旗標，保證跨執行緒完全可見
+      // 4. 重置全域執行時上下文
+      ork::RuntimeContext::GetInstance().Reset();
+
+      // 5. 原子復位核心初始化旗標，保證跨執行緒完全可見
       g_core_initialized.store(false, std::memory_order_seq_cst);
 
       return ORK_STATUS_OK;
@@ -560,6 +607,165 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_dehydrate_object(HandleID id, int32_t *out_success)
+  {
+    if (!out_success)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      *out_success = ork::RuntimeContext::GetInstance().Dehydrate(id) ? 1 : 0;
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      *out_success = 0;
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_flush_storage(void)
+  {
+    try
+    {
+      ork::RuntimeContext::GetInstance().FlushStorage();
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_shutdown_runtime(void)
+  {
+    try
+    {
+      ork::RuntimeContext::GetInstance().Shutdown();
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_notify_object_registered(HandleID id, size_t size_bytes)
+  {
+    try
+    {
+      ork::RuntimeContext::GetInstance().NotifyObjectRegistered(id, size_bytes);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_notify_object_dehydrated(HandleID id)
+  {
+    try
+    {
+      ork::RuntimeContext::GetInstance().NotifyObjectDehydrated(id);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_notify_object_rehydrated(HandleID id)
+  {
+    try
+    {
+      ork::RuntimeContext::GetInstance().NotifyObjectRehydrated(id);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_trigger_dehydration_rescue(size_t bytes_needed, size_t *out_freed_bytes, int32_t *out_has_more)
+  {
+    if (!out_freed_bytes || !out_has_more)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      auto report = ork::RuntimeContext::GetInstance().TriggerDehydrationRescue(bytes_needed);
+      *out_freed_bytes = report.freed_bytes;
+      *out_has_more = report.has_more_candidates ? 1 : 0;
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      *out_freed_bytes = 0;
+      *out_has_more = 0;
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
 }  // extern "C"
+
+namespace ork
+{
+
+bool InitializeRuntime(std::shared_ptr<IStorageDriver> driver,
+                       std::shared_ptr<IAutoDehydrator> auto_dehydrator,
+                       std::shared_ptr<ork::base::FixedThreadPool> thread_pool)
+{
+  return RuntimeContext::GetInstance().Initialize(std::move(driver),
+                                                  std::move(auto_dehydrator),
+                                                  std::move(thread_pool));
+}
+
+void ShutdownRuntime()
+{
+  RuntimeContext::GetInstance().Shutdown();
+}
+
+void FlushStorageRuntime()
+{
+  RuntimeContext::GetInstance().FlushStorage();
+}
+
+std::shared_ptr<IStorageDriver> GetRuntimeStorageDriver()
+{
+  return RuntimeContext::GetInstance().GetStorageDriver();
+}
+
+std::shared_ptr<IAutoDehydrator> GetRuntimeAutoDehydrator()
+{
+  return RuntimeContext::GetInstance().GetAutoDehydrator();
+}
+
+std::shared_ptr<ork::base::FixedThreadPool> GetRuntimeThreadPool()
+{
+  return RuntimeContext::GetInstance().GetThreadPool();
+}
+
+void SetRuntimeAutoDehydrator(std::shared_ptr<IAutoDehydrator> dehydrator)
+{
+  RuntimeContext::GetInstance().SetAutoDehydrator(std::move(dehydrator));
+}
+
+void SetRuntimeStorageDriver(std::shared_ptr<IStorageDriver> driver)
+{
+  RuntimeContext::GetInstance().SetStorageDriver(std::move(driver));
+}
+
+bool DehydrateRuntime(HandleID id)
+{
+  return RuntimeContext::GetInstance().Dehydrate(id);
+}
+
+}  // namespace ork
+
 
 

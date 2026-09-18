@@ -7,89 +7,64 @@
 #include <string>
 #include <vector>
 
+#include "ourokore/c_api/core.h"
+#include "ourokore/c_api/component_api.h"
 #include "ourokore/component/AsyncResult.hpp"
+#include "ourokore/component/BlueprintPackaging.hpp"
 #include "ourokore/component/Handles.hpp"
 #include "ourokore/component/IAutoDehydrator.hpp"
 #include "ourokore/component/IStorageDriver.hpp"
 #include "ourokore/component/OuroObject.hpp"
 #include "ourokore/component/OuroStream.hpp"
-#include "ourokore/component/builtin/NoOpAutoDehydrator.hpp"
+#include "ourokore/component/RuntimeAPI.hpp"
 #include "ourokore/base/ThreadPool.hpp"
-#include "ourokore/c_api/component_api.h"
-#include "ourokore/c_api/core.h"
 
 namespace ork
 {
 
+/**
+ * @brief 取得當前註冊的自動脫水外掛模組（由底層 core.dll 跨模組唯一持有）
+ */
+inline std::shared_ptr<IAutoDehydrator> GetAutoDehydrator()
+{
+  return GetRuntimeAutoDehydrator();
+}
+
+/**
+ * @brief 設定當前註冊的自動脫水外掛模組（同步更新至底層 core.dll 跨模組全域唯一持有）
+ */
+inline void SetAutoDehydrator(std::shared_ptr<IAutoDehydrator> dehydrator)
+{
+  SetRuntimeAutoDehydrator(std::move(dehydrator));
+}
+
 namespace detail
 {
-inline std::shared_ptr<IStorageDriver> &GetStorageDriverRef()
+struct AutoDehydratorRefProxy
 {
-  static std::shared_ptr<IStorageDriver> s_driver = nullptr;
-  return s_driver;
-}
-
-inline std::shared_ptr<IAutoDehydrator> &GetAutoDehydratorRef()
-{
-  static std::shared_ptr<IAutoDehydrator> s_dehydrator = nullptr;
-  return s_dehydrator;
-}
-
-inline std::shared_ptr<ork::base::FixedThreadPool> &GetCoreThreadPoolRef()
-{
-  static std::shared_ptr<ork::base::FixedThreadPool> s_pool = nullptr;
-  return s_pool;
-}
-
-inline bool &IsCoreOwnedThreadPoolRef()
-{
-  static bool s_is_core_owned = false;
-  return s_is_core_owned;
-}
-
-
-inline void OnObjectDestroyed(HandleID id)
-{
-  auto driver = GetStorageDriverRef();
-  if (driver)
+  AutoDehydratorRefProxy &operator=(std::shared_ptr<IAutoDehydrator> dehydrator)
   {
-    auto pool = GetCoreThreadPoolRef();
-    if (pool && pool->is_running())
-    {
-      pool->submit_detached([driver, id]() { driver->DeleteBlueprint(id); });
-    }
-    else
-    {
-      driver->DeleteBlueprint(id);
-    }
+    SetRuntimeAutoDehydrator(std::move(dehydrator));
+    return *this;
   }
-  auto &dehydrator = GetAutoDehydratorRef();
-  if (dehydrator)
+  operator std::shared_ptr<IAutoDehydrator>() const
   {
-    dehydrator->Unregister(id);
+    return GetRuntimeAutoDehydrator();
   }
+};
+
+inline AutoDehydratorRefProxy GetAutoDehydratorRef()
+{
+  return AutoDehydratorRefProxy{};
 }
 }  // namespace detail
 
 /**
- * @brief 取得當前註冊的自動脫水外掛模組（若未指定則自動回傳 NoOpAutoDehydrator，保證永不為 null）
- */
-inline std::shared_ptr<IAutoDehydrator> GetAutoDehydrator()
-{
-  auto &ref = detail::GetAutoDehydratorRef();
-  if (!ref)
-  {
-    ref = std::make_shared<NoOpAutoDehydrator>();
-  }
-  return ref;
-}
-
-/**
- * @brief 取得核心執行緒池（若未配置則可能為 null）
+ * @brief 取得核心執行緒池（由底層 core.dll 跨模組唯一持有）
  */
 inline std::shared_ptr<ork::base::FixedThreadPool> GetCoreThreadPool()
 {
-  return detail::GetCoreThreadPoolRef();
+  return GetRuntimeThreadPool();
 }
 
 /**
@@ -97,24 +72,7 @@ inline std::shared_ptr<ork::base::FixedThreadPool> GetCoreThreadPool()
  */
 inline void FlushStorage()
 {
-  auto pool = detail::GetCoreThreadPoolRef();
-  while (true)
-  {
-    // 1. 同步排空延遲物理銷毀隊列（將所有待銷毀物件完成析構並分派 DeleteBlueprint 給 ThreadPool）
-    ork_flush_deferred_deletions();
-
-    // 2. 若有儲存執行緒池，等待所有藍圖寫入與刪除任務完成
-    if (pool && pool->is_running())
-    {
-      pool->wait_idle();
-    }
-
-    // 3. 檢查在 ThreadPool 執行過程中，是否又有 OuroPtr 解構產生了新的延遲銷毀任務
-    if (ork_get_deferred_delete_pending_count() == 0)
-    {
-      break;
-    }
-  }
+  FlushStorageRuntime();
 }
 
 /**
@@ -122,67 +80,15 @@ inline void FlushStorage()
  */
 inline void ShutdownCore()
 {
-  ork_shutdown_core();
+  ShutdownRuntime();
 }
 
 /**
  * @brief 優雅終止核心執行緒池與背景任務，確保退出時無死鎖與資料遺失
- * 依循嚴格由上而下的依賴拓撲時序進行終止：
- * 1. 停用 CycleCollector 背景巡檢並同步外科手術收集一次殘留孤島（防止 Last-Mile 孤島洩漏）
- * 2. 雙管線收斂排空 FlushStorage()（保證所有已解鏈物件之銷毀任務與藍圖落盤）
- * 3. 立即解除全域銷毀回呼（防止退出階段的新解構向執行緒池分派新任務）
- * 4. 停止延遲銷毀執行緒池（等待銷毀執行緒退出）
- * 5. 處理儲存執行緒池（自建者 stop 回收，外部注入者 wait_idle 排空）
- * 6. 確認所有執行緒徹底終止後，才重置靜態指標以防退出期懸掛
- * 7. 復位底層初始化標記，支援熱重啟與測試重用
  */
 inline void Shutdown()
 {
-  // 防重入與併發守衛：保證全生命週期僅單一執行緒執行關閉流程
-  static std::atomic<bool> s_is_shutdown_running{false};
-  bool expected = false;
-  if (!s_is_shutdown_running.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
-  {
-    return; // 已在關閉中或已完成關閉，安全直接早退
-  }
-
-  // 1. 先停用循環參照收集器背景巡檢，並執行一次最後的同步外科手術收集，解開所有殘留孤島
-  ork_stop_cycle_collector();
-  ork_collect_cycles();
-
-  // 2. 雙管線收斂排空：確保延遲銷毀與執行緒池任務全部完成落盤
-  FlushStorage();
-
-  // 3. 立即解除全域銷毀通知回呼：關閉水龍頭，防止後續任何解構引發新任務被分發至執行緒池
-  ork_set_object_destroyed_callback(nullptr);
-
-  // 4. 停止延遲銷毀執行緒池並等待其工作執行緒安全退出
-  ork_stop_deferred_deletions();
-
-  // 5. 處理儲存執行緒池：依所有權決定是否強制 stop
-  auto pool = detail::GetCoreThreadPoolRef();
-  if (pool)
-  {
-    if (detail::IsCoreOwnedThreadPoolRef())
-    {
-      pool->stop();
-    }
-    else
-    {
-      pool->wait_idle();
-    }
-  }
-
-  // 6. 確認所有執行緒徹底終止後，才安全重置靜態指標以防退出期懸掛
-  detail::GetCoreThreadPoolRef() = nullptr;
-  detail::GetStorageDriverRef() = nullptr;
-  detail::GetAutoDehydratorRef() = nullptr;
-  detail::IsCoreOwnedThreadPoolRef() = false;
-
-  // 7. 復位底層初始化狀態，支援同進程多次重新初始化
-  ork_reset_core_state();
-
-  s_is_shutdown_running.store(false, std::memory_order_release);
+  ShutdownRuntime();
 }
 
 /**
@@ -195,36 +101,7 @@ inline bool Init(std::shared_ptr<IStorageDriver> driver,
                  std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr,
                  std::shared_ptr<ork::base::FixedThreadPool> thread_pool = nullptr)
 {
-  if (ork_try_initialize_core() != ORK_STATUS_OK)
-  {
-    return false;  // 已由主程式初始化，外掛重複呼叫安全略過
-  }
-
-  detail::GetStorageDriverRef() = std::move(driver);
-  if (auto_dehydrator)
-  {
-    detail::GetAutoDehydratorRef() = std::move(auto_dehydrator);
-  }
-  else
-  {
-    detail::GetAutoDehydratorRef() = std::make_shared<NoOpAutoDehydrator>();
-  }
-
-  if (thread_pool)
-  {
-    detail::GetCoreThreadPoolRef() = std::move(thread_pool);
-    detail::IsCoreOwnedThreadPoolRef() = false;
-  }
-  else
-  {
-    detail::GetCoreThreadPoolRef() = std::make_shared<ork::base::FixedThreadPool>();
-    detail::IsCoreOwnedThreadPoolRef() = true;
-  }
-
-
-  // 註冊全域物件銷毀勾點：當物件 strong_count 與 weak_count 皆歸零死亡時，自動清除 storage 與通知外掛
-  ork_set_object_destroyed_callback(&detail::OnObjectDestroyed);
-  return true;
+  return InitializeRuntime(std::move(driver), std::move(auto_dehydrator), std::move(thread_pool));
 }
 
 /**
@@ -297,11 +174,11 @@ private:
 };
 
 /**
- * @brief Get currently registered storage driver.
+ * @brief Get currently registered storage driver (process-wide single instance from core.dll).
  */
 inline std::shared_ptr<IStorageDriver> GetStorageDriver()
 {
-  return detail::GetStorageDriverRef();
+  return GetRuntimeStorageDriver();
 }
 
 /**
@@ -310,78 +187,6 @@ inline std::shared_ptr<IStorageDriver> GetStorageDriver()
 inline std::shared_ptr<IStorageDriver> GetStorageBackend()
 {
   return GetStorageDriver();
-}
-
-/**
- * @brief Pack an OuroObject's Payload and Edge Roster into any OuroStream.
- * @note Core only packs Payload + Edge Roster (Slot Name -> Target HandleID).
- * Core does NOT dictate physical disk layout or magic numbers.
- */
-inline void PackBlueprint(const OuroObject &obj, OuroStream &stream)
-{
-  // 1. Serialize Pure Payload
-  obj.SerializePayload(stream);
-
-  // 2. Automatically traverse m_registered_handles roster to pack Edge Roster
-  const auto &handles = obj.GetRegisteredHandles();
-  uint32_t edge_count = static_cast<uint32_t>(handles.size());
-
-  stream.WriteBytes(reinterpret_cast<const uint8_t *>(&edge_count), sizeof(edge_count));
-
-  for (const auto &[slot_name, handle_ptr] : handles)
-  {
-    stream.WriteStringRaw(slot_name);
-    const auto &target_ids = handle_ptr->GetTargetIDs();
-    uint32_t target_count = static_cast<uint32_t>(target_ids.size());
-    stream.WriteBytes(reinterpret_cast<const uint8_t *>(&target_count), sizeof(target_count));
-    for (HandleID tid : target_ids)
-    {
-      stream.WriteBytes(reinterpret_cast<const uint8_t *>(&tid), sizeof(tid));
-    }
-  }
-}
-
-/**
- * @brief Unpack an OuroObject's Payload and Edge Roster from any OuroStream.
- */
-inline void UnpackBlueprint(OuroObject &obj, OuroStream &stream)
-{
-  // 1. Deserialize Pure Payload
-  obj.DeserializePayload(stream);
-
-  // 2. Deserialize Edge Roster if stream still has remaining bytes
-  if (stream.HasRemainingBytes())
-  {
-    uint32_t edge_count = 0;
-    stream.ReadBytes(reinterpret_cast<uint8_t *>(&edge_count), sizeof(edge_count));
-    const auto &handles = obj.GetRegisteredHandles();
-
-    for (uint32_t i = 0; i < edge_count; ++i)
-    {
-      std::string slot_name = stream.ReadStringRaw();
-      uint32_t target_count = 0;
-      stream.ReadBytes(reinterpret_cast<uint8_t *>(&target_count), sizeof(target_count));
-
-      std::vector<HandleID> tids(target_count);
-      for (uint32_t j = 0; j < target_count; ++j)
-      {
-        stream.ReadBytes(reinterpret_cast<uint8_t *>(&tids[j]), sizeof(tids[j]));
-      }
-
-      auto it = handles.find(slot_name);
-      if (it != handles.end())
-      {
-        it->second->ReleaseAll();
-        for (HandleID tid : tids)
-        {
-          if (tid != 0)
-          {
-            it->second->AddTarget(tid);
-          }
-        }
-      }
-    }
-  }
 }
 
 /**
@@ -477,7 +282,7 @@ bool Load(const OuroPtr<T> &ptr)
 }
 
 /**
- * @brief 透過 HandleID 直接脫水物件（核心唯一標準脫水實作）
+ * @brief 透過 HandleID 直接脫水物件（由底層 core.dll 跨模組安全執行）
  *
  * 100% In-Flight 記憶體安全保證：
  * 核心永遠只檢查單一條件：root_count 必須為 0！
@@ -488,82 +293,7 @@ bool Load(const OuroPtr<T> &ptr)
  */
 inline bool Dehydrate(HandleID id)
 {
-  if (id == 0)
-  {
-    return false;
-  }
-
-  // 1. In-Flight 安全檢查：嚴格要求 root_count 必須為 0！
-  uint32_t root_count = 0;
-  if (ork_get_root_edge_count(id, &root_count) != ORK_STATUS_OK || root_count > 0)
-  {
-    return false;  // 物件正處於 In-Flight 活躍執行中，安全跳過
-  }
-
-  // 2. RAII 獨佔寫鎖
-  struct DehydrateExclusiveLock
-  {
-    HandleID m_id;
-    explicit DehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
-    {
-      ork_lock_object(m_id);
-    }
-    ~DehydrateExclusiveLock()
-    {
-      ork_unlock_object(m_id);
-    }
-  } lock_guard(id);
-
-  // 在鎖定下雙重檢查 root_count
-  if (ork_get_root_edge_count(id, &root_count) != ORK_STATUS_OK || root_count > 0)
-  {
-    return false;
-  }
-
-  uint8_t state_val = 0;
-  if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
-      static_cast<StorageState>(state_val) == StorageState::Dehydrated)
-  {
-    return true;  // 已經是脫水狀態
-  }
-
-  ::OuroObject *raw_obj = nullptr;
-  if (ork_acquire_object_pointer(id, &raw_obj) != ORK_STATUS_OK || !raw_obj)
-  {
-    return false;
-  }
-
-  OuroObject *obj = reinterpret_cast<OuroObject *>(raw_obj);
-
-  // 3. 若為 UnsavedNew 或 Dirty，自動串流寫入儲存體
-  StorageState current_state = obj->GetStorageState();
-  if (current_state == StorageState::UnsavedNew || current_state == StorageState::Dirty)
-  {
-    auto driver = GetStorageDriver();
-    if (!driver)
-    {
-      return false;
-    }
-    auto stream = driver->CreateWriteStream(id);
-    if (!stream)
-    {
-      return false;
-    }
-    PackBlueprint(*obj, *stream);
-    stream->Commit();
-  }
-
-  // 4. 標記為 Dehydrated 並釋放 Payload 肉體記憶體
-  ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
-  delete obj;
-  ork_bind_object_payload(id, nullptr);
-
-  // 5. 通知自動脫水模組物件已脫水
-  if (auto dehydrator = GetAutoDehydrator())
-  {
-    dehydrator->OnObjectDehydrated(id);
-  }
-  return true;
+  return DehydrateRuntime(id);
 }
 
 /**
@@ -648,8 +378,7 @@ inline bool Dehydrate(OuroPtr<T> &&ptr)
     }
 
     ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
-    delete obj;
-    ork_bind_object_payload(id, nullptr);
+    ork_destroy_payload(id);
 
     // 通知自動脫水模組物件已脫水
     if (auto dehydrator = GetAutoDehydrator())
@@ -677,6 +406,12 @@ template <typename T>
 
 namespace detail
 {
+template <typename T>
+inline void ObjectDeleter(::OuroObject *raw_obj)
+{
+  delete static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
+}
+
 template <typename T>
 inline void RehydratePayload(HandleID id)
 {
@@ -768,18 +503,19 @@ inline void RehydratePayload(HandleID id)
   // 4. Unpack Payload & Edge Roster (Exceptions safely bubble up while shell_guard frees memory)
   UnpackBlueprint(*shell_guard, *stream);
 
-  // 5. Re-bind payload pointer to existing ControlBlock in Registry
-  if (ork_bind_object_payload(id, reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get()))) !=
-      ORK_STATUS_OK)
+  // 5. Re-bind payload pointer and atomic-bind in-place deleter to ControlBlock
+  if (ork_bind_object_payload(id,
+                              reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get())),
+                              &ObjectDeleter<T>) != ORK_STATUS_OK)
   {
     throw std::runtime_error("OuroKore Rehydrate Error: Failed to re-bind payload pointer to ControlBlock.");
   }
 
+  // 註冊自動復水回呼，確保 ControlBlock 隨時處於生命週期受管完備狀態
+  ork_set_rehydrate_fn(id, &RehydrateCallback<T>);
+
   T *released_obj = shell_guard.release();
   released_obj->SetStorageState(StorageState::Clean);
-
-  // Re-register type-specific auto-rehydration callback
-  ork_set_rehydrate_fn(id, &RehydrateCallback<T>);
 
   // 6. 通知自動脫水模組物件已復水
   if (auto dehydrator = GetAutoDehydrator())
@@ -897,15 +633,16 @@ HandleID CreateObjectInternal(Args &&...args)
     throw;
   }
 
-  if (ork_bind_object_payload(reserved_id, reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(obj))) !=
-      ORK_STATUS_OK)
+  if (ork_bind_object_payload(reserved_id,
+                              reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(obj)),
+                              &ObjectDeleter<T>) != ORK_STATUS_OK)
   {
     delete obj;
     ork_unregister_object(reserved_id);
     throw std::runtime_error("OuroKore Error: Failed to bind payload to reserved HandleID.");
   }
 
-  // Register type-specific auto-rehydration callback
+  // 註冊自動復水回呼
   ork_set_rehydrate_fn(reserved_id, &RehydrateCallback<T>);
 
   return reserved_id;
@@ -956,7 +693,7 @@ inline std::future<AsyncResult<T>> SaveAsync(const OuroPtr<T> &ptr)
     throw std::runtime_error("OuroKore SaveAsync Error: Invalid or null OuroPtr.");
   }
 
-  auto pool = detail::GetCoreThreadPoolRef();
+  auto pool = GetCoreThreadPool();
   if (!pool || !pool->is_running())
   {
     throw std::runtime_error("OuroKore SaveAsync Error: Core ThreadPool not initialized or stopped.");
@@ -1006,7 +743,7 @@ inline std::future<AsyncResult<T>> LoadAsync(const OuroPtr<T> &ptr)
     throw std::runtime_error("OuroKore LoadAsync Error: Invalid or null OuroPtr.");
   }
 
-  auto pool = detail::GetCoreThreadPoolRef();
+  auto pool = GetCoreThreadPool();
   if (!pool || !pool->is_running())
   {
     throw std::runtime_error("OuroKore LoadAsync Error: Core ThreadPool not initialized or stopped.");
@@ -1057,7 +794,7 @@ inline std::future<AsyncResult<T>> RehydrateAsync(HandleID id)
     throw std::runtime_error("OuroKore RehydrateAsync Error: Invalid HandleID.");
   }
 
-  auto pool = detail::GetCoreThreadPoolRef();
+  auto pool = GetCoreThreadPool();
   if (!pool || !pool->is_running())
   {
     throw std::runtime_error("OuroKore RehydrateAsync Error: Core ThreadPool not initialized or stopped.");
@@ -1099,7 +836,7 @@ inline std::future<AsyncResult<void>> DehydrateAsync(HandleID id)
     throw std::runtime_error("OuroKore DehydrateAsync Error: Invalid HandleID.");
   }
 
-  auto pool = detail::GetCoreThreadPoolRef();
+  auto pool = GetCoreThreadPool();
   if (!pool || !pool->is_running())
   {
     throw std::runtime_error("OuroKore DehydrateAsync Error: Core ThreadPool not initialized or stopped.");
@@ -1141,7 +878,7 @@ inline std::future<AsyncResult<void>> DehydrateAsync(OuroPtr<T> &&ptr)
     throw std::runtime_error("OuroKore DehydrateAsync Error: Invalid or null OuroPtr.");
   }
 
-  auto pool = detail::GetCoreThreadPoolRef();
+  auto pool = GetCoreThreadPool();
   if (!pool || !pool->is_running())
   {
     throw std::runtime_error("OuroKore DehydrateAsync Error: Core ThreadPool not initialized or stopped.");

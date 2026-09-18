@@ -6,11 +6,8 @@
 #include <thread>
 #include <vector>
 
-#include "ourokore/component/Handles.hpp"
 #include "ourokore/component/OuroCore.hpp"
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
-#include "ourokore/component/OuroObject.hpp"
-#include "ourokore/component/OuroStream.hpp"
 #include "ourokore/component/builtin/BlueprintStream.hpp"
 
 static int g_deconstruct_count = 0;
@@ -506,11 +503,63 @@ void Test6_Stream_Exception_Safety_And_Void_API()
     assert(unpack_truncated_caught);
   }
 
+  // Verify Allocation Bomb & Malformed Stream Defenses in UnpackBlueprint
+  {
+    auto test_target = ork::CreatePermanentObject<ParentCharacter>();
+
+    // 1. Maliciously oversized edge_count (Allocation bomb defense)
+    {
+      ork::BlueprintStream bomb_stream;
+      test_target->SerializePayload(bomb_stream);
+      uint32_t malicious_edge_count = 0x7FFFFFFF;
+      bomb_stream.WriteBytes(reinterpret_cast<const uint8_t *>(&malicious_edge_count), sizeof(malicious_edge_count));
+
+      bool bomb_caught = false;
+      try
+      {
+        ork::UnpackBlueprint(*test_target, bomb_stream);
+      }
+      catch (const ork::OuroCorruptedStreamException &ex)
+      {
+        bomb_caught = true;
+        std::cout << "  Captured expected OuroCorruptedStreamException on edge_count bomb: " << ex.what() << std::endl;
+      }
+      assert(bomb_caught);
+    }
+
+    // 2. Duplicate Slot Name Defense (Duplicate slot Fail-Fast)
+    {
+      ork::BlueprintStream dup_slot_stream;
+      test_target->SerializePayload(dup_slot_stream);
+      uint32_t edge_count = 2;
+      dup_slot_stream.WriteBytes(reinterpret_cast<const uint8_t *>(&edge_count), sizeof(edge_count));
+
+      dup_slot_stream.WriteStringRaw("m_weapon");
+      uint32_t target_count = 0;
+      dup_slot_stream.WriteBytes(reinterpret_cast<const uint8_t *>(&target_count), sizeof(target_count));
+
+      dup_slot_stream.WriteStringRaw("m_weapon");  // Duplicate slot!
+      dup_slot_stream.WriteBytes(reinterpret_cast<const uint8_t *>(&target_count), sizeof(target_count));
+
+      bool dup_slot_caught = false;
+      try
+      {
+        ork::UnpackBlueprint(*test_target, dup_slot_stream);
+      }
+      catch (const ork::OuroDuplicateKeyException &ex)
+      {
+        dup_slot_caught = true;
+        std::cout << "  Captured expected OuroDuplicateKeyException on duplicate slot name: " << ex.what() << std::endl;
+      }
+      assert(dup_slot_caught);
+    }
+  }
+
   // Verify Rehydrate Exception Safety with Corrupted Blueprint Data
   auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
   assert(storage != nullptr);
 
-  auto dummy = ork::CreateObject<PlayerObject>();
+  auto dummy = ork::CreatePermanentObject<PlayerObject>();
   ork::HandleID dummy_id = dummy.GetTargetID();
   dummy->SetName("CorruptedTest");
 
@@ -519,7 +568,7 @@ void Test6_Stream_Exception_Safety_And_Void_API()
   storage->SaveRawBuffer(dummy_id, corrupted_data);
 
   // Releasing payload from registry to simulate rehydration requirement
-  ork_bind_object_payload(dummy_id, nullptr);
+  ork_bind_object_payload(dummy_id, nullptr, nullptr);
   ork_set_storage_state(dummy_id, static_cast<uint8_t>(ork::StorageState::Dehydrated));
 
   bool rehydrate_failed = false;
@@ -989,6 +1038,9 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication()
   std::cout << "[Test 11] Auto-Dehydrator Plugin SPI, Size Tracking & One-Way Host Defense..." << std::endl;
   std::cout.flush();
 
+  // 排空前序並發測試（如 Test 10）殘留之背景延遲銷毀任務，確保名冊狀態精確純淨
+  ork::FlushStorage();
+
   auto mock_dehydrator = std::dynamic_pointer_cast<MockAutoDehydrator>(ork::GetAutoDehydrator());
   assert(mock_dehydrator != nullptr);
 
@@ -1272,6 +1324,8 @@ int main()
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();
+
+    ork::Shutdown();
   }
   catch (const std::exception &ex)
   {

@@ -59,18 +59,20 @@ void test_event_autoreset()
 
   std::atomic<int> woken_count{0};
   std::thread t1([&]() {
-    ev.wait();
-    woken_count.fetch_add(1);
-  });
-
-  std::thread t2([&]() {
-    if (ev.wait_for(std::chrono::milliseconds(50)))
+    if (ev.wait_for(std::chrono::milliseconds(200)))
     {
       woken_count.fetch_add(1);
     }
   });
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  std::thread t2([&]() {
+    if (ev.wait_for(std::chrono::milliseconds(200)))
+    {
+      woken_count.fetch_add(1);
+    }
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
   ev.set();  // AutoReset: 應該只有一個線程被喚醒
 
   t1.join();

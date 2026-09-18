@@ -24,7 +24,7 @@ public:
   /**
    * @brief Registers an OuroObject and creates its ControlBlock.
    */
-  HandleID RegisterObject(OuroObject *obj);
+  HandleID RegisterObject(OuroObject *obj, DestroyFn destroy_fn = nullptr);
 
   /**
    * @brief Reserves a HandleID and creates a ControlBlock with a null payload.
@@ -35,7 +35,7 @@ public:
   /**
    * @brief Binds a constructed object payload to a reserved HandleID.
    */
-  bool BindPayload(HandleID id, OuroObject *obj);
+  bool BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn = nullptr);
 
   /**
    * @brief Forcefully unregisters an object by ID.
@@ -113,6 +113,8 @@ public:
   bool SetStorageState(HandleID target_id, uint8_t state);
   bool MarkDirty(HandleID target_id);
   bool SetRehydrateFn(HandleID target_id, RehydrateFn fn);
+  bool SetDestroyFn(HandleID target_id, DestroyFn fn);
+  bool DestroyPayload(HandleID target_id);
   uint32_t GetRootEdgeCount(HandleID target_id) const;
 
   // Destruction hook

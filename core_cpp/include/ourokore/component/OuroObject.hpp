@@ -27,6 +27,7 @@ class OuroObject
 {
 public:
   virtual ~OuroObject() = default;
+  virtual void DestroySelf() { delete this; }
 
   // 禁止外部直接透過 new 或 new[] 產生物件，必須透過 ork::CreateObject 進行託管建立
   void *operator new(size_t) = delete;

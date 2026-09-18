@@ -5,6 +5,7 @@
 #include "ControlBlock.h"
 #include "CycleCollector.h"
 #include "DeferredDeleteQueue.h"
+#include "RuntimeContext.h"
 #include "ourokore/c_api/core.h"
 #include "ourokore/component/OuroObject.hpp"
 
@@ -46,7 +47,7 @@ HandleID Registry::GenerateUniqueID()
   return id;
 }
 
-HandleID Registry::RegisterObject(OuroObject *obj)
+HandleID Registry::RegisterObject(OuroObject *obj, DestroyFn destroy_fn)
 {
   if (!obj) return 0;
 
@@ -58,7 +59,7 @@ HandleID Registry::RegisterObject(OuroObject *obj)
   }
 
   obj->SetObjectID(id);
-  ControlBlock *cb = new ControlBlock(obj);
+  ControlBlock *cb = new ControlBlock(obj, destroy_fn);
   m_object_map[id] = cb;
   return id;
 }
@@ -77,7 +78,7 @@ HandleID Registry::ReserveID()
   return id;
 }
 
-bool Registry::BindPayload(HandleID id, OuroObject *obj)
+bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn)
 {
   std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
   auto it = m_object_map.find(id);
@@ -89,6 +90,14 @@ bool Registry::BindPayload(HandleID id, OuroObject *obj)
       obj->SetObjectID(id);
     }
     cb->m_payload = obj;
+    if (!obj)
+    {
+      cb->m_destroy_fn = nullptr;
+    }
+    else if (destroy_fn)
+    {
+      cb->m_destroy_fn = destroy_fn;
+    }
     return true;
   }
   return false;
@@ -102,11 +111,7 @@ bool Registry::UnregisterObject(HandleID id)
   {
     ControlBlock *cb = it->second;
     // 取消預留 (Rollback Reservation)：若已有 payload 實體先行釋放
-    if (cb->m_payload)
-    {
-      delete cb->m_payload;
-      cb->m_payload = nullptr;
-    }
+    cb->DeletePayload();
     bool expected = false;
     bool should_notify = cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
     bool destroyed = TryDestroyControlBlockLocked(id, cb);
@@ -534,6 +539,38 @@ bool Registry::SetRehydrateFn(HandleID target_id, RehydrateFn fn)
   return false;
 }
 
+bool Registry::SetDestroyFn(HandleID target_id, DestroyFn fn)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    it->second->m_destroy_fn = fn;
+    return true;
+  }
+  return false;
+}
+
+bool Registry::DestroyPayload(HandleID target_id)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+  }
+  if (cb)
+  {
+    cb->DeletePayload();
+    return true;
+  }
+  return false;
+}
+
 uint32_t Registry::GetRootEdgeCount(HandleID target_id) const
 {
   std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
@@ -568,6 +605,10 @@ HandleID Registry::GetActiveOwner() const
 
 void Registry::NotifyObjectDestroyed(HandleID id)
 {
+  // 1. 底層原生連鎖反應：通知 RuntimeContext 清理藍圖與註銷脫水名冊
+  RuntimeContext::GetInstance().OnObjectDestroyed(id);
+
+  // 2. 外部自定義回呼（若有向後相容設置）
   if (m_object_destroyed_cb)
   {
     m_object_destroyed_cb(id);
@@ -589,10 +630,9 @@ void Registry::Clear()
   for (auto &pair : to_cleanup)
   {
     ControlBlock *cb = pair.second;
-    if (cb && cb->m_payload)
+    if (cb)
     {
-      delete cb->m_payload;
-      cb->m_payload = nullptr;
+      cb->DeletePayload();
     }
   }
 
