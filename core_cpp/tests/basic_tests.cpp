@@ -4,8 +4,7 @@
 #include <thread>
 #include <vector>
 
-#include "ourokore/component/OuroCore.hpp"
-#include "ourokore/c_api/core.h"
+#include "ourokore/host/OuroHost.hpp"
 
 static int g_deconstruct_count = 0;
 
@@ -225,7 +224,9 @@ public:
 int main()
 {
   std::cout << "=== Running OuroKore Basic Tests ===" << std::endl;
-  ork::SetDeferredDeleteMode(true);
+  auto host = ork::Init();
+  assert(host.IsValid());
+  host.SetDeferredDeleteMode(true);
 
   // ==========================================
   // Test 1: Object Creation and Lifecycle

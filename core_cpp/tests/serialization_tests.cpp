@@ -6,7 +6,7 @@
 #include <thread>
 #include <vector>
 
-#include "ourokore/component/OuroCore.hpp"
+#include "ourokore/host/OuroHost.hpp"
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
 #include "ourokore/component/builtin/BlueprintStream.hpp"
 
@@ -255,12 +255,12 @@ void Test2_PurePayload_And_EdgeRoster()
   std::cout << "  Test 2 Passed!\n" << std::endl;
 }
 
-void Test3_SingleObject_Dehydration_Rehydration()
+void Test3_SingleObject_Dehydration_Rehydration(ork::HostContext &host)
 {
   std::cout << "[Test 3] Single Object Dehydration & Rehydration with StorageState..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(host.GetStorageDriver());
   assert(storage != nullptr);
 
   auto parent = ork::CreateObject<ParentCharacter>();
@@ -294,12 +294,12 @@ void Test3_SingleObject_Dehydration_Rehydration()
   std::cout.flush();
 }
 
-void Test4_ParentChild_Dehydration_Rehydration()
+void Test4_ParentChild_Dehydration_Rehydration(ork::HostContext &host)
 {
   std::cout << "[Test 4] Parent-Child Topology Dehydration & Rehydration..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(host.GetStorageDriver());
   assert(storage != nullptr);
 
   std::cout << "  Creating WorldObject..." << std::endl;
@@ -364,12 +364,12 @@ void Test4_ParentChild_Dehydration_Rehydration()
   std::cout.flush();
 }
 
-void Test5_InMemoryStorage_Save_And_Load()
+void Test5_InMemoryStorage_Save_And_Load(ork::HostContext &host)
 {
   std::cout << "[Test 5] Core Global ork::Save & ork::Load (Clean Skip & Sub-Object Edge Lifecycle)..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(host.GetStorageDriver());
   assert(storage != nullptr);
 
   // 1. Single Object Save & Load
@@ -438,7 +438,7 @@ void Test5_InMemoryStorage_Save_And_Load()
   std::cout.flush();
 }
 
-void Test6_Stream_Exception_Safety_And_Void_API()
+void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
 {
   std::cout << "[Test 6] Stream Exception Safety & Void API Verification..." << std::endl;
   std::cout.flush();
@@ -556,7 +556,7 @@ void Test6_Stream_Exception_Safety_And_Void_API()
   }
 
   // Verify Rehydrate Exception Safety with Corrupted Blueprint Data
-  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(host.GetStorageDriver());
   assert(storage != nullptr);
 
   auto dummy = ork::CreatePermanentObject<PlayerObject>();
@@ -1033,23 +1033,37 @@ public:
   }
 };
 
-void Test11_AutoDehydrator_Plugin_And_Core_Communication()
+void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
 {
   std::cout << "[Test 11] Auto-Dehydrator Plugin SPI, Size Tracking & One-Way Host Defense..." << std::endl;
   std::cout.flush();
 
   // 排空前序並發測試（如 Test 10）殘留之背景延遲銷毀任務，確保名冊狀態精確純淨
-  ork::FlushStorage();
+  host.FlushStorage();
 
-  auto mock_dehydrator = std::dynamic_pointer_cast<MockAutoDehydrator>(ork::GetAutoDehydrator());
+  auto mock_dehydrator = std::dynamic_pointer_cast<MockAutoDehydrator>(host.GetAutoDehydrator());
   assert(mock_dehydrator != nullptr);
 
   // 1. Verify One-Way Host Initialization Defense:
-  // Any subsequent call to ork::Init (e.g. from plugin) returns false and is safely ignored
+  // Any subsequent call to ork::Init (e.g. from plugin) returns invalid HostContext!
   auto fake_driver = std::make_shared<ork::InMemoryStorage>();
   auto fake_dehydrator = std::make_shared<MockAutoDehydrator>();
-  assert(ork::Init(fake_driver, fake_dehydrator) == false);  // Rejection verified!
-  assert(ork::GetAutoDehydrator() == mock_dehydrator);       // Existing plugin is protected!
+  auto fake_host = ork::Init(fake_driver, fake_dehydrator);
+  assert(!fake_host);                          // Rejection verified!
+  assert(fake_host.IsValid() == false);
+
+  // 驗證外掛若嘗試調用特權操作，一律被拒絕並拋出例外！
+  bool caught_unauthorized = false;
+  try
+  {
+    fake_host.Shutdown();
+  }
+  catch (const std::runtime_error &)
+  {
+    caught_unauthorized = true;
+  }
+  assert(caught_unauthorized == true);
+  assert(host.GetAutoDehydrator() == mock_dehydrator);  // Existing plugin is protected!
 
   // 2. Named Factory 1: Create managed object in ParentCharacter (m_weapon is managed via CreateObject)
   size_t initial_memory = mock_dehydrator->GetTrackedMemoryBytes();
@@ -1172,12 +1186,12 @@ public:
   }
 };
 
-void Test12_WriteStream_Commit_Rollback_On_Exception()
+void Test12_WriteStream_Commit_Rollback_On_Exception(ork::HostContext &host)
 {
   std::cout << "[Test 12] WriteStream Commit/Rollback & Anti-Corruption on Exception..." << std::endl;
   std::cout.flush();
 
-  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(ork::GetStorageDriver());
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(host.GetStorageDriver());
   assert(storage != nullptr);
 
   // 1. 建立正常物件並成功存檔一次 (Initial good save with data = 100)
@@ -1242,7 +1256,8 @@ void Test12_WriteStream_Commit_Rollback_On_Exception()
   std::cout << "  -> 事務回滾驗證成功，例外發生時絕不損毀舊存檔亦不殘留垃圾！" << std::endl;
 }
 
-void Test13_Object_Deletion_Notification_Under_Weak_References(std::shared_ptr<ork::InMemoryStorage> storage,
+void Test13_Object_Deletion_Notification_Under_Weak_References(ork::HostContext &host,
+                                                              std::shared_ptr<ork::InMemoryStorage> storage,
                                                               std::shared_ptr<MockAutoDehydrator> dehydrator)
 {
   std::cout << "[Test 13] Object Deletion Notification to Dehydrator & Storage Under Weak References..." << std::endl;
@@ -1275,7 +1290,7 @@ void Test13_Object_Deletion_Notification_Under_Weak_References(std::shared_ptr<o
 
   // 等待 DeferredDeleteQueue 與非同步儲存清理任務全部排空
   ork_flush_deferred_deletions();
-  ork::FlushStorage();
+  host.FlushStorage();
 
   // 2. 核心斷言：即使 weak_handle 仍存活，通知必須已經觸發！
   // A. 脫水器名冊已成功移除，且記憶體配額已扣除
@@ -1305,27 +1320,27 @@ int main()
     // Host One-Way Initialization
     auto global_storage = std::make_shared<ork::InMemoryStorage>();
     auto mock_dehydrator = std::make_shared<MockAutoDehydrator>();
-    bool init_ok = ork::Init(global_storage, mock_dehydrator);
-    assert(init_ok == true);
+    auto host = ork::Init(global_storage, mock_dehydrator);
+    assert(host.IsValid());
 
     Test1_BlueprintStream_Basic_And_DupGuard();
     Test2_PurePayload_And_EdgeRoster();
-    Test3_SingleObject_Dehydration_Rehydration();
-    Test4_ParentChild_Dehydration_Rehydration();
-    Test5_InMemoryStorage_Save_And_Load();
-    Test6_Stream_Exception_Safety_And_Void_API();
+    Test3_SingleObject_Dehydration_Rehydration(host);
+    Test4_ParentChild_Dehydration_Rehydration(host);
+    Test5_InMemoryStorage_Save_And_Load(host);
+    Test6_Stream_Exception_Safety_And_Void_API(host);
     Test7_ThirdParty_Custom_Stream_Implementation();
     Test8_Transparent_Auto_Rehydration();
     Test9_InFlight_And_Concurrent_Dehydration_Protection();
     Test10_Concurrent_Rehydration_Thread_Safety();
-    Test11_AutoDehydrator_Plugin_And_Core_Communication();
-    Test12_WriteStream_Commit_Rollback_On_Exception();
-    Test13_Object_Deletion_Notification_Under_Weak_References(global_storage, mock_dehydrator);
+    Test11_AutoDehydrator_Plugin_And_Core_Communication(host);
+    Test12_WriteStream_Commit_Rollback_On_Exception(host);
+    Test13_Object_Deletion_Notification_Under_Weak_References(host, global_storage, mock_dehydrator);
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();
 
-    ork::Shutdown();
+    host.Shutdown();
   }
   catch (const std::exception &ex)
   {

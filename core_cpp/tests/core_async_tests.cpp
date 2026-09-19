@@ -4,7 +4,7 @@
 
 #include "ourokore/component/AsyncResult.hpp"
 #include "ourokore/component/Handles.hpp"
-#include "ourokore/component/OuroCore.hpp"
+#include "ourokore/host/OuroHost.hpp"
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
 
 using namespace ork;
@@ -200,11 +200,11 @@ void test_parallel_batch_operations()
   std::cout << "  -> 多核心批次 SaveBatch 與 LoadBatch 驗證成功！" << std::endl;
 }
 
-void test_async_destruction_and_flush()
+void test_async_destruction_and_flush(ork::HostContext &host)
 {
   std::cout << "[測試 5] 物件銷毀非同步磁碟清理與 FlushStorage 測試..." << std::endl;
 
-  auto storage = GetStorageDriver();
+  auto storage = host.GetStorageDriver();
   assert(storage != nullptr);
 
   HandleID id = 0;
@@ -215,7 +215,7 @@ void test_async_destruction_and_flush()
   }             // ptr 在此作用域結束並被銷毀 (strong_count == 0)
 
   // 呼叫 FlushStorage 等待背景銷毀任務完全落盤
-  FlushStorage();
+  host.FlushStorage();
 
   // 驗證儲存體中的藍圖已被非同步刪除
   auto read_stream = storage->OpenReadStream(id);
@@ -277,16 +277,17 @@ int main()
     std::cout << "=== 開始執行 OuroKore 核心非同步與批次並發測試 ===" << std::endl;
 
     auto storage = std::make_shared<InMemoryStorage>();
-    ork::Init(storage);
+    auto host = ork::Init(storage);
+    assert(host.IsValid());
 
     test_single_async_save_load();
     test_single_async_dehydrate_rehydrate();
     test_failure_handling();
     test_parallel_batch_operations();
-    test_async_destruction_and_flush();
+    test_async_destruction_and_flush(host);
     test_async_result_converting_move();
 
-    ork::Shutdown();
+    host.Shutdown();
 
     std::cout << "=== OuroKore 核心非同步與批次所有測試全部通過！ ===" << std::endl;
     return 0;

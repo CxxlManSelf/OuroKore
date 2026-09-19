@@ -1,37 +1,33 @@
 #include <cassert>
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <thread>
 
-#include "ourokore/component/Handles.hpp"
-#include "ourokore/component/OuroCore.hpp"
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
 #include "ourokore/component/builtin/OuroLRUAutoDehydrator.hpp"
+#include "ourokore/host/OuroHost.hpp"
 
 using namespace ork;
 
 class TestItem : public ork::OuroObject
 {
 public:
-  int m_value{0};
-  std::string m_name;
-
   TestItem() = default;
-  TestItem(int val, std::string name) :
-      m_value(val),
-      m_name(std::move(name))
-  {
-  }
+  TestItem(int id, std::string name) : m_val(id), m_name(std::move(name)) {}
+
+  int m_val{0};
+  std::string m_name;
 
   void SerializePayload(OuroStream &stream) const override
   {
-    stream.WriteProperty("value", m_value);
+    stream.WriteProperty("val", m_val);
     stream.WriteProperty("name", m_name);
   }
 
   void DeserializePayload(OuroStream &stream) override
   {
-    stream.ReadProperty("value", m_value);
+    stream.ReadProperty("val", m_val);
     stream.ReadProperty("name", m_name);
   }
 };
@@ -39,23 +35,22 @@ public:
 class TestContainer : public ork::OuroObject
 {
 public:
+  TestContainer() = default;
   ork::OwningHandle<TestItem> m_item0{"item0"};
   ork::OwningHandle<TestItem> m_item1{"item1"};
   ork::OwningHandle<TestItem> m_item2{"item2"};
   ork::OwningHandle<TestItem> m_item3{"item3"};
 
-  TestContainer() = default;
-
   void SerializePayload(OuroStream &) const override {}
   void DeserializePayload(OuroStream &) override {}
 };
 
-void test_lru_order_and_access()
+void test_lru_order_and_access(ork::HostContext &host)
 {
   std::cout << "[測試 1] LRU 建立、復水熱度更新與淘汰順序測試..." << std::endl;
 
   auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
-  detail::GetAutoDehydratorRef() = dehydrator;
+  host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
 
@@ -121,12 +116,12 @@ void test_lru_order_and_access()
   std::cout << "  -> LRU 淘汰順序完全符合預期（A -> B -> C -> A(Rehydrated)）！" << std::endl;
 }
 
-void test_memory_quota_eviction()
+void test_memory_quota_eviction(ork::HostContext &host)
 {
   std::cout << "[測試 2] 記憶體配額（Memory Quota）約束脫水測試..." << std::endl;
 
   auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
-  detail::GetAutoDehydratorRef() = dehydrator;
+  host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
   root->m_item0 = CreateObject<TestItem>(1, "QuotaA");
@@ -139,13 +134,13 @@ void test_memory_quota_eviction()
 
   // 設定配額為 2 個物件的大小：應觸發脫水直到記憶體 <= 2 個物件大小
   dehydrator->SetMemoryLimit(single_size * 2);
-
   auto report = dehydrator->TriggerDehydration();
+
   assert(report.dehydrated_count == 2);
   assert(report.freed_bytes == single_size * 2);
   assert(dehydrator->GetTrackedMemoryBytes() == single_size * 2);
 
-  // 再次觸發脫水：因為未超標，脫水數量應為 0
+  // 再次檢查是否符合配額：不應再脫水任何物件
   report = dehydrator->TriggerDehydration();
   assert(report.dehydrated_count == 0);
   assert(report.freed_bytes == 0);
@@ -154,12 +149,12 @@ void test_memory_quota_eviction()
   std::cout << "  -> 記憶體配額控制完全符合預期！" << std::endl;
 }
 
-void test_in_flight_protection()
+void test_in_flight_protection(ork::HostContext &host)
 {
   std::cout << "[測試 3] In-Flight 活躍物件安全保護測試..." << std::endl;
 
   auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
-  detail::GetAutoDehydratorRef() = dehydrator;
+  host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
   // 先建立 hot_item（在串列尾端/較冷），後建立 cold_item（在串列頭端/較熱）
@@ -192,12 +187,12 @@ void test_in_flight_protection()
   std::cout << "  -> In-Flight 活躍物件安全略過驗證成功！" << std::endl;
 }
 
-void test_background_thread_and_stop()
+void test_background_thread_and_stop(ork::HostContext &host)
 {
   std::cout << "[測試 4] 背景定時排程與即時停止（Stop）測試..." << std::endl;
 
   auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
-  detail::GetAutoDehydratorRef() = dehydrator;
+  host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
   root->m_item0 = CreateObject<TestItem>(100, "BackgroundTest");
@@ -226,12 +221,12 @@ void test_background_thread_and_stop()
   std::cout << "  -> 背景排程運作正常，且 Stop() 在 " << elapsed_stop.count() << " ms 內極速退出！" << std::endl;
 }
 
-void test_failed_dehydration_requeue()
+void test_failed_dehydration_requeue(ork::HostContext &host)
 {
   std::cout << "[測試 5] 脫水失敗物件重排（防止隊頭阻塞 Head-of-Line Blocking）測試..." << std::endl;
 
   auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
-  detail::GetAutoDehydratorRef() = dehydrator;
+  host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
   root->m_item0 = CreateObject<TestItem>(1, "BusyTailItem");
@@ -271,12 +266,12 @@ void test_failed_dehydration_requeue()
   std::cout << "  -> 脫水失敗重排機制驗證成功，完美防止隊頭阻塞（Head-of-Line Blocking）！" << std::endl;
 }
 
-void test_target_driven_dehydration_and_report()
+void test_target_driven_dehydration_and_report(ork::HostContext &host)
 {
   std::cout << "[測試 6] 需求目標驅動（Target-driven）與成效回報（DehydrationReport）精準測試..." << std::endl;
 
   auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
-  detail::GetAutoDehydratorRef() = dehydrator;
+  host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
   root->m_item0 = CreateObject<TestItem>(1, "TargetA");
@@ -327,17 +322,18 @@ int main()
 
     auto storage = std::make_shared<InMemoryStorage>();
     auto initial_dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
-    ork::Init(storage, initial_dehydrator);
+    auto host = ork::Init(storage, initial_dehydrator);
+    assert(host.IsValid());
 
-    test_lru_order_and_access();
-    test_memory_quota_eviction();
-    test_in_flight_protection();
-    test_background_thread_and_stop();
-    test_failed_dehydration_requeue();
-    test_target_driven_dehydration_and_report();
+    test_lru_order_and_access(host);
+    test_memory_quota_eviction(host);
+    test_in_flight_protection(host);
+    test_background_thread_and_stop(host);
+    test_failed_dehydration_requeue(host);
+    test_target_driven_dehydration_and_report(host);
 
     std::cout << "=== OuroLRUAutoDehydrator 所有測試全部通過！ ===" << std::endl;
-    ork::Shutdown();
+    host.Shutdown();
     return 0;
   }
   catch (const std::exception &e)

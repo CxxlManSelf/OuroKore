@@ -23,3 +23,9 @@ target_link_libraries(core_async_tests ourokore_core ourokore_base)
 add_executable(cycle_collector_tests cycle_collector_tests.cpp)
 target_link_libraries(cycle_collector_tests ourokore_core ourokore_base)
 
+add_executable(boundary_tests boundary_tests.cpp)
+target_link_libraries(boundary_tests ourokore_core ourokore_base)
+
+add_executable(plugin_isolation_tests plugin_isolation_tests.cpp)
+target_link_libraries(plugin_isolation_tests ourokore_core ourokore_base)
+

@@ -5,8 +5,6 @@
 #include <mutex>
 
 #include "ourokore/base/ThreadPool.hpp"
-#include "ourokore/c_api/component_api.h"
-#include "ourokore/c_api/core.h"
 #include "ourokore/component/IAutoDehydrator.hpp"
 #include "ourokore/component/IStorageDriver.hpp"
 

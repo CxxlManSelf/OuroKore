@@ -1,61 +1,78 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 
-#include "ourokore/base/ThreadPool.hpp"
 #include "ourokore/c_api/core.h"
-#include "ourokore/component/IAutoDehydrator.hpp"
-#include "ourokore/component/IStorageDriver.hpp"
+#include "ourokore/component/OuroStream.hpp"
 
-namespace ork
+struct OuroObject;
+
+namespace ork::detail
 {
 
 /**
- * @brief Initialize OuroKore Core Runtime with persistent storage driver, dehydrator, and thread pool.
- * Exported from ourokore_core.dll (Single Process-Wide Instance).
+ * @brief 在核心儲存驅動上建立寫入串流（不洩漏 IStorageDriver 實體給外掛）
  */
-ORK_API bool InitializeRuntime(std::shared_ptr<IStorageDriver> driver,
-                               std::shared_ptr<IAutoDehydrator> auto_dehydrator = nullptr,
-                               std::shared_ptr<ork::base::FixedThreadPool> thread_pool = nullptr);
+ORK_API std::unique_ptr<OuroStream> CreateRuntimeWriteStream(HandleID id);
 
 /**
- * @brief Gracefully terminate runtime context, thread pools, and cyclic collector.
+ * @brief 在核心儲存驅動上開啟讀取串流（不洩漏 IStorageDriver 實體給外掛）
  */
-ORK_API void ShutdownRuntime();
+ORK_API std::unique_ptr<OuroStream> OpenRuntimeReadStream(HandleID id);
 
 /**
- * @brief Synchronously flush deferred deletions and storage worker queue.
+ * @brief 將任務安全提交至核心背景執行緒池（不洩漏 FixedThreadPool 物件給外掛）
  */
-ORK_API void FlushStorageRuntime();
+ORK_API void SubmitRuntimeTask(std::function<void()> task);
 
 /**
- * @brief Get the process-wide storage driver instance.
+ * @brief 當 OOM 時由核心內部觸發緊急脫水救援（不洩漏 IAutoDehydrator 給外掛）
  */
-ORK_API std::shared_ptr<IStorageDriver> GetRuntimeStorageDriver();
+ORK_API bool TriggerRuntimeRescue(size_t bytes_needed);
 
 /**
- * @brief Get the process-wide auto-dehydrator instance.
+ * @brief 通知核心自動脫水器登記新物件（不洩漏 IAutoDehydrator 給外掛）
  */
-ORK_API std::shared_ptr<IAutoDehydrator> GetRuntimeAutoDehydrator();
+ORK_API void NotifyRuntimeObjectRegistered(HandleID id, size_t size_bytes);
 
 /**
- * @brief Get the process-wide core thread pool instance.
+ * @brief 通知核心自動脫水器物件已脫水
  */
-ORK_API std::shared_ptr<ork::base::FixedThreadPool> GetRuntimeThreadPool();
+ORK_API void NotifyRuntimeObjectDehydrated(HandleID id);
 
 /**
- * @brief Set the process-wide auto-dehydrator instance.
+ * @brief 通知核心自動脫水器物件已復水
  */
-ORK_API void SetRuntimeAutoDehydrator(std::shared_ptr<IAutoDehydrator> dehydrator);
-
-/**
- * @brief Set the process-wide storage driver instance.
- */
-ORK_API void SetRuntimeStorageDriver(std::shared_ptr<IStorageDriver> driver);
+ORK_API void NotifyRuntimeObjectRehydrated(HandleID id);
 
 /**
  * @brief Generic dehydration by HandleID performed natively inside ourokore_core.dll.
  */
 ORK_API bool DehydrateRuntime(HandleID id);
 
-}  // namespace ork
+/**
+ * @brief 在核心預留 HandleID 並建立初始 ControlBlock（物件兩階段建構）
+ */
+ORK_API HandleID ReserveRuntimeObjectID();
+
+/**
+ * @brief 將客戶端建構之物件與 deleter/rehydrator 安全綁定至 ControlBlock
+ */
+ORK_API bool BindRuntimeObjectPayload(HandleID id,
+                                      ::OuroObject* payload,
+                                      void (*destroy_fn)(::OuroObject*),
+                                      ::OuroObject* (*rehydrate_fn)(HandleID));
+
+/**
+ * @brief 取消預留並復位 ControlBlock（建構失敗異常回滾專用）
+ */
+ORK_API void RollbackRuntimeObjectID(HandleID id);
+
+/**
+ * @brief 標記物件的 ControlBlock 儲存狀態為 Clean
+ */
+ORK_API void MarkRuntimeObjectClean(HandleID id);
+
+}  // namespace ork::detail
+

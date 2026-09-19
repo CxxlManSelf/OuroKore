@@ -52,14 +52,6 @@ public:
   }
 
   /**
-   * @brief Set storage lifecycle state in ControlBlock.
-   */
-  void SetStorageState(StorageState state)
-  {
-    ork_set_storage_state(m_object_id, static_cast<uint8_t>(state));
-  }
-
-  /**
    * @brief Mark object as Dirty in ControlBlock if currently Clean.
    */
   void MarkDirty()

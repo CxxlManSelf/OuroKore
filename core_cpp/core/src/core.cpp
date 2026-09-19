@@ -2,12 +2,14 @@
 
 #include "ourokore/c_api/core.h"
 #include "ourokore/c_api/component_api.h"
+#include "ourokore/c_api/host_api.h"
 
 #include "CycleCollector.h"
 #include "DeferredDeleteQueue.h"
 #include "Registry.h"
 #include "RuntimeContext.h"
 #include "ourokore/component/RuntimeAPI.hpp"
+#include "ourokore/host/HostRuntimeAPI.hpp"
 
 namespace
 {
@@ -713,7 +715,7 @@ extern "C"
 
 }  // extern "C"
 
-namespace ork
+namespace ork::detail
 {
 
 bool InitializeRuntime(std::shared_ptr<IStorageDriver> driver,
@@ -760,12 +762,102 @@ void SetRuntimeStorageDriver(std::shared_ptr<IStorageDriver> driver)
   RuntimeContext::GetInstance().SetStorageDriver(std::move(driver));
 }
 
+std::unique_ptr<OuroStream> CreateRuntimeWriteStream(HandleID id)
+{
+  auto driver = RuntimeContext::GetInstance().GetStorageDriver();
+  if (!driver)
+  {
+    return nullptr;
+  }
+  return driver->CreateWriteStream(id);
+}
+
+std::unique_ptr<OuroStream> OpenRuntimeReadStream(HandleID id)
+{
+  auto driver = RuntimeContext::GetInstance().GetStorageDriver();
+  if (!driver)
+  {
+    return nullptr;
+  }
+  return driver->OpenReadStream(id);
+}
+
+void SubmitRuntimeTask(std::function<void()> task)
+{
+  auto pool = RuntimeContext::GetInstance().GetThreadPool();
+  if (!pool || !pool->is_running())
+  {
+    throw std::runtime_error("OuroKore Error: Core ThreadPool not initialized or stopped.");
+  }
+  pool->submit(std::move(task));
+}
+
+bool TriggerRuntimeRescue(size_t bytes_needed)
+{
+  auto report = RuntimeContext::GetInstance().TriggerDehydrationRescue(bytes_needed);
+  if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed))
+  {
+    return false;
+  }
+  return true;
+}
+
+void NotifyRuntimeObjectRegistered(HandleID id, size_t size_bytes)
+{
+  RuntimeContext::GetInstance().NotifyObjectRegistered(id, size_bytes);
+}
+
+void NotifyRuntimeObjectDehydrated(HandleID id)
+{
+  RuntimeContext::GetInstance().NotifyObjectDehydrated(id);
+}
+
+void NotifyRuntimeObjectRehydrated(HandleID id)
+{
+  RuntimeContext::GetInstance().NotifyObjectRehydrated(id);
+}
+
 bool DehydrateRuntime(HandleID id)
 {
   return RuntimeContext::GetInstance().Dehydrate(id);
 }
 
-}  // namespace ork
+HandleID ReserveRuntimeObjectID()
+{
+  HandleID reserved_id = 0;
+  if (ork_reserve_object_id(&reserved_id) != ORK_STATUS_OK)
+  {
+    throw std::runtime_error("OuroKore Error: Failed to reserve HandleID from Registry.");
+  }
+  return reserved_id;
+}
+
+bool BindRuntimeObjectPayload(HandleID id,
+                              ::OuroObject* payload,
+                              void (*destroy_fn)(::OuroObject*),
+                              ::OuroObject* (*rehydrate_fn)(HandleID))
+{
+  if (ork_bind_object_payload(id,
+                              payload,
+                              reinterpret_cast<ork_destroy_fn_t>(destroy_fn)) != ORK_STATUS_OK)
+  {
+    return false;
+  }
+  ork_set_rehydrate_fn(id, reinterpret_cast<ork_rehydrate_fn_t>(rehydrate_fn));
+  return true;
+}
+
+void RollbackRuntimeObjectID(HandleID id)
+{
+  ork_unregister_object(id);
+}
+
+void MarkRuntimeObjectClean(HandleID id)
+{
+  ork_set_storage_state(id, 1);  // 1 = StorageState::Clean
+}
+
+}  // namespace ork::detail
 
 
 
