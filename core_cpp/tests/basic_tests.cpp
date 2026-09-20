@@ -261,9 +261,7 @@ int main()
 
       // Object must STILL be alive because child_guard holds an active root edge!
       assert(g_deconstruct_count == 0);
-      int32_t alive = 0;
-      ork_check_alive(child_id, &alive, 0);
-      assert(alive == 1);
+      assert(ork::IsAlive(child_id));
     }
     // child_guard and parent out of scope -> object now deconstructed
     assert(g_deconstruct_count == 2);
@@ -287,9 +285,7 @@ int main()
 
     // Retrieve owner roster from registry to verify A owns B
     // (For testing purposes, we can query it through Registry.h directly)
-    int32_t alive = 0;
-    ork_check_alive(child_id, &alive, 0);
-    assert(alive == 1);
+    assert(ork::IsAlive(child_id));
   }
   // Both Parent and Child should be deconstructed when parent OuroPtr dies
   assert(g_deconstruct_count == 2);
@@ -556,9 +552,7 @@ int main()
     assert(parent2->m_child1.GetTargetID() == 0);
 
     // 4. 驗證 childB 依然存活，且其 Owner Roster 被 Registry 正確更新為僅有 parent1_id
-    int32_t alive = 0;
-    ork_check_alive(childB_id, &alive, 0);
-    assert(alive == 1);
+    assert(ork::IsAlive(childB_id));
   }
   // parent1 & parent2 析構，childB 釋放。總析構數為：childA + parent1 + parent2 + childB = 4。
   assert(g_deconstruct_count == 4);
@@ -581,9 +575,7 @@ int main()
     assert(child_id != 0);
     assert(parent->m_child.GetOwnerID() == parent_id);
 
-    int32_t alive = 0;
-    ork_check_alive(child_id, &alive, 0);
-    assert(alive == 1);
+    assert(ork::IsAlive(child_id));
   }
   // Parent and Child deconstructed
   assert(g_deconstruct_count == 2);
@@ -619,9 +611,7 @@ int main()
     // child OuroPtr goes out of scope, but parent still owns it
     assert(g_deconstruct_count == 0);
 
-    int32_t alive = 0;
-    ork_check_alive(child_id, &alive, 0);
-    assert(alive == 1);
+    assert(ork::IsAlive(child_id));
   }
   assert(g_deconstruct_count == 2);
   std::cout << "Test 12 Passed." << std::endl;
@@ -713,13 +703,9 @@ int main()
     // child1 失去所有 Owner 引用，觸發即時析構
     assert(g_deconstruct_count == 1);
 
-    int32_t alive1 = 0, alive2 = 0, alive3 = 0;
-    ork_check_alive(child1_id, &alive1, 0);
-    ork_check_alive(child2_id, &alive2, 0);
-    ork_check_alive(child3_id, &alive3, 0);
-    assert(alive1 == 0);
-    assert(alive2 == 1);
-    assert(alive3 == 1);
+    assert(!ork::IsAlive(child1_id));
+    assert(ork::IsAlive(child2_id));
+    assert(ork::IsAlive(child3_id));
 
     // 測試 OwningContainerHandle 跨宿主 Move Assignment 邊緣轉移
     {
@@ -730,10 +716,8 @@ int main()
       assert(parent2->GetChildrenCount() == 2);
 
       // 驗證移轉後 child2 與 child3 依然活著（在 parent2 名下）
-      ork_check_alive(child2_id, &alive2, 0);
-      ork_check_alive(child3_id, &alive3, 0);
-      assert(alive2 == 1);
-      assert(alive3 == 1);
+      assert(ork::IsAlive(child2_id));
+      assert(ork::IsAlive(child3_id));
     }
     // parent2 出作用域，釋放移轉過來的 child2, child3 以及 parent2 本身 (+3)
     assert(g_deconstruct_count == 4);
@@ -808,9 +792,7 @@ int main()
   g_deconstruct_count = 0;
   {
     auto get_root_count = [](HandleID id) {
-      uint32_t count = 0;
-      ork_get_root_edge_count(id, &count);
-      return count;
+      return ork::GetRootEdgeCount(id);
     };
 
     auto obj = ork::CreateObject<SimpleObject>();
@@ -941,11 +923,8 @@ int main()
       parent1.Release();
       assert(g_deconstruct_count == 0);
 
-      int32_t alive1 = 0, alive2 = 0;
-      ork_check_alive(child1_id, &alive1, 0);
-      ork_check_alive(child2_id, &alive2, 0);
-      assert(alive1 == 1);
-      assert(alive2 == 1);
+      assert(ork::IsAlive(child1_id));
+      assert(ork::IsAlive(child2_id));
 
       // 5. parent2 析構釋放，此時 child1 與 child2 失去唯一擁有者，應隨 parent2 同步銷毀
       parent2.Release();

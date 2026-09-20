@@ -158,6 +158,48 @@ inline bool Dehydrate(OuroPtr<T> &&ptr)
   return Dehydrate(id);
 }
 
+/**
+ * @brief 查詢指定 HandleID 之物件是否依然存活 (strong_count > 0)
+ * @param id 目標物件 HandleID
+ * @return 存活傳回 true，已死亡或不存在傳回 false
+ */
+inline bool IsAlive(HandleID id)
+{
+  int32_t alive = 0;
+  if (ork_check_alive(id, &alive, 0) == ORK_STATUS_OK)
+  {
+    return alive != 0;
+  }
+  return false;
+}
+
+/**
+ * @brief 查詢指定 HandleID 之物件儲存/脫水狀態 (Clean / Dirty / Dehydrated)
+ * @param id 目標物件 HandleID
+ * @return 物件當前 StorageState
+ */
+inline StorageState GetStorageState(HandleID id)
+{
+  uint8_t state = 0;
+  if (ork_get_storage_state(id, &state) == ORK_STATUS_OK)
+  {
+    return static_cast<StorageState>(state);
+  }
+  return StorageState::Clean;
+}
+
+/**
+ * @brief 查詢指定 HandleID 當前被活躍 OuroPtr 持有之根邊緣數量
+ * @param id 目標物件 HandleID
+ * @return 活躍根邊緣計數
+ */
+inline uint32_t GetRootEdgeCount(HandleID id)
+{
+  uint32_t count = 0;
+  ork_get_root_edge_count(id, &count);
+  return count;
+}
+
 
 /**
  * @brief 向後相容別名

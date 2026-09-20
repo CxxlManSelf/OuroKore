@@ -2,7 +2,6 @@
 
 #include "ourokore/c_api/core.h"
 #include "ourokore/c_api/component_api.h"  // IWYU pragma: export
-#include "ourokore/c_api/internal_api.h"   // IWYU pragma: export
 
 #ifdef __cplusplus
 extern "C" {
@@ -76,6 +75,25 @@ typedef void (*ork_object_destroyed_fn_t)(HandleID id);
  * @brief 設定核心全域物件銷毀監聽回呼
  */
 ORK_API int32_t ORK_CALL ork_set_object_destroyed_callback(ork_object_destroyed_fn_t fn);
+
+/**
+ * @brief 觸發全域緊急脫水救援以釋放記憶體（Host 專用記憶體調度）
+ * @param bytes_needed 欲騰出的記憶體字節數
+ * @param out_freed_bytes 輸出實際釋放的字節數
+ * @param out_has_more 輸出是否仍有其他可脫水候選物件 (1: 有, 0: 無)
+ * @return ORK_STATUS_OK 成功，或錯誤碼
+ */
+ORK_API int32_t ORK_CALL ork_trigger_dehydration_rescue(size_t bytes_needed, size_t* out_freed_bytes, int32_t* out_has_more);
+
+/**
+ * @brief 白盒測試專用：手動設置特定物件之儲存狀態 (StorageState)
+ */
+ORK_API int32_t ORK_CALL ork_set_storage_state_for_testing(HandleID target_id, uint8_t state);
+
+/**
+ * @brief 白盒測試專用：清空特定物件之記憶體 Payload（模擬脫水後記憶體卸載狀態）
+ */
+ORK_API int32_t ORK_CALL ork_clear_object_payload_for_testing(HandleID target_id);
 
 #ifdef __cplusplus
 }

@@ -8,7 +8,7 @@
 #include "ourokore/c_api/host_api.h"
 #include "ourokore/component/IAutoDehydrator.hpp"
 #include "ourokore/component/IStorageDriver.hpp"
-#include "ourokore/component/RuntimeAPI.hpp"
+#include "ourokore/component/Types.hpp"
 #include "ourokore/host/HostRuntimeAPI.hpp"
 
 namespace ork
@@ -184,6 +184,70 @@ public:
   {
     CheckOwner();
     return detail::GetRuntimeThreadPool();
+  }
+
+  /**
+   * @brief 設定核心全域物件銷毀監聽回呼（主程式常駐監控，杜絕插件懸空回呼）
+   */
+  void SetObjectDestroyedCallback(void (*callback)(HandleID id))
+  {
+    CheckOwner();
+    ork_set_object_destroyed_callback(callback);
+  }
+
+  /**
+   * @brief 取得目前排隊等待物理銷毀之任務數量（Host 監控與效能調度）
+   */
+  uint64_t GetDeferredDeletePendingCount() const
+  {
+    CheckOwner();
+    return ork_get_deferred_delete_pending_count();
+  }
+
+  /**
+   * @brief 復位核心初始化狀態（支援軟重啟與測試套件切換）
+   */
+  void Reset()
+  {
+    CheckOwner();
+    ork_reset_core_state();
+    m_is_owner = false;
+  }
+
+  /**
+   * @brief 觸發全域緊急脫水救援以釋放記憶體（Host 專用記憶體調度）
+   * @param bytes_needed 欲騰出的記憶體字節數
+   * @return 實際釋放的字節數
+   */
+  size_t TriggerDehydrationRescue(size_t bytes_needed)
+  {
+    CheckOwner();
+    size_t freed = 0;
+    int32_t has_more = 0;
+    ork_trigger_dehydration_rescue(bytes_needed, &freed, &has_more);
+    return freed;
+  }
+
+  // =========================================================================
+  // --- 白盒測試與故障模擬專用方法 (White-Box Testing & Fault Simulation) ---
+  // =========================================================================
+
+  /**
+   * @brief 白盒測試專用：手動設置特定物件之儲存狀態 (StorageState)
+   */
+  void SetStorageState(HandleID id, StorageState state)
+  {
+    CheckOwner();
+    ork_set_storage_state_for_testing(id, static_cast<uint8_t>(state));
+  }
+
+  /**
+   * @brief 白盒測試專用：清空特定物件之記憶體 Payload（模擬脫水後記憶體卸載狀態）
+   */
+  void ClearObjectPayloadForTesting(HandleID id)
+  {
+    CheckOwner();
+    ork_clear_object_payload_for_testing(id);
   }
 
 private:

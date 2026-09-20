@@ -114,9 +114,7 @@ void test_single_async_dehydrate_rehydrate()
   assert(res_deh.id == child_id);
   assert(res_deh.error.empty());
 
-  uint8_t state = 0;
-  ork_get_storage_state(child_id, &state);
-  assert(static_cast<StorageState>(state) == StorageState::Dehydrated);
+  assert(GetStorageState(child_id) == StorageState::Dehydrated);
 
   // 2. 非同步復水
   auto fut_reh = RehydrateAsync<AsyncTestEntity>(child_id);

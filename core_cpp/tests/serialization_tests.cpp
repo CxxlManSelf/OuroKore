@@ -276,9 +276,7 @@ void Test3_SingleObject_Dehydration_Rehydration(ork::HostContext &host)
   assert(storage->Contains(original_id));
 
   // Verify ControlBlock retains StorageState::Dehydrated even after payload memory is freed!
-  uint8_t state_val = 0;
-  ork_get_storage_state(original_id, &state_val);
-  assert(static_cast<ork::StorageState>(state_val) == ork::StorageState::Dehydrated);
+  assert(ork::GetStorageState(original_id) == ork::StorageState::Dehydrated);
 
   // Rehydrate: reload payload and re-bind to same HandleID!
   auto rehydrated_weapon = ork::Rehydrate<WeaponObject>(original_id);
@@ -426,7 +424,7 @@ void Test5_InMemoryStorage_Save_And_Load(ork::HostContext &host)
 
   // Explicitly release sword, causing sword strong count to drop to 0 and get deleted from Registry
   char_a->m_weapon.Release();
-  ork_flush_deferred_deletions();
+  host.FlushDeferredDeletions();
 
   // Load char_a from storage: char_a blueprint has sword_id, but sword is dead in Registry
   assert(ork::Load(char_a) == true);
@@ -568,8 +566,8 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
   storage->SaveRawBuffer(dummy_id, corrupted_data);
 
   // Releasing payload from registry to simulate rehydration requirement
-  ork_bind_object_payload(dummy_id, nullptr, nullptr);
-  ork_set_storage_state(dummy_id, static_cast<uint8_t>(ork::StorageState::Dehydrated));
+  host.ClearObjectPayloadForTesting(dummy_id);
+  host.SetStorageState(dummy_id, ork::StorageState::Dehydrated);
 
   bool rehydrate_failed = false;
   try
@@ -713,9 +711,7 @@ void Test8_Transparent_Auto_Rehydration()
     assert(!weapon);  // Original pointer is reset and cannot be used anymore
 
     // Verify storage state is Dehydrated
-    uint8_t state = 0;
-    ork_get_storage_state(weapon_id, &state);
-    assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
+    assert(ork::GetStorageState(weapon_id) == ork::StorageState::Dehydrated);
 
     // Client accesses weapon via parent handle -> triggers transparent auto-rehydration!
     auto auto_weapon = parent->m_weapon.LockAndAcquire();
@@ -723,8 +719,7 @@ void Test8_Transparent_Auto_Rehydration()
     assert(auto_weapon->GetDamage() == 350);
 
     // StorageState should automatically be Clean now while alive
-    ork_get_storage_state(weapon_id, &state);
-    assert(static_cast<ork::StorageState>(state) == ork::StorageState::Clean);
+    assert(ork::GetStorageState(weapon_id) == ork::StorageState::Clean);
   }
 
   // 2. Parent-Child Hierarchy Transparent Auto-Rehydration
@@ -742,17 +737,14 @@ void Test8_Transparent_Auto_Rehydration()
     ork::Dehydrate(std::move(weapon));
     assert(!weapon);
 
-    uint8_t w_state = 0;
-    ork_get_storage_state(weapon_id, &w_state);
-    assert(static_cast<ork::StorageState>(w_state) == ork::StorageState::Dehydrated);
+    assert(ork::GetStorageState(weapon_id) == ork::StorageState::Dehydrated);
 
     // Access weapon through parent's handle -> Auto Rehydrate Weapon!
     auto auto_weapon = root->m_weapon.LockAndAcquire();
     assert(static_cast<bool>(auto_weapon));
     assert(auto_weapon->GetDamage() == 888);
 
-    ork_get_storage_state(weapon_id, &w_state);
-    assert(static_cast<ork::StorageState>(w_state) == ork::StorageState::Clean);
+    assert(ork::GetStorageState(weapon_id) == ork::StorageState::Clean);
   }
 
   // 3. Concurrent Multi-Thread Auto-Rehydration Safety Test
@@ -819,9 +811,7 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
     assert(dehydrate_res2 == true);
     assert(!weapon1);  // weapon1 is now consumed and cannot be used anymore
 
-    uint8_t state = 0;
-    ork_get_storage_state(wid, &state);
-    assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
+    assert(ork::GetStorageState(wid) == ork::StorageState::Dehydrated);
 
     // Auto-rehydrate on access via parent handle
     auto reloaded = parent->m_weapon.LockAndAcquire();
@@ -862,9 +852,7 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
     assert(!weapon);
 
     // Verify state is Dehydrated
-    uint8_t state = 0;
-    ork_get_storage_state(wid, &state);
-    assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
+    assert(ork::GetStorageState(wid) == ork::StorageState::Dehydrated);
 
     // Subsequent access auto-rehydrates seamlessly
     auto reloaded = parent->m_weapon.LockAndAcquire();
@@ -889,9 +877,7 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
   ork::Dehydrate(std::move(weapon));
   assert(!weapon);
 
-  uint8_t state = 0;
-  ork_get_storage_state(wid, &state);
-  assert(static_cast<ork::StorageState>(state) == ork::StorageState::Dehydrated);
+  assert(ork::GetStorageState(wid) == ork::StorageState::Dehydrated);
 
   // Spawn 8 concurrent threads all attempting to Rehydrate the SAME HandleID simultaneously
   const int thread_count = 8;
@@ -929,8 +915,7 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
   {
     auto final_ptr = ork::Rehydrate<WeaponObject>(wid);
     assert(final_ptr->GetDamage() == 777);
-    ork_get_storage_state(wid, &state);
-    assert(static_cast<ork::StorageState>(state) == ork::StorageState::Clean);
+    assert(ork::GetStorageState(wid) == ork::StorageState::Clean);
   }
 
   std::cout << "  Test 10 Passed!\n" << std::endl;
@@ -1100,18 +1085,12 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
   assert(after_dehydrate_mem == before_dehydrate_mem - sizeof(WeaponObject));
 
   // Verify managed weapon is dehydrated in core
-  uint8_t state_weapon = 0;
-  ork_get_storage_state(managed_weapon_id, &state_weapon);
-  assert(static_cast<ork::StorageState>(state_weapon) == ork::StorageState::Dehydrated);
+  assert(ork::GetStorageState(managed_weapon_id) == ork::StorageState::Dehydrated);
 
   // Verify parent is still alive (in-flight) and permanent object is NOT in dehydrator
-  uint8_t state_parent = 0;
-  ork_get_storage_state(parent_id, &state_parent);
-  assert(static_cast<ork::StorageState>(state_parent) != ork::StorageState::Dehydrated);
+  assert(ork::GetStorageState(parent_id) != ork::StorageState::Dehydrated);
 
-  uint8_t state_perm = 0;
-  ork_get_storage_state(permanent_id, &state_perm);
-  assert(static_cast<ork::StorageState>(state_perm) != ork::StorageState::Dehydrated);
+  assert(ork::GetStorageState(permanent_id) != ork::StorageState::Dehydrated);
 
   // 5. Auto-rehydration test for managed weapon when accessed via parent -> OnObjectRehydrated notification
   size_t rehydrate_notify_before = mock_dehydrator->m_rehydrate_notify_count.load();
@@ -1289,7 +1268,7 @@ void Test13_Object_Deletion_Notification_Under_Weak_References(ork::HostContext 
   }
 
   // 等待 DeferredDeleteQueue 與非同步儲存清理任務全部排空
-  ork_flush_deferred_deletions();
+  host.FlushDeferredDeletions();
   host.FlushStorage();
 
   // 2. 核心斷言：即使 weak_handle 仍存活，通知必須已經觸發！
@@ -1305,7 +1284,7 @@ void Test13_Object_Deletion_Notification_Under_Weak_References(ork::HostContext 
 
   // 3. 弱引用亦釋放，驗證墓碑正常銷毀
   weak_handle.Release();
-  ork_flush_deferred_deletions();
+  host.FlushDeferredDeletions();
 
   std::cout << "  -> 弱引用存活情境下之邏輯銷毀通知（Dehydrator 與 Storage 清理）驗證成功！\n" << std::endl;
 }

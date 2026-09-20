@@ -3,6 +3,7 @@
 #include "ourokore/c_api/core.h"
 #include "ourokore/c_api/component_api.h"
 #include "ourokore/c_api/host_api.h"
+#include "internal_api.h"
 
 #include "CycleCollector.h"
 #include "DeferredDeleteQueue.h"
@@ -711,6 +712,16 @@ extern "C"
       *out_has_more = 0;
       return ORK_STATUS_ERROR_EXCEPTION;
     }
+  }
+
+  int32_t ORK_CALL ork_set_storage_state_for_testing(HandleID target_id, uint8_t state)
+  {
+    return ork_set_storage_state(target_id, state);
+  }
+
+  int32_t ORK_CALL ork_clear_object_payload_for_testing(HandleID target_id)
+  {
+    return ork_bind_object_payload(target_id, nullptr, nullptr);
   }
 
 }  // extern "C"

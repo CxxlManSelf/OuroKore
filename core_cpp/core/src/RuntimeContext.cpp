@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "ourokore/c_api/host_api.h"
+#include "internal_api.h"
 #include "ourokore/component/BlueprintPackaging.hpp"
 #include "ourokore/component/builtin/NoOpAutoDehydrator.hpp"
 
