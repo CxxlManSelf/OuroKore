@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #include "ourokore/c_api/core.h"
 #include "ourokore/c_api/component_api.h"  // IWYU pragma: export
 
@@ -46,15 +48,6 @@ ORK_API int32_t ORK_CALL ork_stop_cycle_collector(void);
  */
 ORK_API int32_t ORK_CALL ork_stop_deferred_deletions(void);
 
-/**
- * @brief 優雅終止核心背景執行緒池（包含 CycleCollector 與 DeferredDeleteQueue）
- */
-ORK_API int32_t ORK_CALL ork_shutdown_core(void);
-
-/**
- * @brief 復位核心初始化旗標（支援測試重用）
- */
-ORK_API int32_t ORK_CALL ork_reset_core_state(void);
 
 /**
  * @brief 等待並排空所有背景落盤與儲存清理任務

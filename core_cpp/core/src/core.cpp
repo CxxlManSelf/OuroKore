@@ -466,34 +466,6 @@ extern "C"
     }
   }
 
-  int32_t ORK_CALL ork_shutdown_core(void)
-  {
-    // 直接調用完整版的核心復位函式，確保背景執行緒終止、名冊清空與狀態復位一次到位
-    return ork_reset_core_state();
-  }
-
-  int32_t ORK_CALL ork_reset_core_state(void)
-  {
-    try
-    {
-      std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
-
-      // 1. 若執行時環境仍處於運作中，優先在生命週期鎖保護下執行優雅終止與排空
-      if (ork::RuntimeContext::GetInstance().IsInitialized())
-      {
-        ork::RuntimeContext::GetInstance().Shutdown();
-      }
-
-      // 2. 底層所有狀態與註冊表白紙化復位
-      ResetCoreStateLocked();
-
-      return ORK_STATUS_OK;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
 
   int32_t ORK_CALL ork_dehydrate_object(HandleID id, int32_t *out_success)
   {
@@ -772,13 +744,22 @@ bool InitializeRuntime(std::shared_ptr<IStorageDriver> driver,
   {
     return false;
   }
+  // 1. 先初始化基礎設施上下文（儲存驅動、脫水器、執行緒池）
+  if (!RuntimeContext::GetInstance().Initialize(std::move(driver),
+                                                std::move(auto_dehydrator),
+                                                std::move(thread_pool)))
+  {
+    return false;
+  }
+
+  // 2. 基礎設施就緒後，再安全啟動背景排程服務
   ork::CycleCollector::GetInstance().Start();
   ork::DeferredDeleteQueue::GetInstance().Start();
+
+  // 3. 一切就緒後，最後才原子發布已初始化旗標
   g_core_initialized.store(true, std::memory_order_release);
 
-  return RuntimeContext::GetInstance().Initialize(std::move(driver),
-                                                  std::move(auto_dehydrator),
-                                                  std::move(thread_pool));
+  return true;
 }
 
 std::shared_ptr<IStorageDriver> GetRuntimeStorageDriver()
