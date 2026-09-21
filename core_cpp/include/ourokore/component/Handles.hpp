@@ -39,6 +39,30 @@ inline OuroObject *GetActiveObject()
 {
   return g_active_object_stack.empty() ? nullptr : g_active_object_stack.back();
 }
+
+/**
+ * @brief RAII Guard for Thread-Local Active Object Construction Stack.
+ * Ensures the active object stack is safely restored to its initial depth
+ * upon scope exit, preventing leaks on either success or constructor exceptions.
+ */
+class ActiveObjectGuard
+{
+public:
+  ActiveObjectGuard() : m_initial_depth(g_active_object_stack.size()) {}
+  ~ActiveObjectGuard() noexcept
+  {
+    while (g_active_object_stack.size() > m_initial_depth)
+    {
+      PopActiveObject();
+    }
+  }
+
+  ActiveObjectGuard(const ActiveObjectGuard &) = delete;
+  ActiveObjectGuard &operator=(const ActiveObjectGuard &) = delete;
+
+private:
+  size_t m_initial_depth = 0;
+};
 }  // namespace detail
 
 // Inline implementation of OuroObject constructor for ActiveObject tracking
@@ -69,7 +93,7 @@ public:
     ork_set_active_owner(new_owner);
   }
 
-  ~ActiveOwnerGuard()
+  ~ActiveOwnerGuard() noexcept
   {
     ork_set_active_owner(m_backup_owner);
   }
@@ -119,7 +143,7 @@ public:
   {
   }
 
-  ~OuroPtr()
+  ~OuroPtr() noexcept
   {
     Release();
   }
@@ -176,7 +200,7 @@ public:
     }
   }
 
-  T *operator->() const
+  T *get() const noexcept
   {
     if (m_target_id == 0) return nullptr;
     ::OuroObject *raw_obj = nullptr;
@@ -185,6 +209,11 @@ public:
       return static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
     }
     return nullptr;
+  }
+
+  T *operator->() const noexcept
+  {
+    return get();
   }
 
   T &operator*() const
@@ -231,7 +260,7 @@ public:
     }
   }
 
-  virtual ~OwningContainerHandle()
+  virtual ~OwningContainerHandle() noexcept
   {
     ReleaseAll();
   }
@@ -492,6 +521,8 @@ public:
   {
   }
 
+  virtual ~OwningHandle() noexcept = default;
+
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
   OwningHandle(std::string slot_name, const OuroPtr<U> &ptr) :
       OwningContainerHandle(std::move(slot_name))
@@ -702,7 +733,7 @@ public:
     }
   }
 
-  ~WeakHandle()
+  ~WeakHandle() noexcept
   {
     Release();
   }

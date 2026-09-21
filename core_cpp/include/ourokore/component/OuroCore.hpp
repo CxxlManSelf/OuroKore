@@ -45,7 +45,7 @@ bool Save(const OuroPtr<T> &ptr)
   }
 
   HandleID id = ptr.GetTargetID();
-  T *obj = ptr.operator->();
+  T *obj = ptr.get();
   if (!obj)
   {
     throw std::runtime_error("OuroKore Save Error: Cannot access payload.");
@@ -89,7 +89,7 @@ bool Load(const OuroPtr<T> &ptr)
   }
 
   HandleID id = ptr.GetTargetID();
-  T *obj = ptr.operator->();
+  T *obj = ptr.get();
   if (!obj)
   {
     throw std::runtime_error("OuroKore Load Error: Cannot access payload.");
@@ -281,12 +281,11 @@ inline void RehydratePayload(HandleID id)
   T *empty_shell = nullptr;
   try
   {
+    detail::ActiveObjectGuard obj_guard;
     empty_shell = ::new (mem) T();
-    detail::PopActiveObject();
   }
   catch (...)
   {
-    detail::PopActiveObject();
     ::operator delete(mem);
     throw;
   }
@@ -397,12 +396,11 @@ HandleID CreateObjectInternal(Args &&...args)
   T *obj = nullptr;
   try
   {
+    detail::ActiveObjectGuard obj_guard;
     obj = ::new (mem) T(std::forward<Args>(args)...);
-    detail::PopActiveObject();
   }
   catch (...)
   {
-    detail::PopActiveObject();
     ::operator delete(mem);
     detail::RollbackRuntimeObjectID(reserved_id);
     throw;
