@@ -124,17 +124,15 @@ void RuntimeContext::Shutdown()
     }
   }
 
-  // 6. 確認所有執行緒徹底終止後，才安全重置靜態指標以防退出期懸掛
+  // 6. 確認所有執行緒徹底終止後，才安全重置靜態指標與初始化狀態
   {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_thread_pool = nullptr;
     m_storage_driver = nullptr;
     m_auto_dehydrator = nullptr;
     m_is_core_owned_pool = false;
+    m_is_initialized.store(false, std::memory_order_release);
   }
-
-  // 7. 復位底層初始化狀態，支援同進程多次重新初始化
-  ork_reset_core_state();
 
   m_is_shutdown_running.store(false, std::memory_order_release);
 }

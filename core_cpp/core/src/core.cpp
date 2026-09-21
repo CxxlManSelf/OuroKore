@@ -14,20 +14,44 @@
 
 namespace
 {
+std::mutex g_lifecycle_mutex;
 std::atomic<bool> g_core_initialized{false};
+
+void ResetCoreStateLocked()
+{
+  // 1. 解除全域銷毀回呼，防止殘留回呼指向已卸載函式
+  ork_set_object_destroyed_callback(nullptr);
+
+  // 2. 防禦性確保所有背景工作執行緒皆已終止（若已停止則為安全 No-Op）
+  ork::CycleCollector::GetInstance().Stop();
+  ork::DeferredDeleteQueue::GetInstance().Stop();
+
+  // 3. 復位延遲銷毀隊列配置（還原為預設非同步模式）
+  ork::DeferredDeleteQueue::GetInstance().SetSyncMode(false);
+
+  // 4. 徹底清空註冊表殘留物件與墓碑，還原為白紙狀態（兩階段無鎖置換防死鎖）
+  ork::Registry::GetInstance().Clear();
+
+  // 5. 重置全域執行時上下文
+  ork::RuntimeContext::GetInstance().Reset();
+
+  // 6. 原子復位核心初始化旗標，保證跨執行緒完全可見
+  g_core_initialized.store(false, std::memory_order_seq_cst);
+}
 }
 
 extern "C"
 {
   int32_t ORK_CALL ork_try_initialize_core(void)
   {
-    bool expected = false;
-    if (!g_core_initialized.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+    if (g_core_initialized.load(std::memory_order_acquire))
     {
       return ORK_STATUS_ERROR_ALREADY_EXISTS;
     }
     ork::CycleCollector::GetInstance().Start();
     ork::DeferredDeleteQueue::GetInstance().Start();
+    g_core_initialized.store(true, std::memory_order_release);
     return ORK_STATUS_OK;
   }
 
@@ -586,32 +610,16 @@ extern "C"
   {
     try
     {
-      // 1. 防禦性收斂：若執行時環境仍在運作且尚未執行關閉，優先觸發完整優雅終止與排空
-      if (ork::RuntimeContext::GetInstance().IsInitialized() &&
-          !ork::RuntimeContext::GetInstance().IsShutdownRunning())
+      std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+
+      // 1. 若執行時環境仍處於運作中，優先在生命週期鎖保護下執行優雅終止與排空
+      if (ork::RuntimeContext::GetInstance().IsInitialized())
       {
         ork::RuntimeContext::GetInstance().Shutdown();
-        return ORK_STATUS_OK;
       }
 
-      // 2. 解除全域銷毀回呼，防止殘留回呼指向已卸載函式
-      ork_set_object_destroyed_callback(nullptr);
-
-      // 3. 防禦性確保所有背景工作執行緒皆已終止（若已停止則為安全 No-Op）
-      ork::CycleCollector::GetInstance().Stop();
-      ork::DeferredDeleteQueue::GetInstance().Stop();
-
-      // 4. 復位延遲銷毀隊列配置（還原為預設非同步模式）
-      ork::DeferredDeleteQueue::GetInstance().SetSyncMode(false);
-
-      // 5. 徹底清空註冊表殘留物件與墓碑，還原為白紙狀態（兩階段無鎖置換防死鎖）
-      ork::Registry::GetInstance().Clear();
-
-      // 6. 重置全域執行時上下文
-      ork::RuntimeContext::GetInstance().Reset();
-
-      // 7. 原子復位核心初始化旗標，保證跨執行緒完全可見
-      g_core_initialized.store(false, std::memory_order_seq_cst);
+      // 2. 底層所有狀態與註冊表白紙化復位
+      ResetCoreStateLocked();
 
       return ORK_STATUS_OK;
     }
@@ -656,7 +664,17 @@ extern "C"
   {
     try
     {
-      ork::RuntimeContext::GetInstance().Shutdown();
+      std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+
+      // 1. 若執行時環境仍處於運作中，在生命週期鎖保護下執行優雅終止與排空
+      if (ork::RuntimeContext::GetInstance().IsInitialized())
+      {
+        ork::RuntimeContext::GetInstance().Shutdown();
+      }
+
+      // 2. 自動執行白紙化復位，確保核心乾淨關閉並支援同進程後續重新初始化
+      ResetCoreStateLocked();
+
       return ORK_STATUS_OK;
     }
     catch (...)

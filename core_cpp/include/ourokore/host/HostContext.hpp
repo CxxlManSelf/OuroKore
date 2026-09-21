@@ -231,7 +231,6 @@ public:
     catch (...)
     {
     }
-    ork_reset_core_state();
     m_is_owner = false;
   }
 
