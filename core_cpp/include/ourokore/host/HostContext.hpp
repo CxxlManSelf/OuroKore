@@ -33,11 +33,18 @@ public:
   // 僅供 ork::Init() 內部建構，外部不可隨意自行偽造主控權限
   explicit HostContext(bool is_owner = false) noexcept : m_is_owner(is_owner) {}
 
-  ~HostContext()
+  ~HostContext() noexcept
   {
     if (m_is_owner)
     {
-      Shutdown();
+      try
+      {
+        Shutdown();
+      }
+      catch (...)
+      {
+        // 吸收所有例外，防範解構期間例外逃逸引發 std::terminate()
+      }
     }
   }
 
@@ -57,7 +64,14 @@ public:
     {
       if (m_is_owner)
       {
-        Shutdown();
+        try
+        {
+          Shutdown();
+        }
+        catch (...)
+        {
+          // 吸收所有例外，防範移動賦值期間例外逃逸違反 noexcept 保證
+        }
       }
       m_is_owner = other.m_is_owner;
       other.m_is_owner = false;
@@ -101,7 +115,7 @@ public:
   void Shutdown()
   {
     CheckOwner();
-    detail::ShutdownRuntime();
+    ork_shutdown_runtime();
     m_is_owner = false;
   }
 
@@ -111,7 +125,7 @@ public:
   void FlushStorage()
   {
     CheckOwner();
-    detail::FlushStorageRuntime();
+    ork_flush_storage();
   }
 
   /**
@@ -210,6 +224,13 @@ public:
   void Reset()
   {
     CheckOwner();
+    try
+    {
+      Shutdown();
+    }
+    catch (...)
+    {
+    }
     ork_reset_core_state();
     m_is_owner = false;
   }

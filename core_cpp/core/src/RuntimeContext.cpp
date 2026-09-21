@@ -268,6 +268,11 @@ bool RuntimeContext::IsInitialized() const
   return m_is_initialized.load(std::memory_order_acquire);
 }
 
+bool RuntimeContext::IsShutdownRunning() const
+{
+  return m_is_shutdown_running.load(std::memory_order_acquire);
+}
+
 void RuntimeContext::SetAutoDehydrator(std::shared_ptr<IAutoDehydrator> dehydrator)
 {
   std::lock_guard<std::mutex> lock(m_mutex);

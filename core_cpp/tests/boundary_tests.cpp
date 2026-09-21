@@ -100,6 +100,30 @@ int main()
   assert(moved_host.IsValid() == false);
   std::cout << "  -> 優雅終止成功完成。" << std::endl;
 
+  // 8. 驗證 HostContext::Reset() 與核心重新初始化（軟重啟）
+  {
+    auto restart_storage = std::make_shared<ork::InMemoryStorage>();
+    ork::HostContext host2 = ork::Init(restart_storage);
+    assert(host2.IsValid() == true);
+    auto item2 = ork::CreateObject<PluginItem>();
+    item2->value = 777;
+    assert(ork::Save(item2) == true);
+
+    // 執行 Reset，驗證能優雅收斂並重置白紙狀態
+    host2.Reset();
+    assert(host2.IsValid() == false);
+
+    // 驗證 Reset 後舊物件受 CheckOwner 保護
+    test_unauthorized([&]() { host2.FlushStorage(); }, "FlushStorage on Reset HostContext");
+
+    // 驗證 Reset 後可順利再次 Init
+    auto restart_storage2 = std::make_shared<ork::InMemoryStorage>();
+    ork::HostContext host3 = ork::Init(restart_storage2);
+    assert(host3.IsValid() == true);
+    host3.Shutdown();
+    std::cout << "  -> HostContext::Reset() 與軟重啟再次初始化驗證通過。" << std::endl;
+  }
+
   std::cout << "=== 所有邊界隔離與特權防禦測試全部順利通過！ ===" << std::endl;
   return 0;
 }

@@ -42,6 +42,7 @@ public:
   void SetStorageDriver(std::shared_ptr<IStorageDriver> driver);
 
   bool IsInitialized() const;
+  bool IsShutdownRunning() const;
 
   void NotifyObjectRegistered(HandleID id, size_t size_bytes);
   void NotifyObjectDehydrated(HandleID id);

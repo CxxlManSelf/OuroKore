@@ -4,6 +4,7 @@
 
 #include "ourokore/base/ThreadPool.hpp"
 #include "ourokore/c_api/core.h"
+#include "ourokore/c_api/host_api.h"
 #include "ourokore/component/IAutoDehydrator.hpp"
 #include "ourokore/component/IStorageDriver.hpp"
 
@@ -21,12 +22,18 @@ ORK_API bool InitializeRuntime(std::shared_ptr<IStorageDriver> driver,
 /**
  * @brief Gracefully terminate runtime context, thread pools, and cyclic collector.
  */
-ORK_API void ShutdownRuntime();
+inline void ShutdownRuntime()
+{
+  ork_shutdown_runtime();
+}
 
 /**
  * @brief Synchronously flush deferred deletions and storage worker queue.
  */
-ORK_API void FlushStorageRuntime();
+inline void FlushStorageRuntime()
+{
+  ork_flush_storage();
+}
 
 /**
  * @brief Set the process-wide auto-dehydrator instance.

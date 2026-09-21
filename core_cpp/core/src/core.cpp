@@ -586,20 +586,31 @@ extern "C"
   {
     try
     {
-      // 1. 防禦性確保所有背景工作執行緒皆已終止（若已停止則為安全 No-Op）
+      // 1. 防禦性收斂：若執行時環境仍在運作且尚未執行關閉，優先觸發完整優雅終止與排空
+      if (ork::RuntimeContext::GetInstance().IsInitialized() &&
+          !ork::RuntimeContext::GetInstance().IsShutdownRunning())
+      {
+        ork::RuntimeContext::GetInstance().Shutdown();
+        return ORK_STATUS_OK;
+      }
+
+      // 2. 解除全域銷毀回呼，防止殘留回呼指向已卸載函式
+      ork_set_object_destroyed_callback(nullptr);
+
+      // 3. 防禦性確保所有背景工作執行緒皆已終止（若已停止則為安全 No-Op）
       ork::CycleCollector::GetInstance().Stop();
       ork::DeferredDeleteQueue::GetInstance().Stop();
 
-      // 2. 復位延遲銷毀隊列配置（還原為預設非同步模式）
+      // 4. 復位延遲銷毀隊列配置（還原為預設非同步模式）
       ork::DeferredDeleteQueue::GetInstance().SetSyncMode(false);
 
-      // 3. 徹底清空註冊表殘留物件與墓碑，還原為白紙狀態（兩階段無鎖置換防死鎖）
+      // 5. 徹底清空註冊表殘留物件與墓碑，還原為白紙狀態（兩階段無鎖置換防死鎖）
       ork::Registry::GetInstance().Clear();
 
-      // 4. 重置全域執行時上下文
+      // 6. 重置全域執行時上下文
       ork::RuntimeContext::GetInstance().Reset();
 
-      // 5. 原子復位核心初始化旗標，保證跨執行緒完全可見
+      // 7. 原子復位核心初始化旗標，保證跨執行緒完全可見
       g_core_initialized.store(false, std::memory_order_seq_cst);
 
       return ORK_STATUS_OK;
@@ -736,16 +747,6 @@ bool InitializeRuntime(std::shared_ptr<IStorageDriver> driver,
   return RuntimeContext::GetInstance().Initialize(std::move(driver),
                                                   std::move(auto_dehydrator),
                                                   std::move(thread_pool));
-}
-
-void ShutdownRuntime()
-{
-  RuntimeContext::GetInstance().Shutdown();
-}
-
-void FlushStorageRuntime()
-{
-  RuntimeContext::GetInstance().FlushStorage();
 }
 
 std::shared_ptr<IStorageDriver> GetRuntimeStorageDriver()
