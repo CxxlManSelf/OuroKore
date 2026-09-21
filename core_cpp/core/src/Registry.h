@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <random>
 #include <shared_mutex>
 #include <string>
@@ -121,7 +122,7 @@ public:
   using ObjectDestroyedFn = void (*)(HandleID id);
   void SetObjectDestroyedCallback(ObjectDestroyedFn fn)
   {
-    m_object_destroyed_cb = fn;
+    m_object_destroyed_cb.store(fn, std::memory_order_release);
   }
 
   /**
@@ -160,7 +161,7 @@ private:
   std::unordered_map<HandleID, ControlBlock *> m_object_map;
 
   // Global destruction callback
-  ObjectDestroyedFn m_object_destroyed_cb{nullptr};
+  std::atomic<ObjectDestroyedFn> m_object_destroyed_cb{nullptr};
 
   // Persistent ID maps (reserved for future rehydration)
   mutable std::shared_mutex m_persistent_mutex;

@@ -608,10 +608,11 @@ void Registry::NotifyObjectDestroyed(HandleID id)
   // 1. 底層原生連鎖反應：通知 RuntimeContext 清理藍圖與註銷脫水名冊
   RuntimeContext::GetInstance().OnObjectDestroyed(id);
 
-  // 2. 外部自定義回呼（若有向後相容設置）
-  if (m_object_destroyed_cb)
+  // 2. 外部自定義回呼（原子快照讀取，杜絕 TOCTOU 空指標呼叫與 Data Race）
+  auto cb = m_object_destroyed_cb.load(std::memory_order_acquire);
+  if (cb)
   {
-    m_object_destroyed_cb(id);
+    cb(id);
   }
 }
 
@@ -622,7 +623,7 @@ void Registry::Clear()
     std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
     // 1. 在獨佔鎖內極速換出整張名冊，並清空銷毀回呼
     to_cleanup.swap(m_object_map);
-    m_object_destroyed_cb = nullptr;
+    m_object_destroyed_cb.store(nullptr, std::memory_order_release);
   }
 
   // 2. 第一階段：在無鎖狀態下，先釋放所有殘留的 payload 實體
