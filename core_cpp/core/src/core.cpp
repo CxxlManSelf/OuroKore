@@ -762,6 +762,15 @@ bool InitializeRuntime(std::shared_ptr<IStorageDriver> driver,
                        std::shared_ptr<IAutoDehydrator> auto_dehydrator,
                        std::shared_ptr<ork::base::FixedThreadPool> thread_pool)
 {
+  std::lock_guard<std::mutex> lock(g_lifecycle_mutex);
+  if (g_core_initialized.load(std::memory_order_acquire))
+  {
+    return false;
+  }
+  ork::CycleCollector::GetInstance().Start();
+  ork::DeferredDeleteQueue::GetInstance().Start();
+  g_core_initialized.store(true, std::memory_order_release);
+
   return RuntimeContext::GetInstance().Initialize(std::move(driver),
                                                   std::move(auto_dehydrator),
                                                   std::move(thread_pool));

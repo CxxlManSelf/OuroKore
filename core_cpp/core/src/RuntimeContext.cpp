@@ -26,9 +26,6 @@ bool RuntimeContext::Initialize(std::shared_ptr<IStorageDriver> driver,
     return false;  // 單向不可變防線已鎖定，拒絕後續任何外掛重複初始化！
   }
 
-  // 確保底層 C API 循環回收與延遲隊列啟動
-  ork_try_initialize_core();
-
   m_storage_driver = std::move(driver);
 
   if (auto_dehydrator)
