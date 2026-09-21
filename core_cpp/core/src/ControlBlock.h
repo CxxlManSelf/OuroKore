@@ -60,13 +60,11 @@ struct ControlBlock
   void DeletePayload()
   {
     OuroObject *to_delete = m_payload.exchange(nullptr, std::memory_order_acq_rel);
-    DestroyFn destroy_fn = m_destroy_fn;
-    m_destroy_fn = nullptr;
     if (to_delete)
     {
-      if (destroy_fn)
+      if (m_destroy_fn)
       {
-        destroy_fn(to_delete);
+        m_destroy_fn(to_delete);
       }
       else
       {

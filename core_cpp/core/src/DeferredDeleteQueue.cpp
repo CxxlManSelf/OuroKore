@@ -119,7 +119,7 @@ void DeferredDeleteQueue::ProcessItem(HandleID id)
       }
       else
       {
-        delete to_delete;
+        to_delete->DestroySelf();
       }
     }
 
