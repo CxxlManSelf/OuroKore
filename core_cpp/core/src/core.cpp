@@ -732,7 +732,7 @@ extern "C"
 
   int32_t ORK_CALL ork_clear_object_payload_for_testing(HandleID target_id)
   {
-    return ork_bind_object_payload(target_id, nullptr, nullptr);
+    return ork_destroy_payload(target_id);
   }
 
 }  // extern "C"
