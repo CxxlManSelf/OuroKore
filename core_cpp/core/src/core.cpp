@@ -73,64 +73,6 @@ extern "C"
     }
   }
 
-  int32_t ORK_CALL ork_reserve_object_id(HandleID *out_id)
-  {
-    if (!out_id)
-    {
-      return ORK_STATUS_ERROR_INVALID_ARG;
-    }
-    try
-    {
-      *out_id = ork::Registry::GetInstance().ReserveID();
-      return ORK_STATUS_OK;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
-  int32_t ORK_CALL ork_bind_object_payload(HandleID id, OuroObject *obj, ork_destroy_fn_t destroy_fn)
-  {
-    if (id == ORK_ROOT_ID)
-    {
-      return ORK_STATUS_ERROR_INVALID_ARG;
-    }
-    try
-    {
-      if (ork::Registry::GetInstance().BindPayload(id, reinterpret_cast<ork::OuroObject *>(obj),
-                                                   reinterpret_cast<ork::DestroyFn>(destroy_fn)))
-      {
-        return ORK_STATUS_OK;
-      }
-      return ORK_STATUS_ERROR_NOT_FOUND;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
-  int32_t ORK_CALL ork_unregister_object(HandleID id)
-  {
-    if (id == ORK_ROOT_ID)
-    {
-      return ORK_STATUS_ERROR_INVALID_ARG;
-    }
-    try
-    {
-      if (ork::Registry::GetInstance().UnregisterObject(id))
-      {
-        return ORK_STATUS_OK;
-      }
-      return ORK_STATUS_ERROR_NOT_FOUND;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
   int32_t ORK_CALL ork_register_edge(HandleID owner_id, HandleID target_id)
   {
     if (target_id == ORK_ROOT_ID)
@@ -408,87 +350,11 @@ extern "C"
     }
   }
 
-  int32_t ORK_CALL ork_set_storage_state(HandleID target_id, uint8_t state)
-  {
-    try
-    {
-      if (ork::Registry::GetInstance().SetStorageState(target_id, state))
-      {
-        return ORK_STATUS_OK;
-      }
-      return ORK_STATUS_ERROR_NOT_FOUND;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
   int32_t ORK_CALL ork_mark_dirty(HandleID target_id)
   {
     try
     {
       if (ork::Registry::GetInstance().MarkDirty(target_id))
-      {
-        return ORK_STATUS_OK;
-      }
-      return ORK_STATUS_ERROR_NOT_FOUND;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
-  int32_t ORK_CALL ork_set_rehydrate_fn(HandleID target_id, ork_rehydrate_fn_t fn)
-  {
-    if (target_id == ORK_ROOT_ID)
-    {
-      return ORK_STATUS_ERROR_INVALID_ARG;
-    }
-    try
-    {
-      if (ork::Registry::GetInstance().SetRehydrateFn(target_id, reinterpret_cast<ork::RehydrateFn>(fn)))
-      {
-        return ORK_STATUS_OK;
-      }
-      return ORK_STATUS_ERROR_NOT_FOUND;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
-  int32_t ORK_CALL ork_set_destroy_fn(HandleID target_id, ork_destroy_fn_t fn)
-  {
-    if (target_id == ORK_ROOT_ID)
-    {
-      return ORK_STATUS_ERROR_INVALID_ARG;
-    }
-    try
-    {
-      if (ork::Registry::GetInstance().SetDestroyFn(target_id, reinterpret_cast<ork::DestroyFn>(fn)))
-      {
-        return ORK_STATUS_OK;
-      }
-      return ORK_STATUS_ERROR_NOT_FOUND;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
-  int32_t ORK_CALL ork_destroy_payload(HandleID target_id)
-  {
-    if (target_id == ORK_ROOT_ID)
-    {
-      return ORK_STATUS_ERROR_INVALID_ARG;
-    }
-    try
-    {
-      if (ork::Registry::GetInstance().DestroyPayload(target_id))
       {
         return ORK_STATUS_OK;
       }
@@ -683,45 +549,6 @@ extern "C"
     }
   }
 
-  int32_t ORK_CALL ork_notify_object_registered(HandleID id, size_t size_bytes)
-  {
-    try
-    {
-      ork::RuntimeContext::GetInstance().NotifyObjectRegistered(id, size_bytes);
-      return ORK_STATUS_OK;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
-  int32_t ORK_CALL ork_notify_object_dehydrated(HandleID id)
-  {
-    try
-    {
-      ork::RuntimeContext::GetInstance().NotifyObjectDehydrated(id);
-      return ORK_STATUS_OK;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
-  int32_t ORK_CALL ork_notify_object_rehydrated(HandleID id)
-  {
-    try
-    {
-      ork::RuntimeContext::GetInstance().NotifyObjectRehydrated(id);
-      return ORK_STATUS_OK;
-    }
-    catch (...)
-    {
-      return ORK_STATUS_ERROR_EXCEPTION;
-    }
-  }
-
   int32_t ORK_CALL ork_trigger_dehydration_rescue(size_t bytes_needed, size_t *out_freed_bytes, int32_t *out_has_more)
   {
     if (!out_freed_bytes || !out_has_more)
@@ -745,15 +572,193 @@ extern "C"
 
   int32_t ORK_CALL ork_set_storage_state_for_testing(HandleID target_id, uint8_t state)
   {
-    return ork_set_storage_state(target_id, state);
+    return ork::internal::SetStorageState(target_id, state);
   }
 
   int32_t ORK_CALL ork_clear_object_payload_for_testing(HandleID target_id)
   {
-    return ork_destroy_payload(target_id);
+    return ork::internal::DestroyPayload(target_id);
   }
 
 }  // extern "C"
+
+namespace ork::internal
+{
+
+int32_t ReserveObjectId(HandleID *out_id)
+{
+  if (!out_id)
+  {
+    return ORK_STATUS_ERROR_INVALID_ARG;
+  }
+  try
+  {
+    *out_id = ork::Registry::GetInstance().ReserveID();
+    return ORK_STATUS_OK;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t BindObjectPayload(HandleID id, ::OuroObject *obj, ork_destroy_fn_t destroy_fn)
+{
+  if (id == ORK_ROOT_ID)
+  {
+    return ORK_STATUS_ERROR_INVALID_ARG;
+  }
+  try
+  {
+    if (ork::Registry::GetInstance().BindPayload(id, reinterpret_cast<ork::OuroObject *>(obj),
+                                                 reinterpret_cast<ork::DestroyFn>(destroy_fn)))
+    {
+      return ORK_STATUS_OK;
+    }
+    return ORK_STATUS_ERROR_NOT_FOUND;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t UnregisterObject(HandleID id)
+{
+  if (id == ORK_ROOT_ID)
+  {
+    return ORK_STATUS_ERROR_INVALID_ARG;
+  }
+  try
+  {
+    if (ork::Registry::GetInstance().UnregisterObject(id))
+    {
+      return ORK_STATUS_OK;
+    }
+    return ORK_STATUS_ERROR_NOT_FOUND;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t SetStorageState(HandleID target_id, uint8_t state)
+{
+  try
+  {
+    if (ork::Registry::GetInstance().SetStorageState(target_id, state))
+    {
+      return ORK_STATUS_OK;
+    }
+    return ORK_STATUS_ERROR_NOT_FOUND;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t SetRehydrateFn(HandleID target_id, ork_rehydrate_fn_t fn)
+{
+  if (target_id == ORK_ROOT_ID)
+  {
+    return ORK_STATUS_ERROR_INVALID_ARG;
+  }
+  try
+  {
+    if (ork::Registry::GetInstance().SetRehydrateFn(target_id, reinterpret_cast<ork::RehydrateFn>(fn)))
+    {
+      return ORK_STATUS_OK;
+    }
+    return ORK_STATUS_ERROR_NOT_FOUND;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t SetDestroyFn(HandleID target_id, ork_destroy_fn_t fn)
+{
+  if (target_id == ORK_ROOT_ID)
+  {
+    return ORK_STATUS_ERROR_INVALID_ARG;
+  }
+  try
+  {
+    if (ork::Registry::GetInstance().SetDestroyFn(target_id, reinterpret_cast<ork::DestroyFn>(fn)))
+    {
+      return ORK_STATUS_OK;
+    }
+    return ORK_STATUS_ERROR_NOT_FOUND;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t DestroyPayload(HandleID target_id)
+{
+  if (target_id == ORK_ROOT_ID)
+  {
+    return ORK_STATUS_ERROR_INVALID_ARG;
+  }
+  try
+  {
+    if (ork::Registry::GetInstance().DestroyPayload(target_id))
+    {
+      return ORK_STATUS_OK;
+    }
+    return ORK_STATUS_ERROR_NOT_FOUND;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t NotifyObjectRegistered(HandleID id, size_t size_bytes)
+{
+  try
+  {
+    ork::RuntimeContext::GetInstance().NotifyObjectRegistered(id, size_bytes);
+    return ORK_STATUS_OK;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t NotifyObjectDehydrated(HandleID id)
+{
+  try
+  {
+    ork::RuntimeContext::GetInstance().NotifyObjectDehydrated(id);
+    return ORK_STATUS_OK;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+int32_t NotifyObjectRehydrated(HandleID id)
+{
+  try
+  {
+    ork::RuntimeContext::GetInstance().NotifyObjectRehydrated(id);
+    return ORK_STATUS_OK;
+  }
+  catch (...)
+  {
+    return ORK_STATUS_ERROR_EXCEPTION;
+  }
+}
+
+}  // namespace ork::internal
 
 namespace ork::detail
 {
@@ -864,7 +869,7 @@ bool DehydrateRuntime(HandleID id)
 HandleID ReserveRuntimeObjectID()
 {
   HandleID reserved_id = 0;
-  if (ork_reserve_object_id(&reserved_id) != ORK_STATUS_OK)
+  if (ork::internal::ReserveObjectId(&reserved_id) != ORK_STATUS_OK)
   {
     throw std::runtime_error("OuroKore Error: Failed to reserve HandleID from Registry.");
   }
@@ -876,24 +881,24 @@ bool BindRuntimeObjectPayload(HandleID id,
                               void (*destroy_fn)(::OuroObject*),
                               ::OuroObject* (*rehydrate_fn)(HandleID))
 {
-  if (ork_bind_object_payload(id,
-                              payload,
-                              reinterpret_cast<ork_destroy_fn_t>(destroy_fn)) != ORK_STATUS_OK)
+  if (ork::internal::BindObjectPayload(id,
+                                       payload,
+                                       reinterpret_cast<ork_destroy_fn_t>(destroy_fn)) != ORK_STATUS_OK)
   {
     return false;
   }
-  ork_set_rehydrate_fn(id, reinterpret_cast<ork_rehydrate_fn_t>(rehydrate_fn));
+  ork::internal::SetRehydrateFn(id, reinterpret_cast<ork_rehydrate_fn_t>(rehydrate_fn));
   return true;
 }
 
 void RollbackRuntimeObjectID(HandleID id)
 {
-  ork_unregister_object(id);
+  ork::internal::UnregisterObject(id);
 }
 
 void MarkRuntimeObjectClean(HandleID id)
 {
-  ork_set_storage_state(id, 1);  // 1 = StorageState::Clean
+  ork::internal::SetStorageState(id, 1);  // 1 = StorageState::Clean
 }
 
 }  // namespace ork::detail

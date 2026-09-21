@@ -202,8 +202,8 @@ bool RuntimeContext::Dehydrate(HandleID id)
   }
 
   // 4. 標記為 Dehydrated 並安全釋放 Payload 肉體記憶體（必定回到原建立模組之 CRT 堆疊釋放）
-  ork_set_storage_state(id, static_cast<uint8_t>(StorageState::Dehydrated));
-  ork_destroy_payload(id);
+  ork::internal::SetStorageState(id, static_cast<uint8_t>(StorageState::Dehydrated));
+  ork::internal::DestroyPayload(id);
 
   // 5. 通知自動脫水模組物件已脫水
   if (auto dehydrator = GetAutoDehydrator())
