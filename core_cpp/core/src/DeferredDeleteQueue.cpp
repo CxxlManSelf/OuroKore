@@ -97,11 +97,11 @@ void DeferredDeleteQueue::ProcessItem(HandleID id)
       std::unique_lock<std::shared_mutex> payload_lock(cb->m_rw_lock);
       if (cb->m_strong_count.load(std::memory_order_acquire) == 0)
       {
-        if (cb->m_payload)
+        to_delete = cb->m_payload.exchange(nullptr, std::memory_order_acq_rel);
+        if (to_delete)
         {
-          to_delete = cb->m_payload;
-          cb->m_payload = nullptr;
           destroy_fn = cb->m_destroy_fn;
+          cb->m_destroy_fn = nullptr;
         }
         bool expected = false;
         if (cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel))

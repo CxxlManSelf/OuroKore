@@ -89,7 +89,6 @@ bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn)
     {
       obj->SetObjectID(id);
     }
-    cb->m_payload = obj;
     if (!obj)
     {
       cb->m_destroy_fn = nullptr;
@@ -98,6 +97,7 @@ bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn)
     {
       cb->m_destroy_fn = destroy_fn;
     }
+    cb->m_payload.store(obj, std::memory_order_release);
     return true;
   }
   return false;
@@ -242,7 +242,7 @@ bool Registry::TryDestroyControlBlockLocked(HandleID id, ControlBlock *cb)
   // 此三者同時滿足，方可安全將 ControlBlock 抹除並 delete，防止與 DeferredDeleteQueue 搶跑引發 UAF
   if (cb->m_strong_count.load(std::memory_order_acquire) == 0 &&
       cb->m_weak_count.load(std::memory_order_acquire) == 0 &&
-      cb->m_payload == nullptr)
+      cb->m_payload.load(std::memory_order_acquire) == nullptr)
   {
     auto it = m_object_map.find(id);
     if (it != m_object_map.end() && it->second == cb)
@@ -466,10 +466,11 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
   }
 
   // 2. 熱路徑（常態記憶體常駐物件）：全程在 shared_lock 保護下直接回傳，杜絕鎖外逃逸與 UAF
-  if (cb->m_payload != nullptr &&
+  OuroObject *payload = cb->m_payload.load(std::memory_order_acquire);
+  if (payload != nullptr &&
       cb->m_storage_state.load(std::memory_order_acquire) != static_cast<uint8_t>(StorageState::Dehydrated))
   {
-    return cb->m_payload;
+    return payload;
   }
 
   // 3. 冷路徑（自動復水）：在讀鎖內安全拷貝復水回呼指標，解鎖後執行以徹底防止遞迴重入死鎖
@@ -486,7 +487,7 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
   it = m_object_map.find(target_id);
   if (it != m_object_map.end() && it->second->m_strong_count.load(std::memory_order_acquire) > 0)
   {
-    return it->second->m_payload;
+    return it->second->m_payload.load(std::memory_order_acquire);
   }
   return nullptr;
 }

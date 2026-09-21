@@ -27,8 +27,8 @@ struct ControlBlock
   // 支援兩階段鎖定協定的共享互斥鎖
   std::shared_mutex m_rw_lock;
 
-  // Raw pointer to the physical object (the body)
-  OuroObject *m_payload{nullptr};
+  // Raw pointer to the physical object (the body) - atomic for thread-safe access
+  std::atomic<OuroObject *> m_payload{nullptr};
 
   // Auto-rehydration function pointer callback (persisted across dehydration)
   RehydrateFn m_rehydrate_fn{nullptr};
@@ -59,8 +59,7 @@ struct ControlBlock
    */
   void DeletePayload()
   {
-    OuroObject *to_delete = m_payload;
-    m_payload = nullptr;
+    OuroObject *to_delete = m_payload.exchange(nullptr, std::memory_order_acq_rel);
     DestroyFn destroy_fn = m_destroy_fn;
     m_destroy_fn = nullptr;
     if (to_delete)

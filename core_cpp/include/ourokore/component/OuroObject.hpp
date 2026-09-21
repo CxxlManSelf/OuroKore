@@ -103,11 +103,16 @@ public:
   {
     if (m_target_id != 0)
     {
-      ork_lock_object_shared(m_target_id);
+      int32_t status = ork_lock_object_shared(m_target_id);
+      if (status != ORK_STATUS_OK)
+      {
+        m_target_id = 0;
+        throw std::runtime_error("OuroKore Error: Failed to acquire shared read lock on OuroObject.");
+      }
     }
   }
 
-  ~OuroReadLock()
+  ~OuroReadLock() noexcept
   {
     if (m_target_id != 0)
     {
@@ -134,11 +139,16 @@ public:
   {
     if (m_target_id != 0)
     {
-      ork_lock_object(m_target_id);
+      int32_t status = ork_lock_object(m_target_id);
+      if (status != ORK_STATUS_OK)
+      {
+        m_target_id = 0;
+        throw std::runtime_error("OuroKore Error: Failed to acquire exclusive write lock on OuroObject.");
+      }
     }
   }
 
-  ~OuroWriteLock()
+  ~OuroWriteLock() noexcept
   {
     if (m_target_id != 0)
     {
