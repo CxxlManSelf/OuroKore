@@ -297,6 +297,57 @@ void test_target_driven_dehydration_and_report(ork::HostContext &host)
   std::cout << "  -> 需求目標驅動與報告欄位（freed_bytes, has_more_candidates）驗證成功！" << std::endl;
 }
 
+void test_lifecycle_concurrency(ork::HostContext & /*host*/)
+{
+  std::cout << "[測試 7] 多執行緒併發 Start() 與 Stop() 生命週期同步控制測試..." << std::endl;
+
+  auto dehydrator = std::make_shared<OuroLRUAutoDehydrator>();
+
+  constexpr int kThreads = 8;
+  constexpr int kIterations = 50;
+  std::vector<std::thread> workers;
+  workers.reserve(kThreads);
+
+  std::atomic<bool> start_gate{false};
+
+  for (int i = 0; i < kThreads; ++i)
+  {
+    workers.emplace_back([&dehydrator, &start_gate, i]() {
+      while (!start_gate.load(std::memory_order_acquire))
+      {
+        std::this_thread::yield();
+      }
+
+      for (int iter = 0; iter < kIterations; ++iter)
+      {
+        if ((i + iter) % 2 == 0)
+        {
+          dehydrator->Start(std::chrono::milliseconds(10));
+        }
+        else
+        {
+          dehydrator->Stop();
+        }
+      }
+    });
+  }
+
+  start_gate.store(true, std::memory_order_release);
+  for (auto &t : workers)
+  {
+    if (t.joinable())
+    {
+      t.join();
+    }
+  }
+
+  // 最終確保能優雅關閉
+  dehydrator->Stop();
+  assert(!dehydrator->IsRunning());
+
+  std::cout << "  -> 多執行緒併發 Start/Stop 無死鎖、無崩潰、同步控制驗證成功！" << std::endl;
+}
+
 int main()
 {
   try
@@ -314,6 +365,7 @@ int main()
     test_background_thread_and_stop(host);
     test_failed_dehydration_requeue(host);
     test_target_driven_dehydration_and_report(host);
+    test_lifecycle_concurrency(host);
 
     std::cout << "=== OuroLRUAutoDehydrator 所有測試全部通過！ ===" << std::endl;
     host.Shutdown();

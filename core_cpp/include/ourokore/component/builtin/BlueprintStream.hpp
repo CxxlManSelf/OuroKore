@@ -96,6 +96,12 @@ public:
     uint32_t len = 0;
     ReadBytes(reinterpret_cast<uint8_t *>(&len), sizeof(len));
     if (len == 0) return "";
+    if (static_cast<size_t>(len) > GetRemainingBytes())
+    {
+      throw OuroCorruptedStreamException(
+          "BlueprintStream ReadStringRaw length exceeds remaining stream bytes: corrupted stream or memory bomb detected."
+      );
+    }
     std::string str(len, '\0');
     ReadBytes(reinterpret_cast<uint8_t *>(str.data()), len);
     return str;

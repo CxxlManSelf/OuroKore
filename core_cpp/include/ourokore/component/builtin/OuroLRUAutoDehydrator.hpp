@@ -348,13 +348,19 @@ public:
       return false;
     }
 
-    bool expected = false;
-    if (!m_running.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+    std::lock_guard<std::mutex> lock(m_lifecycle_mutex);
+    if (m_running.load(std::memory_order_acquire))
     {
       return false;
     }
 
+    if (m_worker_thread.joinable())
+    {
+      m_worker_thread.join();
+    }
+
     m_interval = interval;
+    m_running.store(true, std::memory_order_release);
     m_worker_thread = std::thread([this]() { worker_loop(); });
     return true;
   }
@@ -364,14 +370,21 @@ public:
    */
   void Stop()
   {
-    bool expected = true;
-    if (m_running.compare_exchange_strong(expected, false, std::memory_order_acq_rel))
+    std::lock_guard<std::mutex> lock(m_lifecycle_mutex);
+    if (!m_running.load(std::memory_order_acquire))
     {
-      m_wake_event.set();
       if (m_worker_thread.joinable())
       {
         m_worker_thread.join();
       }
+      return;
+    }
+
+    m_running.store(false, std::memory_order_release);
+    m_wake_event.set();
+    if (m_worker_thread.joinable())
+    {
+      m_worker_thread.join();
     }
   }
 
@@ -438,8 +451,9 @@ public:
   /**
    * @brief 取得目前排程週期
    */
-  std::chrono::milliseconds GetInterval() const noexcept
+  std::chrono::milliseconds GetInterval() const
   {
+    std::lock_guard<std::mutex> lock(m_lifecycle_mutex);
     return m_interval;
   }
 
@@ -476,6 +490,7 @@ private:
     }
   }
 
+  mutable std::mutex m_lifecycle_mutex;
   mutable std::mutex m_mutex;
   std::list<HandleID> m_lru_list;
   std::unordered_map<HandleID, TrackedNode> m_node_map;

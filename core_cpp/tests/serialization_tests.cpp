@@ -551,6 +551,25 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
       }
       assert(dup_slot_caught);
     }
+
+    // 3. Maliciously oversized string length (Deserialization Memory Bomb defense)
+    {
+      ork::BlueprintStream string_bomb_stream;
+      uint32_t malicious_len = 0x7FFFFFFF;
+      string_bomb_stream.WriteBytes(reinterpret_cast<const uint8_t *>(&malicious_len), sizeof(malicious_len));
+
+      bool string_bomb_caught = false;
+      try
+      {
+        string_bomb_stream.ReadStringRaw();
+      }
+      catch (const ork::OuroCorruptedStreamException &ex)
+      {
+        string_bomb_caught = true;
+        std::cout << "  Captured expected OuroCorruptedStreamException on string memory bomb: " << ex.what() << std::endl;
+      }
+      assert(string_bomb_caught);
+    }
   }
 
   // Verify Rehydrate Exception Safety with Corrupted Blueprint Data
@@ -630,6 +649,10 @@ public:
     uint32_t len = 0;
     ReadBytes(reinterpret_cast<uint8_t *>(&len), sizeof(len));
     if (len == 0) return "";
+    if (static_cast<size_t>(len) > GetRemainingBytes())
+    {
+      throw ork::OuroCorruptedStreamException("CustomThirdPartyStream ReadStringRaw exceeds remaining stream bytes");
+    }
     std::string str(len, '\0');
     ReadBytes(reinterpret_cast<uint8_t *>(str.data()), len);
     return str;
