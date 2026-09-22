@@ -140,9 +140,12 @@ public:
    */
   void clear()
   {
-    std::unique_lock<std::mutex> lock(m_mutex);
-    std::queue<T> empty;
-    std::swap(m_queue, empty);
+    std::queue<T> to_destroy;
+    {
+      std::unique_lock<std::mutex> lock(m_mutex);
+      std::swap(m_queue, to_destroy);
+    }
+    // to_destroy 於鎖釋放後在此解構，避免在持有 lock 的情況下進行元素解構
   }
 
   /**
