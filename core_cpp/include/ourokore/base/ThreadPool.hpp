@@ -372,10 +372,23 @@ public:
    */
   void wait_idle()
   {
+    if (is_in_worker_thread())
+    {
+      // 防死鎖：若當前執行緒為執行緒池內部 Worker，等待自身結束將引發永久自我死鎖，安全直接略過
+      return;
+    }
     std::unique_lock<std::mutex> lock(m_idle_mutex);
     m_idle_cv.wait(lock, [this]() {
       return m_task_queue.empty() && (m_active_workers.load(std::memory_order_acquire) == 0);
     });
+  }
+
+  /**
+   * @brief 查詢當前呼叫執行緒是否為本執行緒池之 Worker 工作執行緒
+   */
+  [[nodiscard]] bool is_in_worker_thread() const noexcept
+  {
+    return t_current_dynamic_pool == this;
   }
 
   /**
@@ -464,8 +477,22 @@ private:
     }
   }
 
+  inline static thread_local const DynamicThreadPool *t_current_dynamic_pool = nullptr;
+
   void worker_loop()
   {
+    struct WorkerScope
+    {
+      explicit WorkerScope(const DynamicThreadPool *pool) noexcept
+      {
+        t_current_dynamic_pool = pool;
+      }
+      ~WorkerScope() noexcept
+      {
+        t_current_dynamic_pool = nullptr;
+      }
+    } worker_scope(this);
+
     while (true)
     {
       Task task;

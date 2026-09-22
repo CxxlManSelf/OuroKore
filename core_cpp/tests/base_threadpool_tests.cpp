@@ -154,6 +154,50 @@ void test_dynamic_thread_pool()
   assert(dynamic_pool.get_current_worker_count() == 0);
 }
 
+void test_dynamic_thread_pool_worker_thread_check()
+{
+  std::cout << "[測試] DynamicThreadPool is_in_worker_thread 與 wait_idle 防死鎖..." << std::endl;
+
+  DynamicThreadPool pool1(2, 4, std::chrono::milliseconds(500));
+  DynamicThreadPool pool2(2, 4, std::chrono::milliseconds(500));
+
+  // 主執行緒不在任何 Worker 內
+  assert(!pool1.is_in_worker_thread());
+  assert(!pool2.is_in_worker_thread());
+
+  std::atomic<bool> pool1_worker_verified{false};
+  std::atomic<bool> pool2_cross_verified{false};
+  std::atomic<bool> wait_idle_safe{false};
+
+  auto fut = pool1.submit([&]() {
+    // 在 pool1 的 Worker 執行緒內
+    if (pool1.is_in_worker_thread())
+    {
+      pool1_worker_verified.store(true);
+    }
+    // 不屬於 pool2 的 Worker
+    if (!pool2.is_in_worker_thread())
+    {
+      pool2_cross_verified.store(true);
+    }
+    // 防自我死鎖：Worker 內部呼叫自身的 wait_idle() 必須安全早退，不可阻塞卡死
+    pool1.wait_idle();
+    wait_idle_safe.store(true);
+  });
+
+  fut.get();
+
+  assert(pool1_worker_verified.load());
+  assert(pool2_cross_verified.load());
+  assert(wait_idle_safe.load());
+
+  // 任務完成後，主執行緒依然不在 Worker 內
+  assert(!pool1.is_in_worker_thread());
+
+  pool1.stop();
+  pool2.stop();
+}
+
 int main()
 {
   try
@@ -161,6 +205,7 @@ int main()
     std::cout << "=== 開始執行 ThreadPool 單元測試 ===" << std::endl;
     test_fixed_thread_pool();
     test_dynamic_thread_pool();
+    test_dynamic_thread_pool_worker_thread_check();
     std::cout << "=== ThreadPool 所有測試全部通過！ ===" << std::endl;
     return 0;
   }

@@ -195,7 +195,47 @@ void test_parallel_batch_operations()
     assert(batch[i]->m_id_val == static_cast<int>(i));
   }
 
-  std::cout << "  -> 多核心批次 SaveBatch 與 LoadBatch 驗證成功！" << std::endl;
+  // 3. 批次多核心平行脫水 (DehydrateBatch)
+  std::vector<OuroPtr<AsyncEntityContainer>> containers;
+  containers.reserve(BATCH_COUNT);
+  std::vector<HandleID> dehydrate_ids;
+  dehydrate_ids.reserve(BATCH_COUNT);
+
+  for (size_t i = 0; i < BATCH_COUNT; ++i)
+  {
+    auto c = CreateObject<AsyncEntityContainer>();
+    c->m_child = CreateObject<AsyncTestEntity>(static_cast<int>(i + 2000), "DehydrateBatchItem_" + std::to_string(i));
+    dehydrate_ids.push_back(c->m_child.GetTargetID());
+    containers.push_back(std::move(c));
+  }
+
+  auto dehydrate_results = DehydrateBatch(dehydrate_ids);
+  assert(dehydrate_results.size() == BATCH_COUNT);
+  for (size_t i = 0; i < BATCH_COUNT; ++i)
+  {
+    assert(dehydrate_results[i].success);
+    assert(dehydrate_results[i].id == dehydrate_ids[i]);
+    assert(dehydrate_results[i].error.empty());
+    assert(GetStorageState(dehydrate_ids[i]) == StorageState::Dehydrated);
+  }
+
+  // 4. 批次多核心平行復水 (RehydrateBatch)
+  auto rehydrate_results = RehydrateBatch<AsyncTestEntity>(dehydrate_ids);
+  assert(rehydrate_results.size() == BATCH_COUNT);
+  for (size_t i = 0; i < BATCH_COUNT; ++i)
+  {
+    assert(rehydrate_results[i].success);
+    assert(rehydrate_results[i].id == dehydrate_ids[i]);
+    assert(rehydrate_results[i].ptr.GetTargetID() == dehydrate_ids[i]);
+    assert(rehydrate_results[i].error.empty());
+
+    // 驗證復水後資料正確性與儲存狀態
+    assert(rehydrate_results[i].ptr->m_id_val == static_cast<int>(i + 2000));
+    assert(rehydrate_results[i].ptr->m_tag == "DehydrateBatchItem_" + std::to_string(i));
+    assert(GetStorageState(dehydrate_ids[i]) == StorageState::Clean);
+  }
+
+  std::cout << "  -> 多核心批次 SaveBatch、LoadBatch、DehydrateBatch 與 RehydrateBatch 驗證成功！" << std::endl;
 }
 
 void test_async_destruction_and_flush(ork::HostContext &host)
