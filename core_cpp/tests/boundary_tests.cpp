@@ -70,6 +70,7 @@ int main()
   test_unauthorized([&]() { plugin_host.FlushDeferredDeletions(); }, "FlushDeferredDeletions");
   test_unauthorized([&]() { plugin_host.SetDeferredDeleteMode(true); }, "SetDeferredDeleteMode");
   test_unauthorized([&]() { plugin_host.CollectCycles(); }, "CollectCycles");
+  test_unauthorized([&]() { plugin_host.GetCycleSuspectCount(); }, "GetCycleSuspectCount");
   test_unauthorized([&]() { plugin_host.SetAutoDehydrator(plugin_dehydrator); }, "SetAutoDehydrator");
   test_unauthorized([&]() { plugin_host.GetAutoDehydrator(); }, "GetAutoDehydrator");
   test_unauthorized([&]() { plugin_host.SetStorageDriver(plugin_storage); }, "SetStorageDriver");

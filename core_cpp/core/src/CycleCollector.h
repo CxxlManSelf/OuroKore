@@ -47,8 +47,9 @@ public:
   /**
    * @brief 將可疑物件推入嫌疑犯佇列 (O(1) 常數時間)
    * 由 ork_unregister_edge 在 StrongCount > 0 且 CAS 成功搶入時呼叫。
+   * @return true 成功入隊，false 若收集器未運行或已停機（自動復位物件入隊標記）
    */
-  void PushSuspect(HandleID target_id);
+  bool PushSuspect(HandleID target_id);
 
   /**
    * @brief 明確執行一次循環收集處理（同步阻塞，供單元測試或手動排程使用）
@@ -68,6 +69,7 @@ private:
   void ProcessSuspect(HandleID suspect_id);
   void DestructIsland(const std::vector<HandleID> &island_nodes);
 
+  mutable std::mutex m_lifecycle_mutex;
   std::atomic<bool> m_running{false};
   std::vector<HandleID> m_suspect_queue;
   mutable std::mutex m_queue_mutex;

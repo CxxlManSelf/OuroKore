@@ -156,6 +156,15 @@ public:
   }
 
   /**
+   * @brief 取得當前循環收集器排隊中等待檢查的嫌疑犯數量
+   */
+  size_t GetCycleSuspectCount() const
+  {
+    CheckOwner();
+    return static_cast<size_t>(ork_get_cycle_suspect_count());
+  }
+
+  /**
    * @brief 設定當前註冊的自動脫水外掛模組
    */
   void SetAutoDehydrator(std::shared_ptr<IAutoDehydrator> dehydrator)

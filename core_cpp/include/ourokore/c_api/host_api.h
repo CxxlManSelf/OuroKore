@@ -39,6 +39,11 @@ ORK_API int32_t ORK_CALL ork_set_deferred_delete_mode(int32_t mode);
 ORK_API uint64_t ORK_CALL ork_get_deferred_delete_pending_count(void);
 
 /**
+ * @brief 取得目前循環收集器排隊等待檢查之嫌疑犯數量
+ */
+ORK_API uint64_t ORK_CALL ork_get_cycle_suspect_count(void);
+
+/**
  * @brief 停止循環參照收集器背景巡檢執行緒
  */
 ORK_API int32_t ORK_CALL ork_stop_cycle_collector(void);

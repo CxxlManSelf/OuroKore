@@ -87,20 +87,6 @@ void RuntimeContext::Shutdown()
     return;
   }
 
-  // 1. 先停用循環參照收集器背景巡檢，並執行一次最後的同步外科手術收集，解開所有殘留孤島
-  ork_stop_cycle_collector();
-  ork_collect_cycles();
-
-  // 2. 雙管線收斂排空：確保延遲銷毀與執行緒池任務全部完成落盤
-  FlushStorage();
-
-  // 3. 立即解除全域銷毀通知回呼：關閉水龍頭，防止後續任何解構引發新任務被分發至執行緒池
-  ork_set_object_destroyed_callback(nullptr);
-
-  // 4. 停止延遲銷毀執行緒池並等待其工作執行緒安全退出
-  ork_stop_deferred_deletions();
-
-  // 5. 處理儲存執行緒池：依所有權決定是否強制 stop
   std::shared_ptr<ork::base::FixedThreadPool> pool;
   bool is_owned = false;
   {
@@ -109,6 +95,40 @@ void RuntimeContext::Shutdown()
     is_owned = m_is_core_owned_pool;
   }
 
+  // 1. 雙管線交互收斂排空：循環孤島收集 <-> 延遲物理銷毀與落盤
+  // 父物件解構可能切斷邊緣產生次生孤島，因此兩者必須交替排空直到所有佇列徹底歸零
+  while (true)
+  {
+    // (a) 在工作執行緒活躍狀態下執行外科手術收集，解開當前孤島（解開後強引用歸零轉入延遲銷毀）
+    ork_collect_cycles();
+
+    // (b) 排空延遲物理銷毀佇列（銷毀解構可能產生次生孤島送入 suspect 佇列）
+    ork_flush_deferred_deletions();
+
+    // (c) 排空儲存執行緒池中的非同步落盤或刪除任務
+    if (pool && pool->is_running())
+    {
+      pool->wait_idle();
+    }
+
+    // (d) 檢查是否延遲銷毀任務與循環嫌疑犯皆已徹底歸零收斂
+    if (ork_get_deferred_delete_pending_count() == 0 &&
+        ork_get_cycle_suspect_count() == 0)
+    {
+      break;
+    }
+  }
+
+  // 2. 拓撲徹底收斂後，立即解除全域銷毀通知回呼：關閉水龍頭，防止後續任何解構引發新任務分發
+  ork_set_object_destroyed_callback(nullptr);
+
+  // 3. 安全停止循環參照收集器背景執行緒並等待其退出
+  ork_stop_cycle_collector();
+
+  // 4. 停止延遲銷毀執行緒池並等待其工作執行緒安全退出
+  ork_stop_deferred_deletions();
+
+  // 5. 處理儲存執行緒池：依所有權決定是否強制 stop
   if (pool)
   {
     if (is_owned)
@@ -121,7 +141,7 @@ void RuntimeContext::Shutdown()
     }
   }
 
-  // 6. 確認所有執行緒徹底終止後，才安全重置靜態指標與初始化狀態
+  // 7. 確認所有執行緒徹底終止後，才安全重置靜態指標與初始化狀態
   {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_thread_pool = nullptr;

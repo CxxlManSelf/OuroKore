@@ -28,6 +28,7 @@ CycleCollector::~CycleCollector()
 
 void CycleCollector::Start()
 {
+  std::lock_guard<std::mutex> lock(m_lifecycle_mutex);
   if (m_running.load(std::memory_order_acquire))
   {
     return;
@@ -39,6 +40,7 @@ void CycleCollector::Start()
 
 void CycleCollector::Stop()
 {
+  std::lock_guard<std::mutex> lock(m_lifecycle_mutex);
   if (!m_running.load(std::memory_order_acquire))
   {
     return;
@@ -61,19 +63,40 @@ void CycleCollector::Stop()
   }
 }
 
-void CycleCollector::PushSuspect(HandleID target_id)
+bool CycleCollector::PushSuspect(HandleID target_id)
 {
   if (target_id == ORK_ROOT_ID)
   {
-    return;
+    return false;
   }
 
+  // 1. Fast-path 早退：若收集器已停機，復位物件入隊標記並早退，連互斥鎖都不必爭搶
+  if (!m_running.load(std::memory_order_acquire))
   {
-    std::lock_guard<std::mutex> lock(m_queue_mutex);
-    m_suspect_queue.push_back(target_id);
-    ++m_submitted_batches;
-    m_cv.notify_one();
+    auto guard = Registry::GetInstance().AcquireControlBlock(target_id);
+    if (guard)
+    {
+      guard->m_in_suspect_queue.store(false, std::memory_order_release);
+    }
+    return false;
   }
+
+  // 2. 進入鎖後二度確認，確保與 Stop() 的狀態切換嚴格互斥
+  std::lock_guard<std::mutex> lock(m_queue_mutex);
+  if (!m_running.load(std::memory_order_acquire))
+  {
+    auto guard = Registry::GetInstance().AcquireControlBlock(target_id);
+    if (guard)
+    {
+      guard->m_in_suspect_queue.store(false, std::memory_order_release);
+    }
+    return false; // 收集器已停止運作，拒絕接收嫌疑犯
+  }
+
+  m_suspect_queue.push_back(target_id);
+  ++m_submitted_batches;
+  m_cv.notify_one();
+  return true;
 }
 
 size_t CycleCollector::SuspectCount() const
@@ -151,11 +174,12 @@ void CycleCollector::WorkerLoop()
 
 void CycleCollector::ProcessSuspect(HandleID suspect_id)
 {
-  ControlBlock *cb = Registry::GetInstance().GetControlBlock(suspect_id);
-  if (!cb)
+  auto suspect_guard = Registry::GetInstance().AcquireControlBlock(suspect_id);
+  if (!suspect_guard)
   {
     return;
   }
+  ControlBlock *cb = suspect_guard.Get();
 
   // 雙重存活審查 (Double-Check Guard)
   // 若物件已被標記為正在拆解，或其 StrongCount == 0（肉體已死/已在延遲銷毀中），略過
@@ -185,11 +209,12 @@ void CycleCollector::ProcessSuspect(HandleID suspect_id)
     q.pop();
     component.push_back(curr);
 
-    ControlBlock *curr_cb = Registry::GetInstance().GetControlBlock(curr);
-    if (!curr_cb)
+    auto curr_guard = Registry::GetInstance().AcquireControlBlock(curr);
+    if (!curr_guard)
     {
       continue;
     }
+    ControlBlock *curr_cb = curr_guard.Get();
 
     // 雙重存活檢查：若上游節點已被標記拆解或其強計數歸零（已被 DeferredDeleteQueue 接管），略過擴展
     if (curr_cb->m_is_destructing.load(std::memory_order_acquire) ||
@@ -222,8 +247,8 @@ void CycleCollector::ProcessSuspect(HandleID suspect_id)
       }
 
       // 若該 owner 為外部非託管宿主（在 Registry 中無 ControlBlock），視為外部持有存活
-      ControlBlock *owner_cb = Registry::GetInstance().GetControlBlock(owner);
-      if (!owner_cb)
+      auto owner_guard = Registry::GetInstance().AcquireControlBlock(owner);
+      if (!owner_guard)
       {
         has_external_root = true;
         break;
@@ -266,39 +291,40 @@ void CycleCollector::DestructIsland(const std::vector<HandleID> &island_nodes)
 
   std::unordered_set<HandleID> island_set(sorted_nodes.begin(), sorted_nodes.end());
 
-  // 取得各節點的 ControlBlock
-  std::vector<std::pair<HandleID, ControlBlock *>> active_blocks;
-  active_blocks.reserve(sorted_nodes.size());
+  // 取得各節點的 ControlBlock 並以 RAII Guard 安全釘住壽命 (Pinning)
+  // 釘住期間 weak_count >= 1，保證其他執行緒絕無法 delete 任何一個 ControlBlock，杜絕 UAF
+  std::vector<ControlBlockPinGuard> active_guards;
+  active_guards.reserve(sorted_nodes.size());
   for (HandleID id : sorted_nodes)
   {
-    ControlBlock *cb = Registry::GetInstance().GetControlBlock(id);
-    if (cb)
+    auto guard = Registry::GetInstance().AcquireControlBlock(id);
+    if (guard)
     {
-      active_blocks.emplace_back(id, cb);
+      active_guards.emplace_back(std::move(guard));
     }
   }
 
-  if (active_blocks.size() != sorted_nodes.size())
+  if (active_guards.size() != sorted_nodes.size())
   {
-    // 有節點查無 ControlBlock（包含外部非託管節點），非純受管孤島，放棄拆解
+    // 有節點查無 ControlBlock（包含外部非託管節點或已被清理），非純受管孤島，放棄拆解
     return;
   }
 
   // 第三層防禦：孤島二階段依序鎖定與二次複查 (Two-Phase Lock & Verify)
   // 依 HandleID 順序逐一獲取 m_owners_mutex 鎖
   std::vector<std::unique_lock<std::mutex>> locks;
-  locks.reserve(active_blocks.size());
-  for (auto &pair : active_blocks)
+  locks.reserve(active_guards.size());
+  for (auto &guard : active_guards)
   {
-    locks.emplace_back(pair.second->m_owners_mutex);
+    locks.emplace_back(guard->m_owners_mutex);
   }
 
   // 記錄孤島內部真實存在的互指邊緣名冊
   std::vector<std::pair<HandleID, HandleID>> edges_to_remove;
-  for (auto &pair : active_blocks)
+  for (auto &guard : active_guards)
   {
-    HandleID target_id = pair.first;
-    ControlBlock *cb = pair.second;
+    HandleID target_id = guard.GetID();
+    ControlBlock *cb = guard.Get();
 
     // 二階段鎖定雙重存活審查：若孤島內任何節點已被標記為正在拆解，
     // 或其 StrongCount 已經歸零（已被業務執行緒或 DeferredDeleteQueue 接管），立刻放棄拆解！
@@ -325,9 +351,9 @@ void CycleCollector::DestructIsland(const std::vector<HandleID> &island_nodes)
   }
 
   // 第四層防禦：標記 Destructing 狀態（全面禁止併發加邊與殭屍復活）
-  for (auto &pair : active_blocks)
+  for (auto &guard : active_guards)
   {
-    pair.second->m_is_destructing.store(true, std::memory_order_release);
+    guard->m_is_destructing.store(true, std::memory_order_release);
   }
 
   // 釋放所有 owners 鎖，準備發動外科手術式斷鏈

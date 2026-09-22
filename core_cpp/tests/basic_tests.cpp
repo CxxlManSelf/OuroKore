@@ -108,6 +108,12 @@ static_assert(
     "Classes derived from OuroObject must not be dynamically allocatable via operator new."
 );
 
+// 驗證 OuroObject 為唯一生命週期實體，嚴格禁止值語意之拷貝與搬移
+static_assert(!std::is_copy_constructible_v<ork::OuroObject>, "OuroObject must NOT be copy-constructible.");
+static_assert(!std::is_copy_assignable_v<ork::OuroObject>, "OuroObject must NOT be copy-assignable.");
+static_assert(!std::is_move_constructible_v<ork::OuroObject>, "OuroObject must NOT be move-constructible.");
+static_assert(!std::is_move_assignable_v<ork::OuroObject>, "OuroObject must NOT be move-assignable.");
+
 class ParentDrivenObject : public ork::OuroObject
 {
 public:

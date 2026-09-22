@@ -440,6 +440,18 @@ extern "C"
     }
   }
 
+  uint64_t ORK_CALL ork_get_cycle_suspect_count(void)
+  {
+    try
+    {
+      return static_cast<uint64_t>(ork::CycleCollector::GetInstance().SuspectCount());
+    }
+    catch (...)
+    {
+      return 0;
+    }
+  }
+
   int32_t ORK_CALL ork_stop_cycle_collector(void)
   {
     try

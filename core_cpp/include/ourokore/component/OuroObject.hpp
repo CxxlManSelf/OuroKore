@@ -29,6 +29,12 @@ public:
   virtual ~OuroObject() = default;
   virtual void DestroySelf() { delete this; }
 
+  // 託管實體具備唯一生命週期識別碼，嚴格禁止值語意之拷貝與搬移
+  OuroObject(const OuroObject &) = delete;
+  OuroObject &operator=(const OuroObject &) = delete;
+  OuroObject(OuroObject &&) = delete;
+  OuroObject &operator=(OuroObject &&) = delete;
+
   // 禁止外部直接透過 new 或 new[] 產生物件，必須透過 ork::CreateObject 進行託管建立
   void *operator new(size_t) = delete;
   void *operator new[](size_t) = delete;

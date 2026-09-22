@@ -24,6 +24,7 @@ DeferredDeleteQueue::~DeferredDeleteQueue()
 
 void DeferredDeleteQueue::Start(size_t worker_threads)
 {
+  std::lock_guard<std::mutex> lock(m_lifecycle_mutex);
   if (m_running.load(std::memory_order_acquire))
   {
     return;
@@ -35,6 +36,7 @@ void DeferredDeleteQueue::Start(size_t worker_threads)
 
 void DeferredDeleteQueue::Stop()
 {
+  std::lock_guard<std::mutex> lock(m_lifecycle_mutex);
   if (!m_running.load(std::memory_order_acquire))
   {
     return;

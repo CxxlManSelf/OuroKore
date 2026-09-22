@@ -11,7 +11,42 @@
 namespace ork
 {
 
-class OuroObject;
+class ControlBlock;
+class Registry;
+
+/**
+ * @brief RAII 守衛：將 ControlBlock 的生命週期安全釘住 (Pinning)
+ *
+ * 核心價值：
+ * 藉由暫時遞增 ControlBlock 的 WeakCount，保證在守衛存活期間，
+ * 即使業務執行緒或 DeferredDeleteQueue 將 StrongCount 降至 0 並銷毀 Payload，
+ * 也絕對無法 delete ControlBlock 本體，從根源徹底消除 Use-After-Free (UAF)。
+ */
+class ControlBlockPinGuard
+{
+public:
+  ControlBlockPinGuard() noexcept = default;
+  ControlBlockPinGuard(HandleID id, ControlBlock *cb) noexcept;
+  ~ControlBlockPinGuard();
+
+  ControlBlockPinGuard(ControlBlockPinGuard &&other) noexcept;
+  ControlBlockPinGuard &operator=(ControlBlockPinGuard &&other) noexcept;
+
+  ControlBlockPinGuard(const ControlBlockPinGuard &) = delete;
+  ControlBlockPinGuard &operator=(const ControlBlockPinGuard &) = delete;
+
+  ControlBlock *Get() const noexcept { return m_cb; }
+  ControlBlock *operator->() const noexcept { return m_cb; }
+  ControlBlock &operator*() const noexcept { return *m_cb; }
+  HandleID GetID() const noexcept { return m_id; }
+  explicit operator bool() const noexcept { return m_cb != nullptr; }
+
+  void Reset();
+
+private:
+  HandleID m_id{0};
+  ControlBlock *m_cb{nullptr};
+};
 
 class Registry
 {
@@ -53,6 +88,17 @@ public:
    * @param silent If true, do not enqueue to suspect queue (used during cycle island destruction).
    */
   bool UnregisterEdge(HandleID owner_id, HandleID target_id, bool silent = false);
+
+  /**
+   * @brief 安全獲取並釘住 ControlBlock (Pinning)，返回 RAII 守衛
+   * 在讀鎖保護下原子遞增 WeakCount，保證守衛持有期間 ControlBlock 絕不被 delete。
+   */
+  ControlBlockPinGuard AcquireControlBlock(HandleID target_id);
+
+  /**
+   * @brief 釋放釘住的 ControlBlock
+   */
+  void ReleasePin(HandleID target_id, ControlBlock *cb);
 
   /**
    * @brief Directly acquire a ControlBlock pointer (Registry shared-lock must be held or thread-safe access).

@@ -73,6 +73,7 @@ private:
 
   void ProcessItem(HandleID id);
 
+  mutable std::mutex m_lifecycle_mutex;
   std::unique_ptr<base::FixedThreadPool> m_thread_pool;
   std::atomic<bool> m_running{false};
   std::atomic<bool> m_sync_mode{false};

@@ -217,6 +217,78 @@ bool Registry::UnregisterEdge(HandleID owner_id, HandleID target_id, bool silent
   return true;
 }
 
+ControlBlockPinGuard::ControlBlockPinGuard(HandleID id, ControlBlock *cb) noexcept
+  : m_id(id), m_cb(cb)
+{
+}
+
+ControlBlockPinGuard::~ControlBlockPinGuard()
+{
+  Reset();
+}
+
+ControlBlockPinGuard::ControlBlockPinGuard(ControlBlockPinGuard &&other) noexcept
+  : m_id(other.m_id), m_cb(other.m_cb)
+{
+  other.m_id = 0;
+  other.m_cb = nullptr;
+}
+
+ControlBlockPinGuard &ControlBlockPinGuard::operator=(ControlBlockPinGuard &&other) noexcept
+{
+  if (this != &other)
+  {
+    Reset();
+    m_id = other.m_id;
+    m_cb = other.m_cb;
+    other.m_id = 0;
+    other.m_cb = nullptr;
+  }
+  return *this;
+}
+
+void ControlBlockPinGuard::Reset()
+{
+  if (m_cb)
+  {
+    Registry::GetInstance().ReleasePin(m_id, m_cb);
+    m_id = 0;
+    m_cb = nullptr;
+  }
+}
+
+ControlBlockPinGuard Registry::AcquireControlBlock(HandleID target_id)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
+  {
+    return {};
+  }
+  ControlBlock *cb = it->second;
+
+  // 在讀鎖保護下原子遞增 weak_count，牢牢釘住 ControlBlock 的壽命
+  cb->m_weak_count.fetch_add(1, std::memory_order_relaxed);
+  return ControlBlockPinGuard(target_id, cb);
+}
+
+void Registry::ReleasePin(HandleID target_id, ControlBlock *cb)
+{
+  if (!cb)
+  {
+    return;
+  }
+
+  // 原子遞減 weak_count
+  uint32_t prev_weak = cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
+  if (prev_weak == 1)
+  {
+    // 弱引用剛好歸零，若強引用與實體也已歸零，則嘗試物理回收 ControlBlock 墓碑
+    std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+    TryDestroyControlBlockLocked(target_id, cb);
+  }
+}
+
 ControlBlock *Registry::GetControlBlock(HandleID target_id) const
 {
   std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
@@ -230,27 +302,33 @@ ControlBlock *Registry::GetControlBlock(HandleID target_id) const
 
 bool Registry::TryDestroyControlBlockLocked(HandleID id, ControlBlock *cb)
 {
-  if (!cb)
+  // 核心銷毀天條（權威名冊檢核先行）：
+  // 必須先查名冊確認節點在寫鎖保護下是否仍合法存在，絕不先解引用可能已在縫隙中被釋放的 cb 裸指標！
+  auto it = m_object_map.find(id);
+  if (it == m_object_map.end())
+  {
+    return false; // 已在次生縫隙中被其他執行緒銷毀或根本不存在，安全早退
+  }
+
+  ControlBlock *actual_cb = it->second;
+  // 若呼叫端傳入了非空 cb，驗證指標一致性（防範野指標或實例不匹配）
+  if (cb != nullptr && actual_cb != cb)
   {
     return false;
   }
 
-  // 核心銷毀天條：
+  // 核心銷毀判定三條件：
   // 1. 強引用歸零 (m_strong_count == 0)
   // 2. 弱引用歸零 (m_weak_count == 0)
   // 3. 肉體實體已被物理銷毀置空 (m_payload == nullptr)
-  // 此三者同時滿足，方可安全將 ControlBlock 抹除並 delete，防止與 DeferredDeleteQueue 搶跑引發 UAF
-  if (cb->m_strong_count.load(std::memory_order_acquire) == 0 &&
-      cb->m_weak_count.load(std::memory_order_acquire) == 0 &&
-      cb->m_payload.load(std::memory_order_acquire) == nullptr)
+  // 此三者同時滿足，方可安全將 ControlBlock 抹除並 delete，杜絕與 DeferredDeleteQueue 搶跑
+  if (actual_cb->m_strong_count.load(std::memory_order_acquire) == 0 &&
+      actual_cb->m_weak_count.load(std::memory_order_acquire) == 0 &&
+      actual_cb->m_payload.load(std::memory_order_acquire) == nullptr)
   {
-    auto it = m_object_map.find(id);
-    if (it != m_object_map.end() && it->second == cb)
-    {
-      m_object_map.erase(it);
-      delete cb;
-      return true;
-    }
+    m_object_map.erase(it);
+    delete actual_cb;
+    return true;
   }
   return false;
 }
