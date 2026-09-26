@@ -285,15 +285,23 @@ public:
 
 ## 2. 業務圖雙向互指與背景循環回收 (Cycle Collection)
 
-在傳統 `std::shared_ptr` 下，雙向互指會造成嚴重的記憶體洩漏；但在 OuroKore 中：
-* **業務圖內部雙向互指請直接使用 `OwningHandle`！**
-* 當整個互指圖的外部根引用（`OuroPtr`）皆消失時，底層 `CycleCollector` 會在背景非同步偵測到循環孤島，自動執行外科手術斷鏈並安全回收，開發者無須承擔心理負擔。
+在傳統 C++ (`std::shared_ptr`) 架構下，雙向互指會造成循環引用（Circular Reference），迫使開發者必須小心翼翼地手動將其中一方改為 `std::weak_ptr` 來破環；**但在 OuroKore 體系中，這項心智負擔被徹底消滅**：
+* **業務圖內部雙向互指／網狀循環，請一律大膽、直接使用 `OwningHandle`！**
+* **為什麼不需要手動破環？**：因為 OuroKore 配備了進程級背景 `CycleCollector`。當整個互指圖的外部根引用（`OuroPtr`）皆歸零時，收集器會自動在微秒級鎖保護下偵測封閉孤島，並以「外科手術斷鏈」安全解構，絕不造成呼叫堆疊溢位（Stack Overflow）亦無記憶體洩漏。
+* ⚠️ **重要原則**：開發者**絕不應該**為了「破環」而將業務圖內的欄位改成 `UnboundHandle`。物件間的拓撲共生性應由 `OwningHandle` 誠實表達。
 
 ---
 
-## 3. `UnboundHandle<T>`：解耦弱引用與非同步熱卸載防釘死保護
+## 3. `UnboundHandle<T>`：解耦弱引用與動態外掛非同步熱卸載
 
-若物件需要關聯一個「隨時可能被卸載、摧毀或替換」的外部服務或外掛模組，使用 `UnboundHandle`：
+### 🚫 心智模型澄清：`UnboundHandle` 不是拿來破環的！
+| 傳統 C++ (`std::weak_ptr`) | OuroKore (`UnboundHandle<T>`) |
+| :--- | :--- |
+| 主要用於手動打破 `shared_ptr` 的雙向循環引用 | **切勿用於破環！** 業務圖循環參照一律由 `OwningHandle` + `CycleCollector` 負責 |
+| 需搭配 `lock()` 換取 `shared_ptr` | 透過 `.LockAndAcquire()` 換取短暫根保護的 `OuroPtr<T>` |
+| 僅防單純記憶體洩漏 | **核心使命**：跨動態 DLL / 外掛插件邊界之生命週期解耦、外掛非同步熱卸載防釘死、純唯讀旁路快取 |
+
+若物件需要關聯一個「隨時可能被卸載、摧毀或動態替換」的外部服務、外掛模組或快取索引，使用 `UnboundHandle`：
 
 ```cpp
 class CombatSystem : public ork::OuroObject {

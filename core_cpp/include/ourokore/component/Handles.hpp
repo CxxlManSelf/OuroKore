@@ -500,6 +500,14 @@ inline void OuroObject::RegisterHandle(OwningContainerHandle *handle)
 /**
  * @brief OwningHandle controls object lifecycles inside Parent OuroObjects.
  * Inherits from OwningContainerHandle with strict max Target count of 1.
+ *
+ * 【循環參照與雙向互指使用建議】
+ * 在 OuroKore 體系中，業務領域物件圖內部的所有父子關係、雙向互指（如 A <-> B）、網狀關聯，
+ * 請一律直接且大膽地使用 OwningHandle！
+ *
+ * 核心具備進程級背景循環垃圾收集器（CycleCollector），當整個互指圖的外部根引用（OuroPtr）歸零時，
+ * 收集器會自動在背景偵測閉環孤島並執行非同步外科手術安全回收。
+ * 開發者完全不需要、也不應該為了「打破循環參照」而手動改用 UnboundHandle。
  */
 template <typename T>
 class OwningHandle : protected OwningContainerHandle
@@ -706,6 +714,11 @@ private:
  *    的短期操作指針 OuroPtr<T>；若對象已死亡或正在非同步卸載中，提升保證安全失敗並傳回空指針，
  *    徹底杜絕野指標 (Dangling Pointers) 與釋放後使用 (UAF)。
  * 4. 高效無鎖惰性修剪 (Lock-Free Lazy Pruning)：在 IsAlive() 與提升失敗時以 CAS 競爭修剪墓碑弱引用。
+ * 5. 與傳統 std::weak_ptr 的心智模型差異（切勿用於破環）：
+ *    在傳統 C++ (std::shared_ptr) 中，weak_ptr 常用於打破雙向互指造成的記憶體洩漏；
+ *    但在 OuroKore 中，業務圖內的雙向互指一律直接使用 OwningHandle（由 CycleCollector 自動回收）。
+ *    UnboundHandle 的設計使命「絕非」用於破環，而是專為「跨動態 DLL / 外掛插件邊界之生命週期解耦」、
+ *    「外掛非同步熱卸載防釘死」以及「純唯讀旁路快取觀察」而生。
  */
 template <typename T>
 class UnboundHandle
