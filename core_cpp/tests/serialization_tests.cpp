@@ -1343,8 +1343,6 @@ int main()
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();
-
-    host.Shutdown();
   }
   catch (const std::exception &ex)
   {

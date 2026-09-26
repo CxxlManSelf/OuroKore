@@ -168,6 +168,5 @@ int main()
   std::cout << "   所有循環參照追蹤與延遲銷毀測試順利通過 (PASSED)! " << std::endl;
   std::cout << "==================================================" << std::endl;
 
-  host.Shutdown();
   return 0;
 }

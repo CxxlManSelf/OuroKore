@@ -368,7 +368,6 @@ int main()
     test_lifecycle_concurrency(host);
 
     std::cout << "=== OuroLRUAutoDehydrator 所有測試全部通過！ ===" << std::endl;
-    host.Shutdown();
     return 0;
   }
   catch (const std::exception &e)

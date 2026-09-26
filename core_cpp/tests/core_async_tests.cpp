@@ -325,8 +325,6 @@ int main()
     test_async_destruction_and_flush(host);
     test_async_result_converting_move();
 
-    host.Shutdown();
-
     std::cout << "=== OuroKore 核心非同步與批次所有測試全部通過！ ===" << std::endl;
     return 0;
   }
