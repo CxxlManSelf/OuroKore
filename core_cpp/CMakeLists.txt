@@ -18,6 +18,8 @@ add_subdirectory(core)
 add_subdirectory(tests)
 
 install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../specs/ DESTINATION specs)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../skills/ DESTINATION skills)
 
 
 

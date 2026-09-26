@@ -59,8 +59,8 @@ def check_ai_skill_integrity(core_dir: Path):
     missing = [k for k in keywords if k not in content]
     return len(missing) == 0, missing
 
-def check_app_skill_integrity(core_dir: Path):
-    skill_file = core_dir / "skills" / "ourokore-app" / "SKILL.md"
+def check_app_skill_integrity(root_dir: Path):
+    skill_file = root_dir / "skills" / "ourokore-app" / "SKILL.md"
     if not skill_file.exists():
         return False, ["App skill file missing: skills/ourokore-app/SKILL.md"]
     
@@ -118,9 +118,9 @@ def main():
         has_error = True
 
     # 4. 檢驗應用端開發者 AI 技能完整性
-    ok, missing_app_parts = check_app_skill_integrity(core_dir)
+    ok, missing_app_parts = check_app_skill_integrity(root_dir)
     if ok:
-        print("  ✅ [PASS] 應用端 AI 技能檔 skills/ourokore-app/SKILL.md 結構完整且範本完備")
+        print("  ✅ [PASS] 應用端 AI 技能檔 ../skills/ourokore-app/SKILL.md 結構完整且範本完備")
     else:
         print(f"  ❌ [FAIL] 應用端 AI 技能檔缺失關鍵段落: {missing_app_parts}")
         has_error = True
