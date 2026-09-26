@@ -17,7 +17,15 @@ template <typename T>
 class OwningHandle;
 template <typename T>
 class OuroPtr;
+class Registry;
+class ControlBlock;
+class DeferredDeleteQueue;
 
+namespace detail
+{
+template <typename T>
+void RehydratePayload(HandleID id);
+}
 
 /**
  * @brief Base class for all managed objects in OuroKore.
@@ -27,7 +35,6 @@ class OuroObject
 {
 public:
   virtual ~OuroObject() = default;
-  virtual void DestroySelf() { delete this; }
 
   // 託管實體具備唯一生命週期識別碼，嚴格禁止值語意之拷貝與搬移
   OuroObject(const OuroObject &) = delete;
@@ -76,16 +83,28 @@ public:
   virtual void SerializePayload(OuroStream & /*stream*/) const {}
   virtual void DeserializePayload(OuroStream & /*stream*/) {}
 
-  /**
-   * @brief Sets the runtime instance identifier of this object.
-   */
-  void SetObjectID(HandleID id) { m_object_id = id; }
-
 protected:
   OuroObject();
 
+  /**
+   * @brief Fallback in-place deleter for runtime when no custom deleter hook is registered.
+   * Protected to prevent plugins from bypassing deferred delete queues.
+   */
+  virtual void DestroySelf() { delete this; }
+
 private:
   friend class Registry;
+  friend class ControlBlock;
+  friend class DeferredDeleteQueue;
+
+  template <typename T>
+  friend void detail::RehydratePayload(HandleID id);
+
+  /**
+   * @brief Sets the runtime instance identifier of this object.
+   * Internal-only: managed strictly by Registry and Rehydration routines.
+   */
+  void SetObjectID(HandleID id) { m_object_id = id; }
 
   HandleID m_object_id = 0;
   std::unordered_map<std::string, OwningContainerHandle *> m_registered_handles;
