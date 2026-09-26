@@ -37,7 +37,7 @@ target_link_libraries(MyOuroKoreApp PRIVATE ourokore_core ourokore_base)
 1. **控制區塊與 Handle 代數系統 (ControlBlock & Handle System)**：
    - 透過全域唯一 64-bit `HandleID` 與控制區塊管理物件生命週期。
    - `OwningHandle<T>`：持有圖拓撲的強引用，支援循環參照並由背景 `CycleCollector` 非同步安全回收。
-   - `UnboundHandle<T>`：無繫結弱引用（In-degree = 0），專為動態插件模組非同步卸載防釘死與旁路觀察設計。
+   - `UnboundHandle<T>`：純旁觀者弱引用（只看不管生死），專為外掛模組隨時卸載防卡死、UI 介面暫時觀察與快取索引設計。
    - `OuroPtr<T>`：棧上與根參照守衛（Root Edge），內建讀寫鎖與安全保護。
 
 2. **記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)**：
