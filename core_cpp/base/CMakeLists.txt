@@ -14,7 +14,7 @@ configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../version.rc.in
 file(GLOB_RECURSE BASE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
 if(UNIX)
-    set(LIBSRC_LIST ${LIBSRC_LIST} pthread)
+    set(LIBSRC_LIST ${LIBSRC_LIST} pthread ${CMAKE_DL_LIBS})
 endif()
 
 add_library(${TARGET_NAME} SHARED ${BASE_SRCS})

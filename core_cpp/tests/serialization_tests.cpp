@@ -1314,6 +1314,120 @@ void Test13_Object_Deletion_Notification_Under_Unbound_References(ork::HostConte
   std::cout << "  -> 無繫結句柄存活情境下之邏輯銷毀通知（Dehydrator 與 Storage 清理）驗證成功！\n" << std::endl;
 }
 
+class Utf8TestChild : public ork::OuroObject
+{
+public:
+  std::string m_tag{"ChildTag"};
+  void SerializePayload(ork::OuroStream &stream) const override
+  {
+    stream.WriteProperty(u8"tag", m_tag);
+  }
+  void DeserializePayload(ork::OuroStream &stream) override
+  {
+    stream.ReadProperty(u8"tag", m_tag);
+  }
+};
+
+class Utf8TestParent : public ork::OuroObject
+{
+public:
+  ork::OwningHandle<Utf8TestChild> m_slot_utf8{u8"裝備槽_右手"};
+  std::u8string m_u8_desc{u8"這是C++20原生UTF8描述"};
+  std::string m_str_title{"傳奇之劍"};
+
+  Utf8TestParent() = default;
+
+  void SerializePayload(ork::OuroStream &stream) const override
+  {
+    // 驗證各種形式的 UTF-8 Key 與 Value
+    stream.WriteProperty(u8"desc", m_u8_desc);
+    stream.WriteProperty("title", m_str_title);
+    stream.WriteProperty(std::u8string(u8"key_u8str"), u8"字面量UTF8值");
+    stream.WriteProperty(std::string_view("key_view"), std::string_view("視圖字串值"));
+  }
+
+  void DeserializePayload(ork::OuroStream &stream) override
+  {
+    stream.ReadProperty(u8"desc", m_u8_desc);
+    stream.ReadProperty("title", m_str_title);
+    std::u8string u8_val;
+    stream.ReadProperty(std::u8string(u8"key_u8str"), u8_val);
+    assert(u8_val == u8"字面量UTF8值");
+    std::string view_val;
+    stream.ReadProperty(std::string_view("key_view"), view_val);
+    assert(view_val == "視圖字串值");
+  }
+};
+
+static void Test14_Utf8_Properties_And_Handles_Serialization()
+{
+  std::cout << "--- Test 14: 全面驗證 UTF-8 屬性讀寫與 Handles 藍圖打包 ---" << std::endl;
+
+  // 1. 直接測試 OuroStream / BlueprintStream 對各類 UTF-8 鍵值的序列化與反序列化
+  {
+    ork::BlueprintStream stream;
+
+    std::string s_in = "繁體中文普通字串";
+    std::u8string u8_in = u8"繁體中文C++20原生字串";
+    const char *cstr_in = "C風格字串";
+    const char8_t *cu8_in = u8"C++20字面量指標";
+    std::string_view sv_in = "字串視圖";
+    std::u8string_view u8v_in = u8"UTF-8視圖";
+
+    stream.WriteProperty("key1", s_in);
+    stream.WriteProperty(u8"鍵名2", u8_in);
+    stream.WriteProperty(std::string_view("key3"), cstr_in);
+    stream.WriteProperty(std::u8string(u8"鍵名4"), cu8_in);
+    stream.WriteProperty(u8"鍵名5", sv_in);
+    stream.WriteProperty("key6", u8v_in);
+
+    // 驗證反序列化
+    std::string s_out;
+    std::u8string u8_out;
+    std::string cstr_out;
+    std::u8string cu8_out;
+    std::string sv_out;
+    std::u8string u8v_out;
+
+    stream.ReadProperty("key1", s_out);
+    stream.ReadProperty(u8"鍵名2", u8_out);
+    stream.ReadProperty(std::string_view("key3"), cstr_out);
+    stream.ReadProperty(std::u8string(u8"鍵名4"), cu8_out);
+    stream.ReadProperty(u8"鍵名5", sv_out);
+    stream.ReadProperty("key6", u8v_out);
+
+    assert(s_out == "繁體中文普通字串");
+    assert(u8_out == u8"繁體中文C++20原生字串");
+    assert(cstr_out == "C風格字串");
+    assert(cu8_out == u8"C++20字面量指標");
+    assert(sv_out == "字串視圖");
+    assert(u8v_out == u8"UTF-8視圖");
+
+    std::cout << "  ✅ OuroStream 各類 UTF-8 鍵值型別（含 C++20 char8_t / u8string）序列化與還原 100% 吻合！" << std::endl;
+  }
+
+  // 2. 驗證 OwningHandle UTF-8 插槽名稱與藍圖打包還原
+  {
+    auto parent = ork::CreateObject<Utf8TestParent>();
+    auto child = ork::CreateObject<Utf8TestChild>();
+    parent->m_slot_utf8 = child;
+
+    assert(parent->m_slot_utf8.GetSlotName() == "裝備槽_右手");
+
+    ork::BlueprintStream stream;
+    ork::PackBlueprint(*parent, stream);
+
+    auto restored_parent = ork::CreateObject<Utf8TestParent>();
+    ork::UnpackBlueprint(*restored_parent, stream);
+
+    assert(restored_parent->m_u8_desc == u8"這是C++20原生UTF8描述");
+    assert(restored_parent->m_str_title == "傳奇之劍");
+    assert(restored_parent->m_slot_utf8.GetTargetID() == child.GetTargetID());
+
+    std::cout << "  ✅ OwningHandle UTF-8 插槽名稱與完整藍圖打包還原驗證通過！\n" << std::endl;
+  }
+}
+
 int main()
 {
   std::cout << "=== OuroKore Phase 3 Serialization & Dehydration/Rehydration Tests ===" << std::endl;
@@ -1340,6 +1454,7 @@ int main()
     Test11_AutoDehydrator_Plugin_And_Core_Communication(host);
     Test12_WriteStream_Commit_Rollback_On_Exception(host);
     Test13_Object_Deletion_Notification_Under_Unbound_References(host, global_storage, mock_dehydrator);
+    Test14_Utf8_Properties_And_Handles_Serialization();
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();

@@ -39,6 +39,11 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 > OuroKore 核心程式庫（`ourokore_base`、`ourokore_core`）全部嚴格採用 **ISO C++20 標準**（`CMAKE_CXX_STANDARD 20`，停用編譯器擴展）建立。
 > **程式庫的使用端（無論是 Host 主程式或第三方插件 Component）強烈建議一律採用 C++20 或更高標準（C++20+）進行開發與編譯**。這能確保 C++ 模板（如 `OwningHandle<T>`、`OuroPtr<T>`）、STL 物件佈局、同步原語與記憶體模型之 100% 相容，避免跨標準混合編譯導致的潛在未定義行為或語法問題。
 
+### 2.0.1 全域文字訊息標準 (UTF-8 Standard Invariant)
+> ⚠️ **全域字串編碼鐵律**：
+> OuroKore 系統全體（屬性 Key、插槽名稱、錯誤文字、日誌、二進位字串與 FFI 邊界）**唯一強制使用 UTF-8 編碼**。
+> Windows 下涉及路徑或系統呼叫必須在底層顯式轉換為 `std::wstring` 呼叫 `W` 版 API，對外與對內一律回歸 UTF-8，嚴禁混用 ANSI 本地編碼（CP950/Big5/GBK 等）。
+
 ### 2.1 主程式 Entry Point (HostContext)
 ```cpp
 #include <ourokore/host/HostContext.hpp>

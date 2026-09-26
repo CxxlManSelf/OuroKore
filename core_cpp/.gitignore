@@ -1,0 +1,14 @@
+# Build directories
+build/
+bin/
+lib/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE / Editor
+.vscode/
+.vs/
+*.user
+*.suo

@@ -29,3 +29,13 @@ target_link_libraries(boundary_tests ourokore_core ourokore_base)
 add_executable(plugin_isolation_tests plugin_isolation_tests.cpp)
 target_link_libraries(plugin_isolation_tests ourokore_core ourokore_base)
 
+add_library(test_plugin_dll MODULE test_plugin_dll.cpp)
+set_target_properties(test_plugin_dll PROPERTIES 
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+)
+
+add_executable(base_dynamic_library_tests base_dynamic_library_tests.cpp)
+target_link_libraries(base_dynamic_library_tests ourokore_base)
+add_dependencies(base_dynamic_library_tests test_plugin_dll)
+

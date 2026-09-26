@@ -22,8 +22,8 @@ OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜�
 ```cpp
 class Boss : public ork::OuroObject {
 public:
-    // 自動向 Boss 註冊名為 "MinionSlot" 的邊緣
-    ork::OwningHandle<Monster> m_minion{"MinionSlot"};
+    // 自動向 Boss 註冊名為 "MinionSlot" 的邊緣，支援 C++20 UTF-8 字面量與中文槽位
+    ork::OwningHandle<Monster> m_minion{u8"隨從槽位_左"};
 
     void SetMinion(const ork::OuroPtr<Monster> &m) {
         m_minion.Set(m); // 設定目標並建立強持有邊緣

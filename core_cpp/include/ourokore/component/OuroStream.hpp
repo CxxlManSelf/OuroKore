@@ -7,6 +7,8 @@
 #include <string_view>
 #include <type_traits>
 
+#include "ourokore/base/utf8.hpp"
+
 namespace ork
 {
 
@@ -15,14 +17,7 @@ namespace detail
 template <typename KeyT>
 inline std::string_view ToKey(const KeyT &key)
 {
-  if constexpr (std::is_convertible_v<KeyT, std::string_view>)
-  {
-    return std::string_view(key);
-  }
-  else
-  {
-    return std::string_view(reinterpret_cast<const char *>(key));
-  }
+  return ork::utf8::as_view(key);
 }
 }  // namespace detail
 
@@ -65,6 +60,14 @@ public:
   virtual void ReadBytes(uint8_t *buffer, size_t size) = 0;
 
   virtual void WriteStringRaw(const std::string &value) = 0;
+  virtual void WriteStringRaw(std::string_view value)
+  {
+    WriteStringRaw(std::string(value));
+  }
+  virtual void WriteStringRaw(const char *value)
+  {
+    WriteStringRaw(std::string_view(value ? value : ""));
+  }
   virtual std::string ReadStringRaw() = 0;
 
   // --- Stream State & Cursor Management ---
@@ -91,22 +94,24 @@ public:
   {
     std::string_view k = detail::ToKey(key);
     CheckAndRegisterKey(k);
-    WriteStringRaw(std::string(k));
+    WriteStringRaw(k);
 
     using DecayT = std::decay_t<ValueT>;
-    if constexpr (std::is_same_v<DecayT, std::string>)
+    if constexpr (ork::utf8::is_string_like_v<DecayT>)
     {
-      WriteStringRaw(value);
-    }
-    else if constexpr (std::is_same_v<DecayT, const char *> || std::is_same_v<DecayT, char *>)
-    {
-      WriteStringRaw(std::string(value));
+      WriteStringRaw(ork::utf8::as_view(value));
     }
     else
     {
+      // 關鍵防線：嚴格禁止任何非字串指標類型（防止指標位址被當成 POD 寫入）
+      static_assert(
+          !std::is_pointer_v<DecayT>,
+          "OuroStream Error: Raw pointers cannot be serialized directly as properties. "
+          "Use OuroPtr/OwningHandle for object references, or string/u8string types for text."
+      );
       static_assert(
           std::is_trivially_copyable_v<DecayT>,
-          "OuroStream Error: WriteProperty value must be trivially copyable (POD/primitive/enum) or std::string"
+          "OuroStream Error: WriteProperty value must be trivially copyable (POD/primitive/enum) or string/u8string"
       );
       WriteBytes(reinterpret_cast<const uint8_t *>(&value), sizeof(value));
     }
@@ -124,11 +129,25 @@ public:
     {
       out_value = ReadStringRaw();
     }
+    else if constexpr (std::is_same_v<DecayT, std::u8string>)
+    {
+      std::string s = ReadStringRaw();
+      out_value = ork::utf8::to_u8string(s);
+    }
     else
     {
       static_assert(
+          !std::is_pointer_v<DecayT>,
+          "OuroStream Error: Cannot deserialize into raw pointers."
+      );
+      static_assert(
+          !std::is_same_v<DecayT, std::string_view> && !std::is_same_v<DecayT, std::u8string_view>,
+          "OuroStream Error: Cannot ReadProperty into string_view because string_view does not own memory. "
+          "Use std::string or std::u8string instead."
+      );
+      static_assert(
           std::is_trivially_copyable_v<DecayT>,
-          "OuroStream Error: ReadProperty value must be trivially copyable (POD/primitive/enum) or std::string"
+          "OuroStream Error: ReadProperty value must be trivially copyable (POD/primitive/enum) or string/u8string"
       );
       ReadBytes(reinterpret_cast<uint8_t *>(&out_value), sizeof(out_value));
     }

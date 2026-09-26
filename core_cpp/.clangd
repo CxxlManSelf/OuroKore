@@ -11,6 +11,7 @@ CompileFlags:
   Add:
     - '--target=x86_64-w64-mingw32'
     - '-std=c++20'
+    - '-fno-builtin-__rdtsc'
     - '-IC:/OuroKore/include'
     - '-isystem'
     - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/c++'

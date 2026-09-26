@@ -58,3 +58,28 @@
   * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
   * `Dehydrate(id)` / `Rehydrate<T>(id)`：手動脫水與復水。
   * `SaveBatch(...)` / `LoadBatch(...)`：多核心平行批次操作。
+
+---
+
+## 🧩 6. 跨平台動態庫與插件載入器：`ork::DynamicLibrary`
+* **標頭檔**：`ourokore/base/DynamicLibrary.hpp`
+* **設計哲學**：無手動卸載（No Manual Unload）、生命週期反向錨定（Life-Bound Retention）、使用端自訂工廠函式。
+* **方法**：
+  * `static DynamicLibrary load(std::string_view utf8_path, LibraryLoadFlags flags = Default)`：自 UTF-8 路徑載入動態庫（Windows 內部使用 Unicode `LoadLibraryW`，杜絕本地 ANSI/CP950 亂碼）。
+  * `static DynamicLibrary load(const std::filesystem::path &path, ...)`：自檔案路徑載入動態庫。
+  * `bool is_loaded() const noexcept`：查詢動態庫是否載入成功。
+  * `const std::string &get_last_error() const noexcept`：取得 UTF-8 格式的系統錯誤訊息。
+  * `std::string get_path_utf8() const noexcept`：取得載入函式庫之 UTF-8 規範路徑。
+  * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析動態庫導出符號並智慧推導函式指標型別。
+  * `template <typename T, typename DeleterT> std::shared_ptr<T> bind_lifecycle(T *raw_ptr, DeleterT deleter)`：將自訂裸指標與動態庫存活權杖綁定，確保指標銷毀前動態庫永不卸載。
+  * `static std::filesystem::path format_filename(std::string_view base_name)`：依作業系統格式化動態庫檔名（Windows `.dll`、Linux `.so`、macOS `.dylib`）。
+
+---
+
+## 🌐 7. 全域 UTF-8 零拷貝輔助工具：`ork::utf8`
+* **標頭檔**：`ourokore/base/utf8.hpp`
+* **函式與工具**：
+  * `ork::utf8::as_view(str)`：將 `std::string`、`std::u8string`、`std::string_view`、`std::u8string_view`、`const char*`、`const char8_t*` 零拷貝轉為 `std::string_view`。
+  * `ork::utf8::to_string(str)`：將各類字串統一轉為 `std::string`。
+  * `ork::utf8::to_u8string(view)`：將字串視圖轉為 C++20 原生 `std::u8string`。
+  * `ork::utf8::is_string_like_v<T>`：編譯期型別特徵萃取，判斷是否為字串相關型別。

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "OuroObject.hpp"
+#include "ourokore/base/utf8.hpp"
 #include "ourokore/c_api/component_api.h"
 
 namespace ork
@@ -258,6 +259,15 @@ public:
     {
       active_obj->RegisterHandle(this);
     }
+  }
+
+  template <typename StrT, typename = std::enable_if_t<
+      !std::is_base_of_v<OwningContainerHandle, std::decay_t<StrT>> &&
+      !std::is_same_v<std::decay_t<StrT>, std::string>
+  >>
+  explicit OwningContainerHandle(const StrT &slot_name) :
+      OwningContainerHandle(ork::utf8::to_string(slot_name))
+  {
   }
 
   virtual ~OwningContainerHandle() noexcept
@@ -529,11 +539,30 @@ public:
   {
   }
 
+  template <typename StrT, typename = std::enable_if_t<
+      !std::is_base_of_v<OwningContainerHandle, std::decay_t<StrT>> &&
+      !std::is_same_v<std::decay_t<StrT>, std::string>
+  >>
+  explicit OwningHandle(const StrT &slot_name) :
+      OwningContainerHandle(ork::utf8::to_string(slot_name))
+  {
+  }
+
   virtual ~OwningHandle() noexcept = default;
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
   OwningHandle(std::string slot_name, const OuroPtr<U> &ptr) :
       OwningContainerHandle(std::move(slot_name))
+  {
+    SetTarget(ptr.GetTargetID());
+  }
+
+  template <typename StrT, typename U, typename = std::enable_if_t<
+      !std::is_same_v<std::decay_t<StrT>, std::string> &&
+      std::is_convertible_v<std::remove_const_t<U> *, RawT *>
+  >>
+  OwningHandle(const StrT &slot_name, const OuroPtr<U> &ptr) :
+      OwningContainerHandle(ork::utf8::to_string(slot_name))
   {
     SetTarget(ptr.GetTargetID());
   }

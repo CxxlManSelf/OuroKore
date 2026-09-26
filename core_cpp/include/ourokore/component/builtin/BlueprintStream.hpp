@@ -81,7 +81,7 @@ public:
     m_read_cursor += size;
   }
 
-  void WriteStringRaw(const std::string &value) override
+  void WriteStringRaw(std::string_view value) override
   {
     uint32_t len = static_cast<uint32_t>(value.size());
     WriteBytes(reinterpret_cast<const uint8_t *>(&len), sizeof(len));
@@ -89,6 +89,16 @@ public:
     {
       WriteBytes(reinterpret_cast<const uint8_t *>(value.data()), len);
     }
+  }
+
+  void WriteStringRaw(const std::string &value) override
+  {
+    WriteStringRaw(std::string_view(value));
+  }
+
+  void WriteStringRaw(const char *value) override
+  {
+    WriteStringRaw(std::string_view(value ? value : ""));
   }
 
   std::string ReadStringRaw() override

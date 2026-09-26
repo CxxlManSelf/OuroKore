@@ -30,6 +30,12 @@ target_include_directories(MyOuroKoreApp PRIVATE ${OUROKORE_INCLUDE_DIR})
 target_link_libraries(MyOuroKoreApp PRIVATE ourokore_core ourokore_base)
 ```
 
+### 全域文字訊息標準 (UTF-8 Standard Invariant)
+
+> ⚠️ **全域唯一字串編碼標準**：
+> OuroKore 系統內部涉及到任何文字訊息（屬性鍵名、插槽名稱、錯誤描述、二進位字串序列化與跨語言 FFI 傳遞），**一律強制採用 UTF-8 為唯一標準**。
+> Windows 下涉及檔案路徑與作業系統呼叫，底層自動轉換為 `std::wstring` 呼叫 Unicode `W` 版 API，對外介面與持久化儲存 100% 保持 UTF-8，嚴禁混用 ANSI 本地編碼。
+
 ---
 
 ## 🧭 核心架構特色

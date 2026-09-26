@@ -75,3 +75,19 @@
 3. **C++ 高階封裝作為 Wrapper**：
    - C++ 高階物件（如 `HostContext`、`OuroCore.hpp` 輔助函式）僅作為基於純 C ABI 之上的現代安全包裝層（RAII、模板、異常安全）。
    - 如此可確保未來為 C#（P/Invoke）或 Rust（`extern "C"`）開發綁定時，能 100% 完整接入相同能力，不會出現跨語言功能斷層。
+
+---
+
+## 全域文字與訊息編碼標準規範 (UTF-8 Standard Invariant)
+
+> **核心原則：OuroKore 框架全體涉及到任何文字訊息、字串、識別碼與路徑，一律以 UTF-8 為唯一強制標準。**
+
+1. **全域唯一字串編碼**：
+   - 所有的屬性鍵名（Property Keys）、插槽名稱（Slot Names）、錯誤描述字串（Error Messages）、日誌輸出（Logging）、二進位資料串流（Binary Streams）以及跨語言 FFI 傳遞的字元指標，**內部 100% 強制使用 UTF-8 編碼**。
+   - 嚴禁在核心內部或公開介面中混用 ANSI 本地編碼（如 CP950/Big5、CP936/GBK、Windows-1252 等）。
+2. **作業系統 API 邊界轉換隔離**：
+   - 在 Windows 平台上呼叫系統原生 API 時（如檔案 I/O、動態庫載入、系統錯誤代碼格式化），底層實作必須在邊界內部將 UTF-8 顯式轉換為 UTF-16 寬字元（`std::wstring`）並調用 Unicode `W` 版 API（如 `LoadLibraryW`、`FormatMessageW`）。
+   - 系統回傳的字串訊息必須立即轉換為 UTF-8 儲存與傳播，杜絕平台特有編碼汙染核心。
+3. **二進位協議規範**：
+   - 藍圖打包、脫水落盤與網路傳輸中的字串，統一採用「4 位元組長度前綴（Little-Endian `uint32_t len`）+ `len` 個位元組之 UTF-8 內容（無 null 結尾字元）」標準，確保多語言資料 100% 互通。
+

@@ -25,3 +25,8 @@
 ## 4. 語言標準規範（C++20 Invariant）
 - **核心程式庫**：全專案嚴格使用 **ISO C++20** 標準建立（`CMAKE_CXX_STANDARD 20`、`CMAKE_CXX_STANDARD_REQUIRED ON`、`CMAKE_CXX_EXTENSIONS OFF`）。
 - **使用端規範**：強烈建議使用端（Host 主程式、Plugin 外掛模組）亦採用 **C++20 或更高版本之標準** 進行開發，以確保 C++ 模板展開、STL 記憶體模型與公開標頭檔（Headers）之 100% 相容。
+
+## 5. 文字與字串編碼規範（UTF-8 Invariant）
+- **唯一強制標準**：所有文字訊息、屬性鍵名、插槽名稱、錯誤描述、二進位字串序列化與 FFI 介面，**100% 統一採用 UTF-8 編碼**。
+- **OS 邊界隔離**：Windows 下涉及路徑或系統呼叫必須在底層顯式轉換為 `std::wstring` 呼叫 `W` 版 API，對外介面與儲存一律回歸 UTF-8，嚴禁混用 ANSI 本地編碼。
+
