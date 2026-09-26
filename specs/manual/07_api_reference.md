@@ -36,7 +36,7 @@
 * **類別**：
   * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
   * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
-  * `WeakHandle<T>`：非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`。
+  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
   * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator->`, `operator*`, `GetTargetID()`, `Release()`。
 
 ---

@@ -31,7 +31,7 @@ def generate_manual_specs(specs_dir: Path):
 | 1. 控制區塊與 Handle 代數系統      | 2. 透明換頁脫水與復水系統        |
 |    - ControlBlock 跨模組託管       |    - 四態生命週期 (StorageState)  |
 |    - OwningHandle (強擁有權邊緣)   |    - 內建 LRU 自動淘汰換頁       |
-|    - WeakHandle (非擁有型解耦引用) |    - Transparent Rehydration     |
+|    - UnboundHandle (無繫結解耦引用)|    - Transparent Rehydration     |
 |    - OuroPtr (棧上安全根守衛)      |    - OOM 緊急自救脫水救援        |
 +------------------------------------+----------------------------------+
 | 3. 純 Payload 與拓撲分離藍圖打包    | 4. 三層權限隔離與 HostContext    |
@@ -46,7 +46,7 @@ def generate_manual_specs(specs_dir: Path):
 * **強邊界與弱引用分工**：
   * `OwningHandle<T>`：宣告單一子物件擁有權插槽（邊緣拓撲），形成清晰的父子持有樹。業務圖內部雙向與互指關聯亦放膽使用，由背景 `CycleCollector` 自動偵測孤島並非同步消化。
   * `OwningContainerHandle`：宣告動態子物件容器（如背包道具清單、子節點陣列）。
-  * `WeakHandle<T>`：非擁有型引用，專為**動態模組/DLL 插件熱卸載防釘死、生命週期解耦與旁路觀察**設計。支援安全原子鎖定（`LockAndAcquire()`），具備惰性修剪（Lazy Pruning）機制，徹底杜絕野指標與 UAF。
+  * `UnboundHandle<T>`：無繫結句柄，不佔用物件圖入邊（In-degree = 0），專為**動態模組/DLL 插件非同步熱卸載防釘死、生命週期解耦與旁路觀察**設計。支援安全原子提升（`LockAndAcquire()`），具備惰性修剪（Lazy Pruning）機制，徹底杜絕野指標與 UAF。
   * `OuroPtr<T>`：棧上或全域根引用守衛（Root Edge），內部自動調用 `ork_acquire_object_pointer` 與讀寫鎖，保證在活躍存取期間物件絕不被脫水或物理銷毀。
 
 ### 2. 記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)
@@ -256,7 +256,7 @@ OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜�
 | :--- | :--- | :--- | :--- |
 | **`OwningHandle<T>`** | 強擁有權 (Strong) | 自動向父物件登記 Slot | 單一子物件、樹狀關聯、圖內部雙向互指 |
 | **`OwningContainerHandle`** | 強擁有權 (Strong) | 自動向父物件登記動態容器 | 道具清單、可變子節點集合 |
-| **`WeakHandle<T>`** | 弱引用 (Weak/Non-owning) | 不占用拓撲邊緣 | 外部旁路觀察、動態 DLL 模組防釘死、快取索引 |
+| **`UnboundHandle<T>`** | 無繫結弱引用 (Unbound/Non-owning) | 不占用拓撲邊緣 | 外部旁路觀察、動態 DLL 模組非同步熱卸載防釘死、快取索引 |
 | **`OuroPtr<T>`** | 棧上根引用 (Root Edge) | 自動向核心登記 Root | 局部變數、計算過程臨時持有、API 回傳值 |
 
 ---
@@ -291,22 +291,22 @@ public:
 
 ---
 
-## 3. `WeakHandle<T>`：解耦弱引用與防釘死保護
+## 3. `UnboundHandle<T>`：解耦弱引用與非同步熱卸載防釘死保護
 
-若物件需要關聯一個「隨時可能被卸載、摧毀或替換」的外部服務或模組，使用 `WeakHandle`：
+若物件需要關聯一個「隨時可能被卸載、摧毀或替換」的外部服務或外掛模組，使用 `UnboundHandle`：
 
 ```cpp
 class CombatSystem : public ork::OuroObject {
 public:
-    ork::WeakHandle<ork::OuroObject> m_ai_module;
+    ork::UnboundHandle<ork::OuroObject> m_ai_module;
 
     void ExecuteAI() {
-        // 原子鎖定晉升：防範 TOCTOU 競態與野指標
+        // 原子鎖定晉升：防範 TOCTOU 競態、野指標與非同步卸載衝突
         if (auto ai = m_ai_module.LockAndAcquire()) {
             // 目標活躍在線且已取得棧上保護，安全執行
             std::cout << "AI 模組在線！" << std::endl;
         } else {
-            // 目標已銷毀或卸載，內部自動完成惰性修剪 (Lazy Pruning)
+            // 目標已銷毀或正在非同步卸載中，內部自動完成惰性修剪 (Lazy Pruning)
             std::cout << "AI 模組不存在或已被卸載" << std::endl;
         }
     }
@@ -463,7 +463,7 @@ host->Shutdown();
 * **類別**：
   * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
   * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
-  * `WeakHandle<T>`：非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`。
+  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
   * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator->`, `operator*`, `GetTargetID()`, `Release()`。
 
 ---

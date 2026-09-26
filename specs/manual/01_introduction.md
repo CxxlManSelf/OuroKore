@@ -20,7 +20,7 @@
 | 1. 控制區塊與 Handle 代數系統      | 2. 透明換頁脫水與復水系統        |
 |    - ControlBlock 跨模組託管       |    - 四態生命週期 (StorageState)  |
 |    - OwningHandle (強擁有權邊緣)   |    - 內建 LRU 自動淘汰換頁       |
-|    - WeakHandle (非擁有型解耦引用) |    - Transparent Rehydration     |
+|    - UnboundHandle (無繫結解耦引用)|    - Transparent Rehydration     |
 |    - OuroPtr (棧上安全根守衛)      |    - OOM 緊急自救脫水救援        |
 +------------------------------------+----------------------------------+
 | 3. 純 Payload 與拓撲分離藍圖打包    | 4. 三層權限隔離與 HostContext    |
@@ -35,7 +35,7 @@
 * **強邊界與弱引用分工**：
   * `OwningHandle<T>`：宣告單一子物件擁有權插槽（邊緣拓撲），形成清晰的父子持有樹。業務圖內部雙向與互指關聯亦放膽使用，由背景 `CycleCollector` 自動偵測孤島並非同步消化。
   * `OwningContainerHandle`：宣告動態子物件容器（如背包道具清單、子節點陣列）。
-  * `WeakHandle<T>`：非擁有型引用，專為**動態模組/DLL 插件熱卸載防釘死、生命週期解耦與旁路觀察**設計。支援安全原子鎖定（`LockAndAcquire()`），具備惰性修剪（Lazy Pruning）機制，徹底杜絕野指標與 UAF。
+  * `UnboundHandle<T>`：無繫結句柄，不佔用物件圖入邊（In-degree = 0），專為**動態模組/DLL 插件非同步熱卸載防釘死、生命週期解耦與旁路觀察**設計。支援安全原子提升（`LockAndAcquire()`），具備惰性修剪（Lazy Pruning）機制，徹底杜絕野指標與 UAF。
   * `OuroPtr<T>`：棧上或全域根引用守衛（Root Edge），內部自動調用 `ork_acquire_object_pointer` 與讀寫鎖，保證在活躍存取期間物件絕不被脫水或物理銷毀。
 
 ### 2. 記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)

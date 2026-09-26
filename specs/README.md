@@ -11,7 +11,7 @@
 1. [01. 系統概述與架構哲學](manual/01_introduction.md) - 心智模型、四大基石與三層邊界隔離哲學
 2. [02. 5 分鐘快速上手](manual/02_quickstart.md) - 宿主初始化、自訂領域物件、屬性存取與存檔
 3. [03. 領域物件設計規範](manual/03_domain_object_design.md) - Getter/Setter、OuroReadLock/OuroWriteLock、原子標髒
-4. [04. Handle 拓撲管理系統](manual/04_handles_and_topology.md) - OwningHandle、WeakHandle、OwningContainerHandle、OuroPtr
+4. [04. Handle 拓撲管理系統](manual/04_handles_and_topology.md) - OwningHandle、UnboundHandle、OwningContainerHandle、OuroPtr
 5. [05. 自動換頁脫水與儲存驅動](manual/05_dehydration_and_storage.md) - 記憶體脫水、透明按需復水、LRU 策略配置
 6. [06. 宿主生命週期與特權管理](manual/06_host_lifecycle.md) - HostContext 獨佔特權、插件隔離防護、優雅退出
 7. [07. 公開 C++ API 參照手冊](manual/07_api_reference.md) - 完整公開 API 清單與核心型別定義

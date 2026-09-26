@@ -16,7 +16,7 @@ OuroKore 核心嚴格遵循「**C ABI 為底，各語言 Wrapper 為糖**」之�
 +----------------------------------------------------------------------+
 |                  第三方插件層 (Plugin / Component)                   |
 |  - 領域物件繼承 OuroObject，嚴禁存取內部 ControlBlock 裸指標          |
-|  - 拓撲邊緣透過 OwningHandle、WeakHandle、OwningContainerHandle 表達  |
+|  - 拓撲邊緣透過 OwningHandle、UnboundHandle、OwningContainerHandle 表達 |
 |  - 棧上受管指針 OuroPtr<T>，執行緒安全讀寫鎖 OuroReadLock/WriteLock    |
 |  - 物理隔離：絕不暴露任何進程級特權 API (零洩漏保證)                  |
 +----------------------------------------------------------------------+

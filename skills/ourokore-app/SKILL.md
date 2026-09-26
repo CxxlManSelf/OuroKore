@@ -17,7 +17,7 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
 2. **三種 Handle 職責分工**：
    - `OwningHandle<T>`：宣告單一子物件插槽（擁有權拓撲邊緣），子物件生命週期由父物件持有。業務圖內部雙向與網狀關聯亦直接使用 `OwningHandle`，充分享受背景 `CycleCollector` 的非同步卸載。
    - `OwningContainerHandle`：宣告動態子物件容器（如背包物品清單）。
-   - `WeakHandle<T>`：宣告**非擁有型、生命週期解耦之引用**。專為**動態模組/DLL 插件熱卸載（Hot-Reload / Dynamic Unload）防釘死、可再生服務實體與旁路觀察**設計。存取時透過 `.LockAndAcquire()` 暫時換取 `OuroPtr<T>`，平時不佔用擁有權拓撲邊緣，允許目標隨時安全被卸載或重載。
+   - `UnboundHandle<T>`：宣告**非擁有型、生命週期解耦之引用**。專為**動態模組/DLL 插件熱卸載（Hot-Reload / Dynamic Unload）防釘死、可再生服務實體與旁路觀察**設計。存取時透過 `.LockAndAcquire()` 暫時換取 `OuroPtr<T>`，平時不佔用擁有權拓撲邊緣，允許目標隨時安全被卸載或重載。
 3. **執行緒安全與自動 Dirty 標記（重要！）**：
    - 物件的純資料屬性（Payload）請一律封裝在 `private` 或 `protected` 中。
    - 讀取時使用 `ork::OuroReadLock`（共用讀鎖）。
@@ -45,7 +45,7 @@ public:
     ork::OwningHandle<Monster> m_pet{"PetSlot"};
     
     // 弱引用：用於關聯外部可動態卸載的模組/插件或可再生服務（防止外部強引用釘死 DLL）
-    ork::WeakHandle<ork::OuroObject> m_plugin_module;
+    ork::UnboundHandle<ork::OuroObject> m_plugin_module;
 
     // ----------------------------------------------------
     // 2. 執行緒安全之屬性存取介面 (Thread-Safe Accessors)
@@ -122,7 +122,7 @@ ork::OuroPtr<Monster> drake = ork::CreateObject<Monster>();
 drake->SetName("幼龍");
 boss->m_pet.Set(drake); // 由 boss 持有 drake 的擁有權
 
-// 3. 關聯外部動態 DLL 模組（使用 WeakHandle，避免釘死動態庫導致無法卸載）
+// 3. 關聯外部動態 DLL 模組（使用 UnboundHandle，避免釘死動態庫導致無法卸載）
 ork::OuroPtr<ork::OuroObject> dynamic_plugin = LoadPluginFromDll("AIPlugin.dll");
 boss->m_plugin_module = dynamic_plugin;
 

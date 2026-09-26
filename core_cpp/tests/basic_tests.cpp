@@ -315,24 +315,24 @@ int main()
   std::cout << "Test 2 Passed." << std::endl;
 
   // ==========================================
-  // Test 3: WeakHandle and Lazy Pruning
+  // Test 3: UnboundHandle and Lazy Pruning
   // ==========================================
-  std::cout << "Test 3: WeakHandle and Lazy Pruning..." << std::endl;
+  std::cout << "Test 3: UnboundHandle and Lazy Pruning..." << std::endl;
   g_deconstruct_count = 0;
   {
-    ork::WeakHandle<SimpleObject> weak;
+    ork::UnboundHandle<SimpleObject> unbound;
     {
       ork::OuroPtr<SimpleObject> ptr = ork::CreateObject<SimpleObject>();
-      weak = ptr;
-      assert(weak.IsAlive() == true);
+      unbound = ptr;
+      assert(unbound.IsAlive() == true);
       assert(g_deconstruct_count == 0);
     }
     // Strong pointer is dead, object deconstructed.
     assert(g_deconstruct_count == 1);
 
-    // Probing weak handle should trigger lazy pruning
-    assert(weak.IsAlive() == false);
-    assert(weak.GetTargetID() == 0);  // Local ID cleared by lazy pruning
+    // Probing unbound handle should trigger lazy pruning
+    assert(unbound.IsAlive() == false);
+    assert(unbound.GetTargetID() == 0);  // Local ID cleared by lazy pruning
   }
   std::cout << "Test 3 Passed." << std::endl;
 
@@ -770,7 +770,7 @@ int main()
                 << std::endl;
     }
 
-    // 3. 測試 OwningHandle 及 WeakHandle 接受 OuroPtr<const SimpleObject> 指派與建構
+    // 3. 測試 OwningHandle 及 UnboundHandle 接受 OuroPtr<const SimpleObject> 指派與建構
     {
       ork::OuroPtr<const SimpleObject> const_ptr = parent->m_child1.LockAndAcquire();
 
@@ -778,15 +778,15 @@ int main()
       parent->m_child2 = const_ptr;
       assert(parent->m_child2.GetTargetID() == const_ptr.GetTargetID());
 
-      // WeakHandle 支援從 OuroPtr<const T> 建構與指派
-      ork::WeakHandle<SimpleObject> weak_from_const(const_ptr);
-      assert(weak_from_const.GetTargetID() == const_ptr.GetTargetID());
+      // UnboundHandle 支援從 OuroPtr<const T> 建構與指派
+      ork::UnboundHandle<SimpleObject> unbound_from_const(const_ptr);
+      assert(unbound_from_const.GetTargetID() == const_ptr.GetTargetID());
 
-      ork::WeakHandle<SimpleObject> weak_assigned;
-      weak_assigned = const_ptr;
-      assert(weak_assigned.GetTargetID() == const_ptr.GetTargetID());
+      ork::UnboundHandle<SimpleObject> unbound_assigned;
+      unbound_assigned = const_ptr;
+      assert(unbound_assigned.GetTargetID() == const_ptr.GetTargetID());
 
-      std::cout << "  [4. const T 接受度測試] OwningHandle 與 WeakHandle 皆可順利接受 OuroPtr<const T>" << std::endl;
+      std::cout << "  [4. const T 接受度測試] OwningHandle 與 UnboundHandle 皆可順利接受 OuroPtr<const T>" << std::endl;
     }
   }
   std::cout << "Test 15 Passed." << std::endl;
@@ -838,16 +838,16 @@ int main()
   std::cout << "Test 16 Passed." << std::endl;
 
   // ==========================================
-  // Test 17: WeakHandle 併發 LockAndAcquire 與物件銷毀安全測試 (Anti-TOCTOU)
+  // Test 17: UnboundHandle 併發 LockAndAcquire 與物件銷毀/非同步卸載安全測試 (Anti-TOCTOU)
   // ==========================================
-  std::cout << "\nTest 17: WeakHandle 併發 LockAndAcquire 與物件銷毀安全測試 (Anti-TOCTOU)..." << std::endl;
+  std::cout << "\nTest 17: UnboundHandle 併發 LockAndAcquire 與物件銷毀/非同步卸載安全測試 (Anti-TOCTOU)..." << std::endl;
   {
     constexpr int ITERATIONS = 200;
     for (int i = 0; i < ITERATIONS; ++i)
     {
       auto obj = ork::CreateObject<SimpleObject>();
       obj->SetValue(42 + i);
-      ork::WeakHandle<SimpleObject> weak_handle(obj);
+      ork::UnboundHandle<SimpleObject> unbound_handle(obj);
 
       std::atomic<bool> start_flag{false};
       std::thread worker([&]() {
@@ -855,7 +855,7 @@ int main()
         {
           std::this_thread::yield();
         }
-        auto locked_ptr = weak_handle.LockAndAcquire();
+        auto locked_ptr = unbound_handle.LockAndAcquire();
         if (locked_ptr)
         {
           // 若成功晉升鎖定，物件必定完好存活且值必定正確，絕無 UAF！
@@ -864,7 +864,7 @@ int main()
       });
 
       start_flag.store(true, std::memory_order_release);
-      // 主執行緒立即釋放最後的強引用 (strong_count 歸零)
+      // 主執行緒立即釋放最後的強引用 (strong_count 歸零，模擬非同步卸載/銷毀)
       obj.Release();
 
       worker.join();

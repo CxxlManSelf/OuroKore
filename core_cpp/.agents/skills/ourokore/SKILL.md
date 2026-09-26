@@ -17,7 +17,7 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 1. **控制區塊與 Handle 代數系統 (ControlBlock & Handle System)**：
    - 物件不由裸指標或標準 `std::shared_ptr` 直接持有，而是由全域唯一的 64 位元識別碼 `HandleID` 與底層控制區塊託管。
    - `OwningHandle<T>` / `OwningContainerHandle`：表示強引用與擁有權（邊緣拓撲），自動向所屬父物件註冊槽位（Slot）。內部業務拓撲（含雙向關聯）放膽使用，由 `CycleCollector` 背景非同步消化。
-   - `WeakHandle<T>`：非擁有型引用，專為動態模組/DLL 插件熱卸載防釘死、生命週期解耦與旁路觀察設計，支援安全鎖定 (`LockAndAcquire()`)，具備惰性修剪（Lazy Pruning）機制，徹底杜絕懸掛野指標與模組生命週期被釘死之缺陷。
+   - `UnboundHandle<T>`：無繫結句柄，不佔用物件圖入邊（In-degree = 0），專為動態外掛模組非同步熱卸載防釘死、生命週期解耦與旁路觀察設計，支援安全原子提升 (`LockAndAcquire()`)，具備惰性修剪（Lazy Pruning）機制，徹底杜絕懸掛野指標與模組生命週期被釘死之缺陷。
    - `OuroPtr<T>`：棧上 / 全域根引用守衛（Root Edge），內部自動調用 `ork_acquire_object_pointer` 與讀寫鎖。
 
 2. **記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)**：
@@ -52,7 +52,7 @@ assert(host.IsValid());
 class Monster : public ork::OuroObject {
 public:
     ork::OwningHandle<Monster>          m_minion{"MinionSlot"};
-    ork::WeakHandle<ork::OuroObject>    m_plugin_module; // 弱引用，防止釘死動態 DLL
+    ork::UnboundHandle<ork::OuroObject> m_plugin_module; // 無繫結引用，防止釘死動態 DLL 模組非同步卸載
 
     int32_t GetHp() const { ork::OuroReadLock lock(*this); return m_hp; }
     void SetHp(int32_t hp) { ork::OuroWriteLock lock(*this); m_hp = hp; }

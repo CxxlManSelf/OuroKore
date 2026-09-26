@@ -41,7 +41,7 @@ def check_manual_api_coverage(specs_dir: Path):
         "HostContext",
         "OuroPtr",
         "OwningHandle",
-        "WeakHandle",
+        "UnboundHandle",
         "OuroObject",
         "OuroStream",
         "OuroWriteLock"
@@ -70,7 +70,7 @@ def check_app_skill_integrity(root_dir: Path):
         "OuroObject",
         "OuroPtr",
         "OwningHandle",
-        "WeakHandle",
+        "UnboundHandle",
         "SerializePayload",
         "DeserializePayload",
         "OuroWriteLock"

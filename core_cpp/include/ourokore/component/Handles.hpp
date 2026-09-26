@@ -78,7 +78,7 @@ class OwningContainerHandle;
 template <typename T>
 class OwningHandle;
 template <typename T>
-class WeakHandle;
+class UnboundHandle;
 
 /**
  * @brief RAII Guard for Thread-Local Active Owner context.
@@ -137,7 +137,7 @@ public:
 
   struct PreLockedTag {};
 
-  // Construct from pre-locked root edge (e.g. from WeakHandle::LockAndAcquire atomic promotion)
+  // Construct from pre-locked root edge (e.g. from UnboundHandle::LockAndAcquire atomic promotion)
   explicit OuroPtr(HandleID target_id, PreLockedTag) noexcept :
       m_target_id(target_id)
   {
@@ -696,23 +696,31 @@ private:
 };
 
 /**
- * @brief WeakHandle is an observer handle that holds WeakCount to prevent ControlBlock deletion.
- * Implements Lazy Pruning on CheckAlive probing.
+ * @brief UnboundHandle（無繫結句柄）：解耦弱引用與動態外掛模組非同步熱卸載安全句柄。
+ *
+ * 【核心語意與架構特性】
+ * 1. 無入邊繫結 (In-degree = 0)：不佔用物件圖中的任何拓撲強引用邊緣，目標物件的生命週期與存亡
+ *    完全不受 UnboundHandle 束縛，可被外部自由脫水、銷毀、或伴隨動態模組進行非同步卸載。
+ * 2. 動態模組熱卸載防釘死：跨 DLL / 外掛插件邊界觀察或引用服務時，絕不釘死宿主或插件實體。
+ * 3. 安全原子提升 (LockAndAcquire)：在目標物件存活且未處於拆解/卸載狀態時，可原子提升為持有根邊緣
+ *    的短期操作指針 OuroPtr<T>；若對象已死亡或正在非同步卸載中，提升保證安全失敗並傳回空指針，
+ *    徹底杜絕野指標 (Dangling Pointers) 與釋放後使用 (UAF)。
+ * 4. 高效無鎖惰性修剪 (Lock-Free Lazy Pruning)：在 IsAlive() 與提升失敗時以 CAS 競爭修剪墓碑弱引用。
  */
 template <typename T>
-class WeakHandle
+class UnboundHandle
 {
   template <typename U>
-  friend class WeakHandle;
+  friend class UnboundHandle;
 
 public:
   using RawT = std::remove_const_t<T>;
   static_assert(std::is_base_of_v<OuroObject, RawT>, "T must inherit from OuroObject");
 
-  WeakHandle() = default;
+  UnboundHandle() = default;
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  explicit WeakHandle(const OwningHandle<U> &handle) :
+  explicit UnboundHandle(const OwningHandle<U> &handle) :
       m_target_id(handle.GetTargetID())
   {
     HandleID tid = m_target_id.load(std::memory_order_relaxed);
@@ -723,7 +731,7 @@ public:
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  explicit WeakHandle(const OuroPtr<U> &ptr) :
+  explicit UnboundHandle(const OuroPtr<U> &ptr) :
       m_target_id(ptr.GetTargetID())
   {
     HandleID tid = m_target_id.load(std::memory_order_relaxed);
@@ -733,13 +741,13 @@ public:
     }
   }
 
-  ~WeakHandle() noexcept
+  ~UnboundHandle() noexcept
   {
     Release();
   }
 
   // Copy semantics
-  WeakHandle(const WeakHandle &other) :
+  UnboundHandle(const UnboundHandle &other) :
       m_target_id(other.m_target_id.load(std::memory_order_relaxed))
   {
     HandleID tid = m_target_id.load(std::memory_order_relaxed);
@@ -750,7 +758,7 @@ public:
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  WeakHandle(const WeakHandle<U> &other) :
+  UnboundHandle(const UnboundHandle<U> &other) :
       m_target_id(other.GetTargetID())
   {
     HandleID tid = m_target_id.load(std::memory_order_relaxed);
@@ -760,7 +768,7 @@ public:
     }
   }
 
-  WeakHandle &operator=(const WeakHandle &other)
+  UnboundHandle &operator=(const UnboundHandle &other)
   {
     if (this != &other)
     {
@@ -776,7 +784,7 @@ public:
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  WeakHandle &operator=(const WeakHandle<U> &other)
+  UnboundHandle &operator=(const UnboundHandle<U> &other)
   {
     HandleID other_tid = other.GetTargetID();
     if (this->m_target_id.load(std::memory_order_relaxed) != other_tid)
@@ -792,7 +800,7 @@ public:
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  WeakHandle &operator=(const OwningHandle<U> &handle)
+  UnboundHandle &operator=(const OwningHandle<U> &handle)
   {
     Release();
     HandleID tid = handle.GetTargetID();
@@ -805,7 +813,7 @@ public:
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  WeakHandle &operator=(const OuroPtr<U> &ptr)
+  UnboundHandle &operator=(const OuroPtr<U> &ptr)
   {
     Release();
     HandleID tid = ptr.GetTargetID();
@@ -818,18 +826,18 @@ public:
   }
 
   // Move semantics
-  WeakHandle(WeakHandle &&other) noexcept :
+  UnboundHandle(UnboundHandle &&other) noexcept :
       m_target_id(other.m_target_id.exchange(0, std::memory_order_relaxed))
   {
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  WeakHandle(WeakHandle<U> &&other) noexcept :
+  UnboundHandle(UnboundHandle<U> &&other) noexcept :
       m_target_id(other.m_target_id.exchange(0, std::memory_order_relaxed))
   {
   }
 
-  WeakHandle &operator=(WeakHandle &&other) noexcept
+  UnboundHandle &operator=(UnboundHandle &&other) noexcept
   {
     if (this != &other)
     {
@@ -840,7 +848,7 @@ public:
   }
 
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<std::remove_const_t<U> *, RawT *>>>
-  WeakHandle &operator=(WeakHandle<U> &&other) noexcept
+  UnboundHandle &operator=(UnboundHandle<U> &&other) noexcept
   {
     HandleID other_tid = other.m_target_id.exchange(0, std::memory_order_relaxed);
     if (this->m_target_id.load(std::memory_order_relaxed) != other_tid)
@@ -872,10 +880,10 @@ public:
     }
 
     // Step 2: Object is dead or not found.
-    // Atomically claim the right to prune this WeakHandle instance (CAS tid -> 0).
+    // Atomically claim the right to prune this UnboundHandle instance (CAS tid -> 0).
     if (m_target_id.compare_exchange_strong(tid, 0, std::memory_order_relaxed))
     {
-      // We won the race! Call Registry to perform pruning for this WeakHandle ONCE.
+      // We won the race! Call Registry to perform pruning for this UnboundHandle ONCE.
       ork_check_alive(tid, &alive, 1);
     }
     return false;
@@ -895,8 +903,8 @@ public:
       return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
     }
 
-    // Object is dead or not found:
-    // Atomically claim the right to prune this WeakHandle instance (CAS tid -> 0).
+    // Object is dead, not found, or destructing/unloading:
+    // Atomically claim the right to prune this UnboundHandle instance (CAS tid -> 0).
     if (m_target_id.compare_exchange_strong(tid, 0, std::memory_order_relaxed))
     {
       int32_t alive = 0;

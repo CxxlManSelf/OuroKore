@@ -10,7 +10,7 @@ OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜�
 | :--- | :--- | :--- | :--- |
 | **`OwningHandle<T>`** | 強擁有權 (Strong) | 自動向父物件登記 Slot | 單一子物件、樹狀關聯、圖內部雙向互指 |
 | **`OwningContainerHandle`** | 強擁有權 (Strong) | 自動向父物件登記動態容器 | 道具清單、可變子節點集合 |
-| **`WeakHandle<T>`** | 弱引用 (Weak/Non-owning) | 不占用拓撲邊緣 | 外部旁路觀察、動態 DLL 模組防釘死、快取索引 |
+| **`UnboundHandle<T>`** | 無繫結弱引用 (Unbound/Non-owning) | 不占用拓撲邊緣 | 外部旁路觀察、動態 DLL 模組非同步熱卸載防釘死、快取索引 |
 | **`OuroPtr<T>`** | 棧上根引用 (Root Edge) | 自動向核心登記 Root | 局部變數、計算過程臨時持有、API 回傳值 |
 
 ---
@@ -45,22 +45,22 @@ public:
 
 ---
 
-## 3. `WeakHandle<T>`：解耦弱引用與防釘死保護
+## 3. `UnboundHandle<T>`：解耦弱引用與非同步熱卸載防釘死保護
 
-若物件需要關聯一個「隨時可能被卸載、摧毀或替換」的外部服務或模組，使用 `WeakHandle`：
+若物件需要關聯一個「隨時可能被卸載、摧毀或替換」的外部服務或外掛模組，使用 `UnboundHandle`：
 
 ```cpp
 class CombatSystem : public ork::OuroObject {
 public:
-    ork::WeakHandle<ork::OuroObject> m_ai_module;
+    ork::UnboundHandle<ork::OuroObject> m_ai_module;
 
     void ExecuteAI() {
-        // 原子鎖定晉升：防範 TOCTOU 競態與野指標
+        // 原子鎖定晉升：防範 TOCTOU 競態、野指標與非同步卸載衝突
         if (auto ai = m_ai_module.LockAndAcquire()) {
             // 目標活躍在線且已取得棧上保護，安全執行
             std::cout << "AI 模組在線！" << std::endl;
         } else {
-            // 目標已銷毀或卸載，內部自動完成惰性修剪 (Lazy Pruning)
+            // 目標已銷毀或正在非同步卸載中，內部自動完成惰性修剪 (Lazy Pruning)
             std::cout << "AI 模組不存在或已被卸載" << std::endl;
         }
     }

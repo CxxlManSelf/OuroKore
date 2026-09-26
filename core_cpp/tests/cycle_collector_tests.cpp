@@ -125,28 +125,28 @@ void Test4_DeepTreeStackOverflowPrevention(ork::HostContext &host)
 
 void Test5_AntiZombieReanimation(ork::HostContext &host)
 {
-  std::cout << "[Test 5: Destructing 狀態防加邊與弱引用防殭屍復活 (Anti-Zombie Reanimation)]" << std::endl;
+  std::cout << "[Test 5: Destructing 狀態防加邊與無繫結句柄防殭屍復活 (Anti-Zombie Reanimation)]" << std::endl;
 
   assert(ORK_STATUS_ERROR_DESTRUCTING == -6);
 
-  ork::WeakHandle<CycleNode> weak;
+  ork::UnboundHandle<CycleNode> unbound;
   {
     ork::OuroPtr<CycleNode> node = ork::CreateObject<CycleNode>();
     node->next = node; // 建立自環
-    weak = node;       // 建立弱引用
-    assert(weak.IsAlive());
+    unbound = node;    // 建立無繫結句柄
+    assert(unbound.IsAlive());
   } // node 離開作用域，失去外部根
 
   // 執行循環收集與延遲銷毀
   host.CollectCycles();
   host.FlushDeferredDeletions();
 
-  // 驗證 WeakHandle 絕無法晉升復活已拆解之物件 (Anti-Zombie)
-  ork::OuroPtr<CycleNode> acquired = weak.LockAndAcquire();
+  // 驗證 UnboundHandle 絕無法晉升復活已拆解之物件 (Anti-Zombie)
+  ork::OuroPtr<CycleNode> acquired = unbound.LockAndAcquire();
   assert(!acquired);
-  assert(!weak.IsAlive());
+  assert(!unbound.IsAlive());
 
-  std::cout << "  Test 5 通過: 弱引用晉升防禦與 ORK_STATUS_ERROR_DESTRUCTING 規範正確！\n" << std::endl;
+  std::cout << "  Test 5 通過: 無繫結句柄晉升防禦與 ORK_STATUS_ERROR_DESTRUCTING 規範正確！\n" << std::endl;
 }
 
 int main()
