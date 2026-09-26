@@ -21,3 +21,7 @@
   - 功能絕不可只實現於 C++ 類別中，底層必須先在 `c_api/` 提供對應的純 C ABI（`extern "C"`、整數狀態碼、HandleID、C 函式指標）。
   - 純 C 函式內部必須以 `try/catch` 嚴密攔截所有 C++ 例外，防止例外飛出 DLL 導致崩潰。
   - C++ `HostContext` 與 `OuroCore.hpp` 作為現代語義包裝層，確保未來跨語言綁定庫享有 100% 相同控制權。
+
+## 4. 語言標準規範（C++20 Invariant）
+- **核心程式庫**：全專案嚴格使用 **ISO C++20** 標準建立（`CMAKE_CXX_STANDARD 20`、`CMAKE_CXX_STANDARD_REQUIRED ON`、`CMAKE_CXX_EXTENSIONS OFF`）。
+- **使用端規範**：強烈建議使用端（Host 主程式、Plugin 外掛模組）亦採用 **C++20 或更高版本之標準** 進行開發，以確保 C++ 模板展開、STL 記憶體模型與公開標頭檔（Headers）之 100% 相容。

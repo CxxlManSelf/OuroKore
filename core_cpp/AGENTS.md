@@ -18,6 +18,18 @@
 
 ---
 
+## 語言標準與編譯要求規範 (C++20 Standard Invariant)
+
+> **核心原則：OuroKore 核心程式庫全體均以 ISO C++20 標準建立，使用端強烈建議以 C++20 以上標準進行開發。**
+
+1. **核心程式庫建置標準**：
+   - 專案根目錄 [CMakeLists.txt](file:///c:/MySrc/OuroKore/core_cpp/CMakeLists.txt) 強制指定 `CMAKE_CXX_STANDARD 20`、`CMAKE_CXX_STANDARD_REQUIRED ON`、`CMAKE_CXX_EXTENSIONS OFF`。所有核心庫（`ourokore_base`、`ourokore_core`）與單元測試均以標準 ISO C++20 進行編譯。
+2. **使用端（Client / Host / Plugin）開發規範**：
+   - **強烈建議使用端一律使用 C++20 或更高版本之標準（C++20+）開發**。
+   - 程式庫標頭檔使用了 C++20 語法特性、STL 特性與現代記憶體模型，使用端若低於 C++20 可能遭遇編譯期型別或標頭檔無法解析之錯誤，使用 C++20 以上能確保 ABI 佈局與模板相容性最佳化。
+
+---
+
 ## 檢核準則一：主程式（Host）特權專用判定
 
 > **核心原則：凡涉及進程級全域控制、資源調度與破壞性操作，必須且只能由主程式掌控。**
