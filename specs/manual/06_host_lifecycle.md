@@ -23,22 +23,22 @@
 auto host = ork::Init(storage, dehydrator);
 
 // 1. 落盤排空：等待背景所有磁碟 I/O 與銷毀任務完成
-host->FlushStorage();
+host.FlushStorage();
 
 // 2. 延遲銷毀排空：等待延遲隊列清空
-host->FlushDeferredDeletions();
+host.FlushDeferredDeletions();
 
 // 3. 即時循環回收：強制觸發一輪循環孤島偵測
-host->CollectCycles();
+host.CollectCycles();
 
 // 4. 設定延遲銷毀模式（sync: 同步即時；async: 背景平行）
-host->SetDeferredDeleteMode(false);
+host.SetDeferredDeleteMode(false);
 
 // 5. 調度緊急記憶體自救脫水
-size_t freed = host->TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
+size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
 
-// 6. 優雅終止核心（解構時亦會自動執行）
-host->Shutdown();
+// 6. 優雅終止核心（HostContext 遵循 RAII 規範，離開作用域時解構式會自動調用 Shutdown()，一般無需手動呼叫）
+// 若特殊場景需提前終止，亦可顯式呼叫：host.Shutdown();
 ```
 
 ---

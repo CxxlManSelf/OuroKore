@@ -42,6 +42,7 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 auto storage = std::make_shared<ork::InMemoryStorage>();
 ork::HostContext host = ork::Init(storage);
 assert(host.IsValid());
+// host 遵循 RAII 自動生命週期管理，離開作用域時解構式會自動觸發優雅關閉（Shutdown），無需且不建議手動呼叫。
 ```
 
 ### 2.2 定義受管物件 (Inherit OuroObject)
