@@ -1213,9 +1213,11 @@ void Test12_WriteStream_Commit_Rollback_On_Exception(ork::HostContext &host)
   assert(read_val == 100);
 
   // 2. 修改資料為 999，但設定中途拋出例外模擬寫入失敗
-  faulty_obj->data = 999;
-  faulty_obj->should_throw = true;
-  faulty_obj->MarkDirty();
+  {
+    ork::OuroWriteLock lock(*faulty_obj);
+    faulty_obj->data = 999;
+    faulty_obj->should_throw = true;
+  }
 
   bool caught_exception = false;
   try

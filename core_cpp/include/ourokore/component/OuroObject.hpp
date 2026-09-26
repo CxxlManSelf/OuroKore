@@ -58,14 +58,6 @@ public:
   }
 
   /**
-   * @brief Mark object as Dirty in ControlBlock if currently Clean.
-   */
-  void MarkDirty()
-  {
-    ork_mark_dirty(m_object_id);
-  }
-
-  /**
    * @brief Register an OwningContainerHandle into this object's handle roster.
    */
   void RegisterHandle(OwningContainerHandle *handle);
