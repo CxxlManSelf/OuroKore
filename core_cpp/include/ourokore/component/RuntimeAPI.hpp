@@ -26,10 +26,40 @@ ORK_API std::unique_ptr<OuroStream> OpenRuntimeReadStream(HandleID id);
  */
 ORK_API void SubmitRuntimeTask(std::function<void()> task);
 
+// 前置宣告合法建構友元類別與函式
+template <typename T, typename... Args>
+HandleID CreateObjectInternal(Args &&...args);
+
+template <typename T>
+class Rehydrator;
+
 /**
- * @brief 當 OOM 時由核心內部觸發緊急脫水救援（不洩漏 IAutoDehydrator 給外掛）
+ * @brief 物件建構/復水專用權杖（Passkey Token）
+ * 私有建構子僅授權 CreateObjectInternal 與 Rehydrator 建構，
+ * 徹底禁止第三方插件在業務代碼中主動實例化此權杖。
  */
-ORK_API bool TriggerRuntimeRescue(size_t bytes_needed);
+class OuroCreationToken
+{
+  template <typename T, typename... Args>
+  friend HandleID CreateObjectInternal(Args &&...args);
+
+  template <typename T>
+  friend class Rehydrator;
+
+  explicit OuroCreationToken(HandleID id) noexcept : m_id(id) {}
+
+public:
+  HandleID GetID() const noexcept { return m_id; }
+
+private:
+  HandleID m_id{0};
+};
+
+/**
+ * @brief 當 OOM 時由核心內部觸發緊急脫水救援（內部自救專用，需持有合法的 OuroCreationToken）
+ */
+ORK_API bool TriggerRuntimeRescue(size_t bytes_needed, OuroCreationToken token);
+
 
 /**
  * @brief 通知核心自動脫水器登記新物件（不洩漏 IAutoDehydrator 給外掛）
@@ -62,7 +92,7 @@ ORK_API HandleID ReserveRuntimeObjectID();
 ORK_API bool BindRuntimeObjectPayload(HandleID id,
                                       ::OuroObject* payload,
                                       void (*destroy_fn)(::OuroObject*),
-                                      ::OuroObject* (*rehydrate_fn)(HandleID));
+                                      void (*rehydrate_fn)(HandleID));
 
 /**
  * @brief 取消預留並復位 ControlBlock（建構失敗異常回滾專用）

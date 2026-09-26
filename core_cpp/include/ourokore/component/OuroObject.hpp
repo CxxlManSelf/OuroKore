@@ -24,7 +24,7 @@ class DeferredDeleteQueue;
 namespace detail
 {
 template <typename T>
-void RehydratePayload(HandleID id);
+class Rehydrator;
 }
 
 /**
@@ -98,7 +98,7 @@ private:
   friend class DeferredDeleteQueue;
 
   template <typename T>
-  friend void detail::RehydratePayload(HandleID id);
+  friend class detail::Rehydrator;
 
   /**
    * @brief Sets the runtime instance identifier of this object.

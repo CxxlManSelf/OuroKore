@@ -83,4 +83,9 @@ int32_t NotifyObjectDehydrated(HandleID id);
  */
 int32_t NotifyObjectRehydrated(HandleID id);
 
+/**
+ * @brief 驗證 HandleID 是否處於合法的兩階段建構預留或脫水復水情境中
+ */
+bool IsValidRescueContext(HandleID id);
+
 }  // namespace ork::internal

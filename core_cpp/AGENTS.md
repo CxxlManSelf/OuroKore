@@ -43,6 +43,10 @@
    - 所有公開發布之 `include/` 目錄，**絕不可出現**任何內部私有標頭檔（如 `internal_api.h`）。
    - 核心底層內部私有功能（兩階段構造 ID 預留、底層 ControlBlock 記憶體操作等）**必須嚴格保留於 `core/src/`**，不得打包進 SDK。
    - `host_api.h` 絕不 re-export 任何核心私有標頭檔。
+3. **內部自救權杖與情境防禦（Passkey & Reservation Context Guard）**：
+   - 核心允許 `CreateObject` 與 `Rehydrate` 在分配記憶體遭遇 OOM 時被動觸發緊急脫水換頁自救，但底層 `TriggerRuntimeRescue` **必須受 `OuroCreationToken` 權杖（私有建構子 Passkey 模式）與核心內部 HandleID 預留/脫水狀態（`IsValidRescueContext`）雙重保護**。
+   - 嚴格禁止第三方插件在業務代碼中主動實例化 Token 或主動調用脫水救援 API。
+   - 內部底層回呼（如 `RehydrateCallback`）必須嚴格收斂至 `ork::detail` 命名空間，禁止外洩至公開 `ork::` 命名空間以防插件繞過智慧指針直接取得原始裸指標。
 
 ---
 

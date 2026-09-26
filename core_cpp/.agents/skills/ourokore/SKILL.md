@@ -86,6 +86,9 @@ private:
 3. **單向鎖階層順序 (Lock Ordering)**：
    - 嚴格遵循 `Registry 鎖 -> ControlBlock 鎖 -> 佇列鎖`。
    - 禁止在持有子物件獨占鎖的情況下逆向索取父物件的獨占鎖。
+4. **內部自救權杖與預留情境雙重保護 (Passkey & Reservation Context Guard)**：
+   - 核心底層 OOM 自救通道（`TriggerRuntimeRescue`）必須受 `OuroCreationToken`（Passkey Pattern，私有建構子）保護，且核心內部必須校驗 HandleID 是否正處於合法預留或脫水狀態（`IsValidRescueContext`）。嚴禁向插件暴露可主動調用之全域記憶體調度 API。
+   - 所有底層內部回呼（如 `RehydrateCallback`）回傳型別為 `void`，由 `detail::Rehydrator` 類別進行私有封裝（Private static），嚴格收斂至 `ork::detail` 內部命名空間，嚴禁對外暴露裸指標或允許插件任意調用。
 
 ---
 

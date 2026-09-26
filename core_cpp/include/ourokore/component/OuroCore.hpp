@@ -61,7 +61,7 @@ bool Save(const OuroPtr<T> &ptr)
   if (!stream)
   {
     throw std::runtime_error(
-        "OuroKore Save Error: Storage driver not initialized or stream creation failed. Call ork::Init(driver) first."
+        "OuroKore Save Error: Storage driver not initialized or stream creation failed. Ensure host storage driver is properly configured."
     );
   }
 
@@ -209,9 +209,9 @@ inline bool DehydrateByID(HandleID id)
   return Dehydrate(id);
 }
 
-// Forward declaration within OuroCore.hpp for mutual recursion between RehydratePayload and RehydrateCallback
+// 前置宣告公開復水入口
 template <typename T>
-::OuroObject *RehydrateCallback(HandleID id);
+OuroPtr<T> Rehydrate(HandleID id);
 
 namespace detail
 {
@@ -221,97 +221,117 @@ inline void ObjectDeleter(::OuroObject *raw_obj)
   delete static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
 }
 
+/**
+ * @brief 封閉式型別專屬復水管理器（Private Rehydrator）
+ * 內部 Execute 與 Callback 均為 private，僅授權 ork::Rehydrate 與 CreateObjectInternal 調用，
+ * 徹底杜絕第三方插件手動觸發未受管復水或獲取物件原始裸指標。
+ */
 template <typename T>
-inline void RehydratePayload(HandleID id)
+class Rehydrator
 {
-  // 1. RAII Exclusive Lock on ControlBlock to guarantee thread-safe serialization for concurrent Rehydrate/Dehydrate calls
-  struct RehydrateExclusiveLock
-  {
-    HandleID m_id;
-    explicit RehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
-    {
-      ork_lock_object(m_id);
-    }
-    ~RehydrateExclusiveLock()
-    {
-      ork_unlock_object(m_id);
-    }
-  } lock_guard(id);
+  template <typename U>
+  friend OuroPtr<U> ork::Rehydrate(HandleID id);
 
-  // 2. Double-Checked Locking: check if object payload was restored while waiting for the lock
-  uint8_t state_val = 0;
-  if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
-      static_cast<StorageState>(state_val) != StorageState::Dehydrated)
-  {
-    ::OuroObject *raw_obj = nullptr;
-    if (ork_acquire_object_pointer(id, &raw_obj) == ORK_STATUS_OK && raw_obj)
-    {
-      return;  // Object payload is already loaded
-    }
-  }
+  template <typename U, typename... Args>
+  friend HandleID CreateObjectInternal(Args &&...);
 
-  auto stream = detail::OpenRuntimeReadStream(id);
-  if (!stream)
+  static void Execute(HandleID id)
   {
-    throw std::runtime_error("OuroKore Rehydrate Error: Blueprint stream not found in storage driver or driver not initialized.");
-  }
-
-  // 3. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
-  ActiveOwnerGuard guard(id);
-
-  // 記憶體配置與 OOM 緊急脫水自救重試機制（以候選冷物件存亡為終止條件，防範並發搶奪）
-  void *mem = nullptr;
-  while (true)
-  {
-    try
+    // 1. RAII Exclusive Lock on ControlBlock to guarantee thread-safe serialization for concurrent Rehydrate/Dehydrate calls
+    struct RehydrateExclusiveLock
     {
-      mem = ::operator new(sizeof(T));
-      break;
-    }
-    catch (const std::bad_alloc &)
-    {
-      size_t bytes_needed = sizeof(T);
-      if (!detail::TriggerRuntimeRescue(bytes_needed))
+      HandleID m_id;
+      explicit RehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
       {
-        throw;
+        ork_lock_object(m_id);
+      }
+      ~RehydrateExclusiveLock()
+      {
+        ork_unlock_object(m_id);
+      }
+    } lock_guard(id);
+
+    // 2. Double-Checked Locking: check if object payload was restored while waiting for the lock
+    uint8_t state_val = 0;
+    if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
+        static_cast<StorageState>(state_val) != StorageState::Dehydrated)
+    {
+      ::OuroObject *raw_obj = nullptr;
+      if (ork_acquire_object_pointer(id, &raw_obj) == ORK_STATUS_OK && raw_obj)
+      {
+        return;  // Object payload is already loaded
       }
     }
+
+    auto stream = detail::OpenRuntimeReadStream(id);
+    if (!stream)
+    {
+      throw std::runtime_error("OuroKore Rehydrate Error: Blueprint stream not found in storage driver or driver not initialized.");
+    }
+
+    // 3. Set ActiveOwnerGuard so child handles constructed in T() inherit this object's ID as owner
+    ActiveOwnerGuard guard(id);
+
+    // 記憶體配置與 OOM 緊急脫水自救重試機制（以候選冷物件存亡為終止條件，防範並發搶奪）
+    void *mem = nullptr;
+    while (true)
+    {
+      try
+      {
+        mem = ::operator new(sizeof(T));
+        break;
+      }
+      catch (const std::bad_alloc &)
+      {
+        size_t bytes_needed = sizeof(T);
+        if (!detail::TriggerRuntimeRescue(bytes_needed, detail::OuroCreationToken{id}))
+        {
+          throw;
+        }
+      }
+    }
+
+    T *empty_shell = nullptr;
+    try
+    {
+      detail::ActiveObjectGuard obj_guard;
+      empty_shell = ::new (mem) T();
+    }
+    catch (...)
+    {
+      ::operator delete(mem);
+      throw;
+    }
+
+    // RAII guard to prevent memory leak if UnpackBlueprint throws exception
+    std::unique_ptr<T> shell_guard(empty_shell);
+    shell_guard->SetObjectID(id);
+
+    // 4. Unpack Payload & Edge Roster (Exceptions safely bubble up while shell_guard frees memory)
+    UnpackBlueprint(*shell_guard, *stream);
+
+    // 5. Re-bind payload pointer and atomic-bind in-place deleter & rehydrator to ControlBlock
+    if (!detail::BindRuntimeObjectPayload(id,
+                                          reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get())),
+                                          &ObjectDeleter<T>,
+                                          &RehydrateCallback))
+    {
+      throw std::runtime_error("OuroKore Rehydrate Error: Failed to re-bind payload pointer to ControlBlock.");
+    }
+
+    shell_guard.release();
+    detail::MarkRuntimeObjectClean(id);
+
+    // 6. 通知自動脫水模組物件已復水
+    detail::NotifyRuntimeObjectRehydrated(id);
   }
 
-  T *empty_shell = nullptr;
-  try
+  // 私有回呼函式：傳入 ControlBlock，回傳值為 void，徹底封死裸指標外洩
+  static void RehydrateCallback(HandleID id)
   {
-    detail::ActiveObjectGuard obj_guard;
-    empty_shell = ::new (mem) T();
+    Execute(id);
   }
-  catch (...)
-  {
-    ::operator delete(mem);
-    throw;
-  }
-
-  // RAII guard to prevent memory leak if UnpackBlueprint throws exception
-  std::unique_ptr<T> shell_guard(empty_shell);
-  shell_guard->SetObjectID(id);
-
-  // 4. Unpack Payload & Edge Roster (Exceptions safely bubble up while shell_guard frees memory)
-  UnpackBlueprint(*shell_guard, *stream);
-
-  // 5. Re-bind payload pointer and atomic-bind in-place deleter & rehydrator to ControlBlock
-  if (!detail::BindRuntimeObjectPayload(id,
-                                        reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get())),
-                                        &ObjectDeleter<T>,
-                                        &RehydrateCallback<T>))
-  {
-    throw std::runtime_error("OuroKore Rehydrate Error: Failed to re-bind payload pointer to ControlBlock.");
-  }
-
-  shell_guard.release();
-  detail::MarkRuntimeObjectClean(id);
-
-  // 6. 通知自動脫水模組物件已復水
-  detail::NotifyRuntimeObjectRehydrated(id);
-}
+};
 }  // namespace detail
 
 /**
@@ -325,7 +345,7 @@ OuroPtr<T> Rehydrate(HandleID id)
   {
     throw std::runtime_error("OuroKore Rehydrate Error: Invalid HandleID.");
   }
-  detail::RehydratePayload<T>(id);
+  detail::Rehydrator<T>::Execute(id);
   return OuroPtr<T>(id);
 }
 
@@ -333,26 +353,6 @@ template <typename T>
 OuroPtr<T> Rehydrate(const OuroPtr<T> &ptr)
 {
   return Rehydrate<T>(ptr.GetTargetID());
-}
-
-/**
- * @brief 型別專屬的自動復水回呼函式（Automatic Rehydration Callback）
- *
- * 當受管物件處於脫水狀態（Dehydrated）且底層嘗試存取其指標時（如 ork_acquire_object_pointer），
- * ControlBlock 會透過預先註冊的函式指標觸發此回呼，自動完成物件之記憶體重建、狀態還原（RehydratePayload）
- * 與指標重新綁定，實現對呼叫端透明的延遲復水（Transparent On-Demand Rehydration）。
- *
- * @tparam T 物件型別
- * @param id 物件的 HandleID
- * @return ::OuroObject* 復水後重建的底層物件指標
- */
-template <typename T>
-inline ::OuroObject *RehydrateCallback(HandleID id)
-{
-  detail::RehydratePayload<T>(id);
-  ::OuroObject *raw_obj = nullptr;
-  ork_acquire_object_pointer(id, &raw_obj);
-  return raw_obj;
 }
 
 // =========================================================================
@@ -373,7 +373,7 @@ HandleID CreateObjectInternal(Args &&...args)
 
   ActiveOwnerGuard guard(reserved_id);
 
-  // 記憶體配置與 OOM 緊急脫水自救重試機制（以候選冷物件存亡為終止條件，防範並發搶奪）
+  // 記憶體配置與 OOM 緊急脫水自救重試機制（若配置失敗安全回滾已預留之 HandleID）
   void *mem = nullptr;
   while (true)
   {
@@ -385,7 +385,7 @@ HandleID CreateObjectInternal(Args &&...args)
     catch (const std::bad_alloc &)
     {
       size_t bytes_needed = sizeof(T);
-      if (!detail::TriggerRuntimeRescue(bytes_needed))
+      if (!detail::TriggerRuntimeRescue(bytes_needed, detail::OuroCreationToken{reserved_id}))
       {
         detail::RollbackRuntimeObjectID(reserved_id);
         throw;
@@ -409,7 +409,7 @@ HandleID CreateObjectInternal(Args &&...args)
   if (!detail::BindRuntimeObjectPayload(reserved_id,
                                         reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(obj)),
                                         &ObjectDeleter<T>,
-                                        &RehydrateCallback<T>))
+                                        &detail::Rehydrator<T>::RehydrateCallback))
   {
     delete obj;
     detail::RollbackRuntimeObjectID(reserved_id);

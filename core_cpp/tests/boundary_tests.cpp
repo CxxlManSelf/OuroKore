@@ -125,6 +125,15 @@ int main()
     std::cout << "  -> HostContext::Reset() 與軟重啟再次初始化驗證通過。" << std::endl;
   }
 
+  // 9. 驗證 OuroCreationToken Passkey 編譯期私有與存取控制防禦
+  {
+    static_assert(!std::is_default_constructible_v<ork::detail::OuroCreationToken>,
+                  "OuroCreationToken must NOT be default constructible!");
+    static_assert(!std::is_constructible_v<ork::detail::OuroCreationToken, ork::HandleID>,
+                  "OuroCreationToken must NOT be constructible from HandleID by public callers!");
+    std::cout << "  -> OuroCreationToken Passkey 編譯期私有封鎖驗證通過（外部插件無法構造）。" << std::endl;
+  }
+
   std::cout << "=== 所有邊界隔離與特權防禦測試全部順利通過！ ===" << std::endl;
   return 0;
 }

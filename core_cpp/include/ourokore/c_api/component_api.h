@@ -17,7 +17,7 @@ typedef void (*ork_destroy_fn_t)(OuroObject* payload);
 /**
  * @brief Function pointer callback type for auto-rehydrating a dehydrated object.
  */
-typedef OuroObject* (*ork_rehydrate_fn_t)(HandleID id);
+typedef void (*ork_rehydrate_fn_t)(HandleID id);
 
 /**
  * @brief Register a newly created object to the registry.

@@ -10,7 +10,7 @@
 namespace ork
 {
 
-using RehydrateFn = OuroObject *(*)(HandleID id);
+using RehydrateFn = void (*)(HandleID id);
 using DestroyFn = void (*)(OuroObject *payload);
 
 /**

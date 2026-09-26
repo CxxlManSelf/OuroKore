@@ -742,6 +742,22 @@ int32_t NotifyObjectRehydrated(HandleID id)
   }
 }
 
+bool IsValidRescueContext(HandleID id)
+{
+  if (id == 0)
+  {
+    return false;
+  }
+  auto guard = ork::Registry::GetInstance().AcquireControlBlock(id);
+  if (!guard)
+  {
+    return false;
+  }
+  bool is_reserved = guard->m_is_reserved.load(std::memory_order_acquire);
+  bool is_dehydrated = (guard->m_storage_state.load(std::memory_order_acquire) == 3);
+  return is_reserved || is_dehydrated;
+}
+
 }  // namespace ork::internal
 
 namespace ork::detail
@@ -829,8 +845,14 @@ void SubmitRuntimeTask(std::function<void()> task)
   pool->submit(std::move(task));
 }
 
-bool TriggerRuntimeRescue(size_t bytes_needed)
+bool TriggerRuntimeRescue(size_t bytes_needed, OuroCreationToken token)
 {
+  HandleID id = token.GetID();
+  if (!ork::internal::IsValidRescueContext(id))
+  {
+    return false;
+  }
+
   auto report = RuntimeContext::GetInstance().TriggerDehydrationRescue(bytes_needed);
   if (report.freed_bytes == 0 || (!report.has_more_candidates && report.freed_bytes < bytes_needed))
   {
@@ -872,7 +894,7 @@ HandleID ReserveRuntimeObjectID()
 bool BindRuntimeObjectPayload(HandleID id,
                               ::OuroObject* payload,
                               void (*destroy_fn)(::OuroObject*),
-                              ::OuroObject* (*rehydrate_fn)(HandleID))
+                              void (*rehydrate_fn)(HandleID))
 {
   if (ork::internal::BindObjectPayload(id,
                                        payload,
