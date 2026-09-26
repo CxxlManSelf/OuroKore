@@ -74,6 +74,7 @@ HandleID Registry::ReserveID()
   }
 
   ControlBlock *cb = new ControlBlock(nullptr);
+  cb->m_is_reserved.store(true, std::memory_order_release);
   m_object_map[id] = cb;
   return id;
 }
@@ -98,6 +99,7 @@ bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn)
       cb->m_destroy_fn = destroy_fn;
     }
     cb->m_payload.store(obj, std::memory_order_release);
+    cb->m_is_reserved.store(false, std::memory_order_release);
     return true;
   }
   return false;
@@ -110,7 +112,8 @@ bool Registry::UnregisterObject(HandleID id)
   if (it != m_object_map.end())
   {
     ControlBlock *cb = it->second;
-    // 取消預留 (Rollback Reservation)：若已有 payload 實體先行釋放
+    // 取消預留 (Rollback Reservation)：解除預留保護並釋放已有 payload
+    cb->m_is_reserved.store(false, std::memory_order_release);
     cb->DeletePayload();
     bool expected = false;
     bool should_notify = cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
@@ -313,6 +316,12 @@ bool Registry::TryDestroyControlBlockLocked(HandleID id, ControlBlock *cb)
   ControlBlock *actual_cb = it->second;
   // 若呼叫端傳入了非空 cb，驗證指標一致性（防範野指標或實例不匹配）
   if (cb != nullptr && actual_cb != cb)
+  {
+    return false;
+  }
+
+  // 兩階段構造預留保護：若物件尚處於預留階段（Payload 正在建構中），嚴禁回收銷毀！
+  if (actual_cb->m_is_reserved.load(std::memory_order_acquire))
   {
     return false;
   }

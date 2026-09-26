@@ -49,6 +49,9 @@ struct ControlBlock
   // 銷毀通知已觸發原子旗標（保證邏輯銷毀通知只觸發一次，防重複通知）
   std::atomic<bool> m_destruction_notified{false};
 
+  // 兩階段構造預留旗標（預留期間強弱計數與 payload 皆為 0，嚴禁任何回收機制誤殺）
+  std::atomic<bool> m_is_reserved{false};
+
   explicit ControlBlock(OuroObject *payload = nullptr, DestroyFn destroy_fn = nullptr) :
       m_payload(payload),
       m_destroy_fn(destroy_fn)

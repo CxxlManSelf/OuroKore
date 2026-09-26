@@ -246,9 +246,10 @@ void CycleCollector::ProcessSuspect(HandleID suspect_id)
         break;
       }
 
-      // 若該 owner 為外部非託管宿主（在 Registry 中無 ControlBlock），視為外部持有存活
+      // 若該 owner 為外部非託管宿主（在 Registry 中無 ControlBlock），
+      // 或該 owner 尚在兩階段構造預留中（棧上建構中，尚未綁定），視為外部持有存活
       auto owner_guard = Registry::GetInstance().AcquireControlBlock(owner);
-      if (!owner_guard)
+      if (!owner_guard || owner_guard->m_is_reserved.load(std::memory_order_acquire))
       {
         has_external_root = true;
         break;
