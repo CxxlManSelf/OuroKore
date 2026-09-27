@@ -13,6 +13,7 @@
   - 插件僅能使用受管物件指針（`CreateObject`、`OuroPtr`、`OuroWeakPtr`）、物件脫水落盤，以及**安全唯讀狀態查詢**（`IsAlive`、`GetStorageState`、`GetRootEdgeCount`）。
   - 插件絕不可碰觸任何進程級特權或內部實作細節。
   - 公開之 `include/` 目錄絕不可含有內部私有標頭檔（如 `internal_api.h`，必須置於 `core/src/`）。
+  - **CMake 建置型別鐵律**：插件庫必須強制使用 `add_library(<name> MODULE ...)` 宣告，嚴禁使用 `SHARED`，防止被其他模組在編譯期靜態鏈結而喪失熱卸載獨立性。
 
 ## 3. 多語言使用介面（Cross-Language FFI）審查
 - **判定要點**：是否需要且已提供支援其他語言（C#、Rust、Python、Go 等）的使用介面？

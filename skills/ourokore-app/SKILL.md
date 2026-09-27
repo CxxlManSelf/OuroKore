@@ -183,3 +183,46 @@ ork::DehydrateAsync(std::move(boss));
 4. **第三方插件物理隔離保證**：
    * 第三方插件僅需引入 `<ourokore/component/OuroCore.hpp>`。
    * 插件絕對不應嘗試呼叫宿主特權 API（如 `Shutdown`、`FlushStorage`、`CollectCycles` 等），這些特權皆受 `HostContext` 嚴格防護。
+5. **外掛插件 CMake 必須宣告為 MODULE（高壓鐵律）**：
+   * 所有動態插件（透過 `DynamicLibrary` 動態載入之模組）在 CMake 中**必須使用 `add_library(<name> MODULE ...)`**，嚴格禁止宣告為 `SHARED`！
+   * 宣告為 `SHARED` 會生成導入庫，極易被其他模組在編譯期誤鏈結（Mislink），徹底破壞插件的熱卸載與生命週期隔離。
+
+
+---
+
+## 📦 5. 外掛插件 CMake 建置規範 (Plugin CMake Configuration)
+
+當您為 OuroKore 開發動態擴充外掛（Plugin / Component，供宿主透過 `DynamicLibrary` 動態載入）時，請務必遵循以下 CMake 標準範本：
+
+```cmake
+cmake_minimum_required(VERSION 3.10)
+project(MyOuroKorePlugin LANGUAGES CXX)
+
+# 強制 C++20 標準
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# ⚠️ 關鍵：使用 MODULE 宣告外掛庫，嚴禁使用 SHARED
+add_library(MyPlugin MODULE 
+    MyPlugin.cpp
+)
+
+# 引入 OuroKore 標頭檔與核心程式庫
+target_include_directories(MyPlugin PRIVATE ${OUROKORE_INCLUDE_DIR})
+target_link_libraries(MyPlugin PRIVATE ourokore_core ourokore_base)
+
+# 跨平台設定：移除 lib 前綴並輸出至執行檔同級目錄便於載入
+set_target_properties(MyPlugin PROPERTIES 
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+)
+```
+
+### 為什麼插件必須用 `MODULE` 而非 `SHARED`？
+| 比較項目 | `add_library(... MODULE ...)` (規範推薦) | `add_library(... SHARED ...)` (禁止使用於插件) |
+| :--- | :--- | :--- |
+| **鏈結語意** | 僅供執行期動態加載（`LoadLibrary` / `dlopen`），**CMake 語意上禁止其他 Target 靜態鏈結此目標** | 設計給編譯期其他 Target 進行靜態鏈結（Link）使用 |
+| **防呆保護** | 若其他 Target 誤寫 `target_link_libraries(App MyPlugin)`，CMake 會直接報錯拒絕編譯 | 不會報錯，但會導致宿主進程強行依賴插件，破壞插件可卸載性 |
+| **導入庫生成** | Windows 上純外掛不需要導入庫（`.lib`），產物更乾淨 | 強制生成 `.lib` 導入庫，造成符號依賴混亂 |
+| **跨平台檔名** | 產出標準動態模組（Windows `.dll`、Linux `.so`、macOS `.so/.bundle`） | macOS 會產出 `.dylib`（專門用於動態鏈結，非插件標準） |

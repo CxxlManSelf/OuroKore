@@ -44,6 +44,20 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 > OuroKore 系統全體（屬性 Key、插槽名稱、錯誤文字、日誌、二進位字串與 FFI 邊界）**唯一強制使用 UTF-8 編碼**。
 > Windows 下涉及路徑或系統呼叫必須在底層顯式轉換為 `std::wstring` 呼叫 `W` 版 API，對外與對內一律回歸 UTF-8，嚴禁混用 ANSI 本地編碼（CP950/Big5/GBK 等）。
 
+### 2.0.2 外掛插件 CMake 建置規範 (Plugin CMake MODULE Invariant)
+> ⚠️ **外掛 Target 宣告鐵律**：
+> 凡是作為 OuroKore 動態外掛（Plugin / Component，透過 `DynamicLibrary` 動態載入）的模組，在 CMake 中**一律強制使用 `add_library(<name> MODULE ...)`**，嚴禁宣告為 `SHARED`！
+> - **核心原因**：`MODULE` 在 CMake 中代表「不可在編譯期被其他 Target 靜態鏈結，僅供執行期動態加載（`LoadLibrary` / `dlopen`）」。若誤用 `SHARED`，可能導致其他模組誤用 `target_link_libraries` 依賴它，破壞動態插件可隨時卸載與熱更新之架構隔離性。
+> - **標準配置範本**：
+>   ```cmake
+>   add_library(MyPlugin MODULE MyPlugin.cpp)
+>   target_link_libraries(MyPlugin PRIVATE ourokore_core ourokore_base)
+>   set_target_properties(MyPlugin PROPERTIES 
+>       PREFIX ""
+>       LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+>   )
+>   ```
+
 ### 2.1 主程式 Entry Point (HostContext)
 ```cpp
 #include <ourokore/host/HostContext.hpp>
@@ -99,6 +113,8 @@ private:
 4. **內部自救權杖與預留情境雙重保護 (Passkey & Reservation Context Guard)**：
    - 核心底層 OOM 自救通道（`TriggerRuntimeRescue`）必須受 `OuroCreationToken`（Passkey Pattern，私有建構子）保護，且核心內部必須校驗 HandleID 是否正處於合法預留或脫水狀態（`IsValidRescueContext`）。嚴禁向插件暴露可主動調用之全域記憶體調度 API。
    - 所有底層內部回呼（如 `RehydrateCallback`）回傳型別為 `void`，由 `detail::Rehydrator` 類別進行私有封裝（Private static），嚴格收斂至 `ork::detail` 內部命名空間，嚴禁對外暴露裸指標或允許插件任意調用。
+5. **外掛模組建置規範 (Plugin MODULE Target Invariant)**：
+   - 任何專案內部的測試動態外掛（如 `test_plugin_dll`）或第三方 Component 範例，在 CMake 中必須統一使用 `add_library(<name> MODULE ...)` 並清除前綴（`PREFIX ""`），嚴禁編譯為可被靜態鏈結的 `SHARED` 導入庫，以維持執行期動態加載的純淨隔離性。
 
 ---
 

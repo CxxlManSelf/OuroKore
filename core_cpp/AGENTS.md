@@ -59,6 +59,9 @@
    - 核心允許 `CreateObject` 與 `Rehydrate` 在分配記憶體遭遇 OOM 時被動觸發緊急脫水換頁自救，但底層 `TriggerRuntimeRescue` **必須受 `OuroCreationToken` 權杖（私有建構子 Passkey 模式）與核心內部 HandleID 預留/脫水狀態（`IsValidRescueContext`）雙重保護**。
    - 嚴格禁止第三方插件在業務代碼中主動實例化 Token 或主動調用脫水救援 API。
    - 內部底層回呼（如 `RehydrateCallback`）必須嚴格收斂至 `ork::detail` 命名空間，禁止外洩至公開 `ork::` 命名空間以防插件繞過智慧指針直接取得原始裸指標。
+4. **動態插件 CMake 建置規範（MODULE Target Invariant）**：
+   - 所有動態擴充外掛（Plugin / Component）與測試動態庫，在 CMake 中**一律強制宣告為 `add_library(<name> MODULE ...)`**，嚴格禁止宣告為 `SHARED`。
+   - `MODULE` 從 CMake 建置系統維度強制禁止其他 Target 在編譯期進行靜態鏈結（Link），確保外掛僅能於執行期透過 `DynamicLibrary`（`LoadLibrary` / `dlopen`）動態加載，杜絕誤鏈結導致外掛喪失獨立卸載能力。
 
 ---
 

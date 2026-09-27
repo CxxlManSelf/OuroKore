@@ -14,20 +14,41 @@
 
 ### CMake 使用端配置建議
 
-在您的應用程式或插件 CMake 專案中，請確保至少啟用 C++20：
+在您的應用程式或插件 CMake 專案中，請確保啟用 C++20。針對動態外掛（Plugin），**強制使用 `MODULE` 庫類型**：
 
+#### 1. 宿主主程式 (Host Executable)
 ```cmake
 cmake_minimum_required(VERSION 3.10)
 project(MyOuroKoreApp LANGUAGES CXX)
 
-# 強烈建議：使用 C++20 或更高版本標準
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 引入 OuroKore 標頭檔與程式庫
+add_executable(MyOuroKoreApp main.cpp)
 target_include_directories(MyOuroKoreApp PRIVATE ${OUROKORE_INCLUDE_DIR})
 target_link_libraries(MyOuroKoreApp PRIVATE ourokore_core ourokore_base)
+```
+
+#### 2. 動態擴充外掛 (Plugin / Component)
+> ⚠️ **鐵律：外掛在庫類型上必須使用 `MODULE`，嚴禁宣告為 `SHARED`**。`MODULE` 保證外掛庫無法被靜態鏈結，僅供執行期透過 `DynamicLibrary` 動態載入，維持純淨熱卸載隔離。
+
+```cmake
+cmake_minimum_required(VERSION 3.10)
+project(MyOuroKorePlugin LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# 宣告為 MODULE 插件庫（非 SHARED）
+add_library(MyPlugin MODULE MyPlugin.cpp)
+target_include_directories(MyPlugin PRIVATE ${OUROKORE_INCLUDE_DIR})
+target_link_libraries(MyPlugin PRIVATE ourokore_core ourokore_base)
+set_target_properties(MyPlugin PROPERTIES 
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+)
 ```
 
 ### 全域文字訊息標準 (UTF-8 Standard Invariant)
