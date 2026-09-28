@@ -1,4 +1,5 @@
 #include "TypeRegistry.h"
+#include <mutex>
 
 namespace ork
 {

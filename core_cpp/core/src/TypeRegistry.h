@@ -1,10 +1,8 @@
 #pragma once
 
-#include <cstdint>
-#include <mutex>
+#include <cstddef>
 #include <shared_mutex>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include "ourokore/base/Hash.hpp"
 #include "ourokore/c_api/core.h"

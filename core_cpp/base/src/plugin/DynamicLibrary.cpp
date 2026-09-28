@@ -7,9 +7,33 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-// 阻止 MinGW winnt.h 引入 GCC 內部 intrin.h，徹底根除 clangd 下 _mm_prefetch 與 __rdtsc 等 x86 內建函式型別衝突
-#ifndef __INTRINSIC_DEFINED
-#define __INTRINSIC_DEFINED 1
+// 阻止 MinGW winnt.h 引入 GCC 內部 x86/SIMD 標頭檔，徹底根除 clangd 下 _mm_getcsr、__rdtsc 等內建函式衝突
+#ifndef _X86INTRIN_H_INCLUDED
+#define _X86INTRIN_H_INCLUDED
+#endif
+#ifndef _X86GPRINTRIN_H_INCLUDED
+#define _X86GPRINTRIN_H_INCLUDED
+#endif
+#ifndef _XMMINTRIN_H_INCLUDED
+#define _XMMINTRIN_H_INCLUDED
+#endif
+#ifndef _EMMINTRIN_H_INCLUDED
+#define _EMMINTRIN_H_INCLUDED
+#endif
+#ifndef _PMMINTRIN_H_INCLUDED
+#define _PMMINTRIN_H_INCLUDED
+#endif
+#ifndef _TMMINTRIN_H_INCLUDED
+#define _TMMINTRIN_H_INCLUDED
+#endif
+#ifndef _SMMINTRIN_H_INCLUDED
+#define _SMMINTRIN_H_INCLUDED
+#endif
+#ifndef _IMMINTRIN_H_INCLUDED
+#define _IMMINTRIN_H_INCLUDED
+#endif
+#ifndef _MMINTRIN_H_INCLUDED
+#define _MMINTRIN_H_INCLUDED
 #endif
 #include <windows.h>
 #else
