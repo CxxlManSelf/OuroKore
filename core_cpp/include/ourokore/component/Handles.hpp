@@ -634,8 +634,9 @@ inline void OuroObject::RegisterHandle(OwningContainerHandle *handle)
  * 在 OuroKore 體系中，業務領域物件圖內部的所有父子關係、雙向互指（如 A <-> B）、網狀關聯，
  * 請一律直接且大膽地使用 OwningHandle！
  *
- * 核心具備進程級背景循環垃圾收集器（CycleCollector），當整個互指圖的外部根引用（OuroPtr）歸零時，
- * 收集器會自動在背景偵測閉環孤島並執行非同步外科手術安全回收。
+ * 核心具備進程級背景循環垃圾收集器（CycleCollector），當整個互指圖失去所有來自環外的強引用持有
+ * （包括直接的棧上 OuroPtr 或來自上游父物件的 OwningHandle 鏈路），導致相對於 Root 完全不可達時，
+ * 收集器會自動在背景偵測閉環孤島並執行非同步外科手術式斷鏈與安全回收。
  * 開發者完全不需要、也不應該為了「打破循環參照」而手動改用 UnboundHandle。
  */
 template <typename T>
