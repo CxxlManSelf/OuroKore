@@ -101,6 +101,46 @@ public:
 
 ---
 
+### 🧩 外掛模組載入、生命週期綁定與自動卸載（`DynamicLibrary`）
+
+在外掛管理端，載入與卸載動態庫（DLL）時請遵循以下黃金準則：
+1. **禁絕手動卸載**：`DynamicLibrary` 刻意不提供手動 `unload()` 介面，以防提早手動卸載導致正在執行的物件虛擬函式表 (vtable) 與成員函式代碼段失效引發記憶體崩潰。
+2. **物件生命週期反向錨定**：透過 `bind_lifecycle()` 將產生的外掛物件與動態庫綁定，當該外掛產生的所有物件全部解構後，底層動態庫才會在引用計數歸零時自動安全卸載。
+3. **⚠️ 關鍵約束（load 回傳值之生命週期約束）**：
+   `ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。**若呼叫端不放棄此回傳值變數（如長存於成員/全域變數、或外層未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！**
+   呼叫端必須在完成物件綁定後，主動呼叫 `lib.reset()` 或讓其隨工廠作用域自然解構，將唯一的存活權杖全權移交給產生的物件持有。
+
+#### 實戰範例：
+```cpp
+#include <ourokore/base/DynamicLibrary.hpp>
+
+// 1. 載入外掛 DLL（load 回傳值持有一份引用計數 1）
+auto lib = ork::DynamicLibrary::load("AIPlugin.dll");
+if (!lib) {
+    std::cerr << "外掛載入失敗: " << lib.get_last_error() << std::endl;
+    return;
+}
+
+// 2. 獲取工廠函式符號
+auto create_fn = lib.get_symbol<CreatePluginFn>("CreateAIPlugin");
+auto destroy_fn = lib.get_symbol<DestroyPluginFn>("DestroyAIPlugin");
+
+// 3. 建立實體並透過 bind_lifecycle 綁定生命週期（此時引用計數為 2）
+auto ai_raw = create_fn();
+std::shared_ptr<IAIPlugin> ai_instance = lib.bind_lifecycle(ai_raw, destroy_fn);
+
+// 4. ⚠️ 關鍵：呼叫端主動放棄 load() 回傳的初始句柄！
+lib.reset(); // 放棄持有權，引用計數降為 1，此時 DLL 存活權杖全權移交給 ai_instance
+
+// 5. 業務安全使用：ai_instance 存活期間 DLL 代碼段絕不被卸載
+ai_instance->ExecuteAI();
+
+// 6. 當外掛生命週期結束、所有持有 ai_instance 的物件全部解構歸零後，DLL 自動在底層卸載！
+ai_instance.reset(); // 底層自動安全執行 FreeLibrary / dlclose
+```
+
+---
+
 ## 4. `OuroPtr<T>`：棧上生命週期守衛
 
 `OuroPtr` 代表活躍的「根引用（Root Edge）」。只要有任何執行緒在棧上持有某物件的 `OuroPtr`：

@@ -241,6 +241,12 @@ DynamicLibrary DynamicLibrary::load(std::string_view utf8_path, LibraryLoadFlags
   return load(Utf8ToPath(utf8_path), flags);
 }
 
+void DynamicLibrary::reset() noexcept
+{
+  m_control_block.reset();
+  m_last_error.clear();
+}
+
 bool DynamicLibrary::is_loaded() const noexcept
 {
   return m_control_block != nullptr && m_control_block->m_native_handle != nullptr;

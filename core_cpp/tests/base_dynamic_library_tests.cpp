@@ -115,16 +115,18 @@ int main(int argc, char *argv[])
     std::cout << "  ✅ 查詢不存在的符號安全傳回 nullptr" << std::endl;
   }
 
-  // 4. 測試：核心驗證 —— 物件生命週期反向錨定（Life-Bound Retention）
-  // 驗證重點：DynamicLibrary 句柄本體銷毀後，由其建立的物件依然存活，代碼段不被卸載，
-  // 直至最後一個物件被銷毀，動態庫才在底層安全卸載！
+  // 4. 測試：核心驗證 —— 物件生命週期反向錨定（Life-Bound Retention）與自動卸載
+  // 驗證重點：
+  // 1. DynamicLibrary 不提供手動 unload()，由物件生命週期錨定自動卸載。
+  // 2. load() 回傳值本身已持有引用；當應用端放棄該句柄（如離開局部作用域或 reset），
+  //    且由其建立的綁定物件全部銷毀歸零時，動態庫才在底層安全卸載！
   {
     std::cout << "[Test 4] 核心驗證：物件生命週期反向錨定 (Life-Bound Retention)..." << std::endl;
 
     std::shared_ptr<ITestPlugin> managed_plugin;
 
     {
-      // 在局部作用域建立 DynamicLibrary 實例
+      // 在局部作用域建立 DynamicLibrary 實例（load 回傳值已持有引用計數 1）
       auto scoped_lib = ork::DynamicLibrary::load(plugin_path);
       assert(scoped_lib.is_loaded());
       assert(scoped_lib.use_count() == 1);
@@ -157,12 +159,12 @@ int main(int argc, char *argv[])
       assert(managed_plugin->Multiply(6, 7) == 42);
       assert(std::string(managed_plugin->GetName()) == "TestPluginInstance");
 
-      std::cout << "  -> 離開局部作用域，銷毀 scoped_lib 變數本體..." << std::endl;
-      // 離開此處時，scoped_lib 變數解構！但 managed_plugin 依然存活！
+      std::cout << "  -> 離開局部作用域，放棄 scoped_lib 句柄本體..." << std::endl;
+      // 離開此處時，scoped_lib 變數解構，放棄持有！但 managed_plugin 依然存活！
     }
 
-    std::cout << "  -> 此時 scoped_lib 變數已解構，但受管物件仍持有動態庫存活權杖！" << std::endl;
-    // 關鍵時刻：若 DLL 已被卸載，呼叫虛擬函式 Multiply 或 GetName 將立即引發 0xC0000005 崩潰！
+    std::cout << "  -> 此時 scoped_lib 句柄已解構，但受管物件仍持有動態庫存活權杖！" << std::endl;
+    // 關鍵時刻：若 DLL 已被提前卸載，呼叫虛擬函式 Multiply 或 GetName 將立即引發 0xC0000005 崩潰！
     int result = managed_plugin->Multiply(9, 9);
     assert(result == 81);
     const char *name = managed_plugin->GetName();
@@ -174,28 +176,35 @@ int main(int argc, char *argv[])
     std::cout << "  -> 銷毀最後一個受管物件 managed_plugin..." << std::endl;
     managed_plugin.reset();
     assert(managed_plugin == nullptr);
-    std::cout << "  ✅ [PASS] 所有受管物件銷毀，Deleter 成功執行且底層動態庫安全卸載無崩潰！" << std::endl;
+    std::cout << "  ✅ [PASS] 所有受管物件銷毀，Deleter 成功執行且底層動態庫安全自動卸載無崩潰！" << std::endl;
   }
 
-  // 5. 測試：使用 bind_lifecycle 綁定手動獲取的指標
+  // 5. 測試：使用 bind_lifecycle 綁定手動獲取的指標，並透過 reset() 明確放棄 load() 初始句柄
   {
-    std::cout << "[Test 5] 驗證手動指標透過 bind_lifecycle 綁定生命週期..." << std::endl;
-    std::shared_ptr<ITestPlugin> plugin2;
-    {
-      auto lib = ork::DynamicLibrary::load(plugin_path);
-      auto create_fn = lib.get_symbol<CreatePluginFn>("CreateTestPlugin");
-      auto destroy_fn = lib.get_symbol<DestroyPluginFn>("DestroyTestPlugin");
-      assert(create_fn && destroy_fn);
+    std::cout << "[Test 5] 驗證 bind_lifecycle 綁定生命週期與 reset() 主動放棄句柄..." << std::endl;
+    auto lib = ork::DynamicLibrary::load(plugin_path);
+    assert(lib.is_loaded());
+    assert(lib.use_count() == 1);
 
-      ITestPlugin *raw = create_fn();
-      plugin2 = lib.bind_lifecycle(raw, destroy_fn);
-      assert(plugin2 != nullptr);
-      assert(lib.use_count() == 2);
-    }
-    // 外部 lib 銷毀後，plugin2 依然能工作
+    auto create_fn = lib.get_symbol<CreatePluginFn>("CreateTestPlugin");
+    auto destroy_fn = lib.get_symbol<DestroyPluginFn>("DestroyTestPlugin");
+    assert(create_fn && destroy_fn);
+
+    ITestPlugin *raw = create_fn();
+    auto plugin2 = lib.bind_lifecycle(raw, destroy_fn);
+    assert(plugin2 != nullptr);
+    assert(lib.use_count() == 2);
+
+    // 關鍵驗證：load() 的回傳值已經將其綁定，若不放棄則 DLL 不會卸載。
+    // 此處呼叫 reset() 明確放棄 load() 回傳的句柄持有：
+    lib.reset();
+    assert(!lib.is_loaded());
+    assert(lib.use_count() == 0);
+
+    // 外部 lib 放棄後，plugin2 依然能正常調用成員函式
     assert(plugin2->Multiply(3, 4) == 12);
-    plugin2.reset();
-    std::cout << "  ✅ bind_lifecycle 測試通過！" << std::endl;
+    plugin2.reset(); // 當產生的最後一個物件銷毀，DLL 自動卸載
+    std::cout << "  ✅ bind_lifecycle 與 reset() 放棄初始句柄自動卸載測試通過！" << std::endl;
   }
 
   // 6. 測試：路徑標準化驗證

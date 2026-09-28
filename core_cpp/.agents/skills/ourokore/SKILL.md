@@ -62,6 +62,14 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 >   )
 >   ```
 
+### 2.0.3 動態庫生命週期綁定與自動卸載規範 (DynamicLibrary Lifecycle & Auto-Unload Invariant)
+> ⚠️ **DLL 卸載與生命週期反向錨定鐵律**：
+> 1. **禁絕手動卸載**：`DynamicLibrary` 刻意不提供手動 `unload()` 介面，以防提前卸載導致物件虛擬函式表 (vtable) 與代碼段失效引發記憶體崩潰。
+> 2. **物件生命週期反向錨定**：應用端應將產生的物件與動態庫綁定（透過 `lib.bind_lifecycle(raw_ptr, deleter_fn)` 或在自訂 Deleter 閉包中捕捉 `DynamicLibrary` 實例）。當由該 DLL 產生的所有物件全部解構後，動態庫才會在底層自動安全卸載。
+> 3. **關鍵約束：`load()` 回傳值之生命週期約束**：
+>    `ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有一份引用計數）」。**若呼叫端不放棄此回傳值變數（如長存於成員/全域變數、或外層未離開作用域/未重設），動態庫是絕對不會被卸載的！**
+>    應用端必須在完成物件綁定後主動放棄該初始句柄（例如讓其隨工廠作用域結束自然解構，或主動呼叫 `lib.reset()`），將存活權杖全權移交給物件持有，才能確保「物件全數解構後 DLL 自動卸載」。
+
 ### 2.1 主程式 Entry Point (HostContext)
 ```cpp
 #include <ourokore/host/HostContext.hpp>

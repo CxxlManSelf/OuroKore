@@ -29,6 +29,10 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
 5. **記憶體換頁（脫水與復水）完全透明**：
    - 長時間未被存取的物件會由脫水器自動釋放實體記憶體（保留 ControlBlock 墓碑）。
    - 當程式再次透過 `handle.Get()`、`handle.LockAndAcquire()` 或調用 `OuroPtr` 時，框架會透明地自儲存體重新還原物件，呼叫端無須撰寫額外載入邏輯。
+6. **動態模組載入與自動卸載哲學 (DynamicLibrary Life-Bound Retention)**：
+   - 載入器不提供手動 `unload()` 介面，以防提早手動卸載引發 vtable/代碼段失效與 Crash。
+   - 應用端應將動態庫「產生的物件」與動態庫建立生命週期綁定（透過 `bind_lifecycle()` 或 Deleter 閉包捕捉 `DynamicLibrary` 實例），當產生的物件全數解構後自動在底層卸載。
+   - ⚠️ **關鍵約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若呼叫端不放棄此回傳值變數（如長存於成員/全域變數、或外層未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！呼叫端必須主動放棄該初始句柄，將存活權杖全權交給產生的物件。
 
 ---
 
@@ -216,6 +220,36 @@ if (monster.Is<BossMonster>()) { /* 型別相符 */ }
 monster(&Monster::Attack);
 ```
 
+### 模式 G：動態外掛載入、物件反向錨定與自動卸載 (DynamicLibrary Lifecycle & Auto-Unload)
+```cpp
+#include <ourokore/base/DynamicLibrary.hpp>
+
+// 1. 載入外掛 DLL（load 回傳值已持有引用計數 1）
+auto lib = ork::DynamicLibrary::load("AIPlugin.dll");
+if (!lib) {
+    std::cerr << "外掛載入失敗: " << lib.get_last_error() << std::endl;
+    return;
+}
+
+// 2. 獲取工廠函式符號
+auto create_fn = lib.get_symbol<CreatePluginFn>("CreateAIPlugin");
+auto destroy_fn = lib.get_symbol<DestroyPluginFn>("DestroyAIPlugin");
+
+// 3. 建立原生實體並透過 bind_lifecycle 綁定動態庫存活權杖（此時引用計數為 2）
+IAIPlugin *raw = create_fn();
+std::shared_ptr<IAIPlugin> plugin = lib.bind_lifecycle(raw, destroy_fn);
+
+// 4. ⚠️ 關鍵：呼叫端主動放棄 load() 回傳的初始句柄！
+// 此時 lib.use_count() 由 2 降為 1（僅由 plugin 持有存活權杖）
+lib.reset();
+
+// 5. 業務安全使用：plugin 存活期間代碼段絕不被卸載
+plugin->ExecuteAI();
+
+// 6. 當所有持有 plugin 的變數全數銷毀歸零時，Deleter 執行且 DLL 自動在底層卸載！
+plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
+```
+
 ---
 
 ## ⚠️ 4. 應用開發高壓線條款 (Critical Invariants)
@@ -239,6 +273,10 @@ monster(&Monster::Attack);
    * 宣告為 `SHARED` 會生成導入庫，極易被其他模組在編譯期誤鏈結（Mislink），徹底破壞插件的熱卸載與生命週期隔離。
 7. **全域 TypeID 雜湊標準統一 (Fnv1a64 Invariant)**：
    * 領域物件型別定義一律使用 `ORK_OBJECT` 巨集；若需自訂常數識別碼，一律統一使用 `ork::base::Fnv1a64` 或字面量 `_fnv64`，嚴禁自寫重複雜湊邏輯。
+8. **動態庫載入器生命週期反向錨定與自動卸載鐵律 (DynamicLibrary Invariant)**：
+   * `DynamicLibrary` 禁絕提供手動 `unload()` 方法，以防虛擬函式表與代碼段提前失效引發崩潰。
+   * 正確用法是透過 `lib.bind_lifecycle(raw, deleter)` 或 Deleter 閉包將產生的物件與動態庫綁定，待物件全數銷毀後由底層自動卸載。
+   * ⚠️ **高壓約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若應用端一直保留該回傳值（如存為長存成員或未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！必須主動放棄該初始句柄（如 `lib.reset()`），才能實現產生物件全數銷毀後 DLL 自動卸載。
 
 ---
 

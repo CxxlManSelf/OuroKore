@@ -78,7 +78,7 @@ set_target_properties(MyPlugin PROPERTIES
 
 4. **Base 通用現代基礎工具庫 (Base Foundation & Utilities)**：
    - **高效能跨平台執行緒池 (ThreadPool)**：支援動態彈性排程與 Future/Promise 非同步鏈結。
-   - **動態模組載入器 (DynamicLibrary)**：具備物件生命週期反向錨定（Life-Bound Retention），防止模組卸載引發代碼段失效崩潰。
+   - **動態模組載入器 (DynamicLibrary)**：禁絕手動卸載，具備物件生命週期反向錨定（Life-Bound Retention）。應用端將產生物件綁定後放棄 `load()` 初始句柄（或呼叫 `reset()`），待所有物件解構後自動安全卸載。
    - **標準 C++20 現代雜湊模組 (Hash Utilities)**：[Hash.hpp](include/ourokore/base/Hash.hpp) 全面支援編譯期常數 `constexpr`，內建 FNV-1a (32/64-bit)、CRC32 (IEEE 802.3)、MurmurHash3 (32-bit)、`HashCombine` 及使用者自訂字面量（`_fnv64`、`_crc32`），供型別計算、屬性鍵比對與資料完整性校驗使用。
 
 5. **三層邊界隔離與跨語言 FFI 友善架構**：
