@@ -26,8 +26,11 @@
 * **方法**：
   * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
   * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
+  * `ork_type_id_t GetTypeID() const`：取得物件之靜態型別 64 位元 TypeID（支援多型與繼承查詢）。
   * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
   * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
+* **巨集**：
+  * `ORK_OBJECT(Derived, Base)`：宣告類別之動態與靜態 TypeID，自動登記至全域繼承樹。
 
 ---
 
@@ -38,6 +41,11 @@
   * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
   * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
   * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator->`, `operator*`, `GetTargetID()`, `Release()`。
+    * `template <typename U> bool Is() const`：判定物件是否屬於或繼承自型別 `U`（純記憶體查詢，脫水狀態零 I/O 保證）。
+    * `template <typename U> OuroPtr<U> As() const &`：向下/向上安全轉型（左值增持根引用）。
+    * `template <typename U> OuroPtr<U> As() &&`：右值移動轉型（**零引用計數開銷**轉移所有權）。
+    * `ork_type_id_t GetTypeID() const`：取得目標物件 TypeID。
+    * `dynamic_pointer_cast<U>(ptr)` / `static_pointer_cast<U>(ptr)`：STL 風格轉型支援。
 
 ---
 
@@ -83,3 +91,19 @@
   * `ork::utf8::to_string(str)`：將各類字串統一轉為 `std::string`。
   * `ork::utf8::to_u8string(view)`：將字串視圖轉為 C++20 原生 `std::u8string`。
   * `ork::utf8::is_string_like_v<T>`：編譯期型別特徵萃取，判斷是否為字串相關型別。
+
+---
+
+## ⚙️ 8. 現代高效能雜湊工具模組：`ork::base::Hash`
+* **標頭檔**：`ourokore/base/Hash.hpp`
+* **設計哲學**：相容 C++20 `constexpr` 編譯期常數計算、現代雜湊演算法、字面量運算子支援。
+* **演算法與函式**：
+  * `ork::base::Fnv1a64(data)`：FNV-1a 64-bit 雜湊演算法（全域 TypeID 與字串 ID 唯一標準）。
+  * `ork::base::Fnv1a32(data)`：FNV-1a 32-bit 雜湊演算法。
+  * `ork::base::Crc32(data)`：CRC32 (IEEE 802.3) 校驗碼（資料完整性與防竄改驗證）。
+  * `ork::base::MurmurHash3(data, seed)`：MurmurHash3 32-bit 高品質雜湊演算法。
+  * `ork::base::HashCombine(seed, v1, v2, ...)`：Boost / Container 標準變參組合雜湊。
+  * 使用者自訂字面量（`using namespace ork::base::literals;`）：
+    * `""_fnv64`：編譯期直接計算為 64 位元常數整數。
+    * `""_fnv32`：編譯期直接計算為 32 位元常數整數。
+    * `""_crc32`：編譯期直接計算為 CRC32 常數校驗碼。

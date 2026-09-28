@@ -13,7 +13,7 @@ description: "OuroKore 物件圖託管、弱引用代數系統、自動脫水換
 
 OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**、**極致執行緒安全**、**記憶體吃緊時自動換頁脫水（Dehydration/Rehydration）**以及**藍圖持久化打包（Blueprint Packaging）**所設計的高效能系統框架。
 
-### 核心三大基石：
+### 核心四大基石：
 1. **控制區塊與 Handle 代數系統 (ControlBlock & Handle System)**：
    - 物件不由裸指標或標準 `std::shared_ptr` 直接持有，而是由全域唯一的 64 位元識別碼 `HandleID` 與底層控制區塊託管。
    - `OwningHandle<T>` / `OwningContainerHandle`：表示強引用與擁有權（邊緣拓撲），自動向所屬父物件註冊槽位（Slot）。內部業務拓撲（含雙向關聯）放膽使用，由 `CycleCollector` 背景非同步消化。
@@ -26,7 +26,11 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
    - 當記憶體壓力觸發或由脫水器（如 `OuroLRUAutoDehydrator`）挑選物件時，核心執行 `ork_dehydrate_object`：將 Dirty 物件序列化落盤，安全銷毀 Payload 實體記憶體，保留控制區塊（ControlBlock）。
    - 當任何執行緒嘗試存取已脫水物件時，框架透過註冊的 `ork_rehydrate_fn_t` 回呼透明地自儲存驅動（`IStorageDriver`）復原記憶體實體，對使用者完全透明。
 
-3. **三層權限隔離與 HostContext 獨佔特權**：
+3. **全域型別系統與 ControlBlock 墓碑長存 (Type System & Dehydration Invariant)**：
+   - 每個受管物件在兩階段構造時分配並鎖定 64 位元唯一 `TypeID`，儲存於 ControlBlock 墓碑中。
+   - 物件即使脫水進入磁碟，型別資訊永不丟失；呼叫 `ptr.Is<T>()`、`ork_is_instance_of` 或 `ptr.GetTypeID()` 為**零 I/O 純記憶體查詢**，絕對不會誘發穿透性復水。
+
+4. **三層權限隔離與 HostContext 獨佔特權**：
    - 凡涉及全進程生命週期（`Shutdown`、`Reset`）、基礎設施注入（`IStorageDriver`、`IAutoDehydrator`）、全域排程與排空（`FlushStorage`、`FlushDeferredDeletions`、`CollectCycles`）等特權，**必須收斂至 HostContext**。
    - 第三方插件僅能使用受管物件、OuroPtr、Handle 拓撲與讀寫鎖，物理隔離所有特權 API。
 
@@ -69,13 +73,14 @@ assert(host.IsValid());
 // host 遵循 RAII 自動生命週期管理，離開作用域時解構式會自動觸發優雅關閉（Shutdown），無需且不建議手動呼叫。
 ```
 
-### 2.2 定義受管物件 (Inherit OuroObject)
-所有受管物件必須繼承自 `ork::OuroObject`，禁止外部直接 `new`：
+### 2.2 定義受管物件與型別宣告 (Inherit OuroObject & ORK_OBJECT)
+所有受管物件必須繼承自 `ork::OuroObject`，並推薦使用 `ORK_OBJECT(ClassName, ParentClassName)` 巨集自動註冊型別階層：
 
 ```cpp
 #include <ourokore/component/OuroCore.hpp>
 
 class Monster : public ork::OuroObject {
+    ORK_OBJECT(Monster, ork::OuroObject)
 public:
     ork::OwningHandle<Monster>          m_minion{"MinionSlot"};
     ork::UnboundHandle<ork::OuroObject> m_plugin_module; // 無繫結引用，防止釘死動態 DLL 模組非同步卸載
@@ -96,6 +101,59 @@ private:
 };
 ```
 
+### 2.3 型別識別與安全向下/向上轉型 (Type System & Safe Casting)
+OuroKore 核心透過 ControlBlock 墓碑長存 64 位元唯一 `TypeID` 與全域型別繼承拓撲（TypeRegistry），支援極速、零指標解引用且**脫水狀態下絕不觸發復水**的安全轉型：
+
+```cpp
+ork::OuroPtr<Creature> creature = ork::CreateObject<BossMonster>();
+
+// 1. 多型型別檢查（純 ControlBlock 查詢，零 I/O 消耗）
+if (creature.Is<BossMonster>()) {
+    // 2. 向下安全轉型（若型別不符回傳空 OuroPtr，合法則安全增持根引用）
+    ork::OuroPtr<BossMonster> boss = creature.As<BossMonster>();
+    // 亦支援 STL 風格轉型：ork::dynamic_pointer_cast<BossMonster>(creature);
+}
+
+// 3. 右值所有權移動轉型（零引用計數變更開銷）
+ork::OuroPtr<Monster> monster = std::move(creature).As<Monster>();
+```
+
+### 2.4 Base 通用現代雜湊工具模組 (Hash Utilities)
+在 `<ourokore/base/Hash.hpp>` 中提供 C++20 標準高效能雜湊工具，全面支援 `constexpr` 編譯期常數計算：
+```cpp
+#include <ourokore/base/Hash.hpp>
+using namespace ork::base::literals;
+
+// 1. FNV-1a 64-bit（型別系統 TypeID、字串識別碼預設演算法）
+constexpr uint64_t type_id = "MyPluginComponent"_fnv64;
+uint64_t runtime_hash = ork::base::Fnv1a64(str_view);
+
+// 2. CRC32 (IEEE 802.3，防竄改與封包/藍圖完整性校驗)
+constexpr uint32_t magic = "OURO_BLUEPRINT"_crc32;
+uint32_t checksum = ork::base::Crc32(data_span);
+
+// 3. MurmurHash3 32-bit（高品質分佈與雪崩效應雜湊）
+uint32_t seed = 0x9747b28c;
+uint32_t hash32 = ork::base::MurmurHash3(data_span, seed);
+
+// 4. HashCombine 變參組合
+size_t combined = 0;
+ork::base::HashCombine(combined, obj_id, slot_name, timestamp);
+```
+
+### 2.5 脫水安全判空與復水存取最佳實踐 (Dehydration-Safe Null Check)
+- **純狀態與存活判定（絕不觸發復水）**：
+  ```cpp
+  if (creature) { ... }          // 內部調用 ork_check_alive，純查詢 ControlBlock
+  if (creature.IsAlive()) { ... } // 純 ControlBlock 活躍判定，零 I/O
+  if (creature.Is<Boss>()) { ... } // 純 ControlBlock TypeID 判定，零 I/O
+  ```
+- **取得實體記憶體指標（若脫水則透明復水）**：
+  ```cpp
+  creature->Attack();           // operator->() 觸發 ork_acquire_object_pointer，必要時自磁碟載入
+  Creature* raw = creature.Get(); // 觸發復水
+  ```
+
 ---
 
 ## ⚖️ 3. 核心擴展鐵律 (Core Contributor Invariants)
@@ -115,6 +173,8 @@ private:
    - 所有底層內部回呼（如 `RehydrateCallback`）回傳型別為 `void`，由 `detail::Rehydrator` 類別進行私有封裝（Private static），嚴格收斂至 `ork::detail` 內部命名空間，嚴禁對外暴露裸指標或允許插件任意調用。
 5. **外掛模組建置規範 (Plugin MODULE Target Invariant)**：
    - 任何專案內部的測試動態外掛（如 `test_plugin_dll`）或第三方 Component 範例，在 CMake 中必須統一使用 `add_library(<name> MODULE ...)` 並清除前綴（`PREFIX ""`），嚴禁編譯為可被靜態鏈結的 `SHARED` 導入庫，以維持執行期動態加載的純淨隔離性。
+6. **全域 TypeID 雜湊標準統一 (Fnv1a64 Invariant)**：
+   - 核心所有型別唯一碼（`ork_type_id_t`）、編譯期 `ORK_OBJECT` 巨集、執行期字串型別註冊與查詢，**一律統一採用 `ork::base::Fnv1a64` 計算**。嚴禁在核心不同模組或外掛中各搞一套手寫雜湊邏輯，確保跨模組與脫水反序列化識別碼 100% 絕對一致。
 
 ---
 

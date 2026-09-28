@@ -22,64 +22,79 @@
 
 ---
 
-## 📋 2. 純 C ABI 導出符號規範 (共 32 個導出函式)
+## 📋 2. 純 C ABI 導出符號規範 (共 37 個導出函式)
 
-以下以**中性二進位介面符號規格（Neutral ABI Specification）**完整定義 32 個導出函式：
+以下以**中性二進位介面符號規格（Neutral ABI Specification）**完整定義 37 個導出函式：
 
-### 📦 類別 A：組件生命週期與弱引用 (`component_api.h`)
+### 📦 類別 A：組件生命週期、型別系統與弱引用 (`component_api.h`)
 
 1. `ork_register_object`
    - **符號規格**：`Function ork_register_object(obj: RawPointer, destroy_fn: FunctionPointer, out_id: MutablePointer<UInt64>) -> Int32`
    - **說明**：將新建構之領域物件註冊至全域註冊表，配發唯一的 64 位元 `HandleID`，綁定模組專屬的解構回呼。
-2. `ork_lock_object`
+2. `ork_register_object_with_type`
+   - **符號規格**：`Function ork_register_object_with_type(obj: RawPointer, destroy_fn: FunctionPointer, type_id: UInt64, out_id: MutablePointer<UInt64>) -> Int32`
+   - **說明**：將新建構之領域物件註冊至全域註冊表，同時綁定其靜態 64 位元 `TypeID`。
+3. `ork_register_type`
+   - **符號規格**：`Function ork_register_type(type_id: UInt64, name_utf8: CString, parent_type_id: UInt64) -> Int32`
+   - **說明**：向全域型別註冊表登記型別識別碼、UTF-8 類別名稱與父類別關係（構建單一繼承拓撲樹，防循環繼承）。
+4. `ork_get_object_type`
+   - **符號規格**：`Function ork_get_object_type(target_id: UInt64, out_type_id: MutablePointer<UInt64>) -> Int32`
+   - **說明**：純記憶體快速查詢目標物件之 TypeID（脫水狀態零 I/O 保證，絕不觸發復水）。
+5. `ork_is_instance_of`
+   - **符號規格**：`Function ork_is_instance_of(target_id: UInt64, target_type_id: UInt64, out_is_instance: MutablePointer<Int32>) -> Int32`
+   - **說明**：檢查目標物件是否屬於或繼承自指定 TypeID（純記憶體查詢，脫水狀態零 I/O）。
+6. `ork_is_subclass_of`
+   - **符號規格**：`Function ork_is_subclass_of(derived_type: UInt64, base_type: UInt64, out_is_subclass: MutablePointer<Int32>) -> Int32`
+   - **說明**：查詢型別註冊表中兩個 TypeID 是否具備派生繼承關係。
+7. `ork_lock_object`
    - **符號規格**：`Function ork_lock_object(target_id: UInt64) -> Int32`
    - **說明**：取得目標物件控制區塊之獨占寫入互斥鎖。
-3. `ork_unlock_object`
+8. `ork_unlock_object`
    - **符號規格**：`Function ork_unlock_object(target_id: UInt64) -> Int32`
    - **說明**：釋放目標物件控制區塊之獨占寫入互斥鎖。
-4. `ork_lock_object_shared`
+9. `ork_lock_object_shared`
    - **符號規格**：`Function ork_lock_object_shared(target_id: UInt64) -> Int32`
    - **說明**：取得目標物件控制區塊之共享讀取鎖。
-5. `ork_unlock_object_shared`
-   - **符號規格**：`Function ork_unlock_object_shared(target_id: UInt64) -> Int32`
-   - **說明**：釋放目標物件控制區塊之共享讀取鎖。
-6. `ork_acquire_object_pointer`
-   - **符號規格**：`Function ork_acquire_object_pointer(target_id: UInt64, out_obj: MutablePointer<RawPointer>) -> Int32`
-   - **說明**：獲取目標物件實體指標；若目標物件處於脫水狀態，核心將自動透明觸發復水流程還原 Payload。
-7. `ork_set_active_owner`
-   - **符號規格**：`Function ork_set_active_owner(owner_id: UInt64) -> Int32`
-   - **說明**：設定當前執行緒之 Active Owner 上下文（供子物件建構時向父物件自動登記 Handle 槽位）。
-8. `ork_get_active_owner`
-   - **符號規格**：`Function ork_get_active_owner(out_owner_id: MutablePointer<UInt64>) -> Int32`
-   - **說明**：取得當前執行緒之 Active Owner 上下文 ID。
-9. `ork_get_storage_state`
-   - **符號規格**：`Function ork_get_storage_state(target_id: UInt64, out_state: MutablePointer<UInt8>) -> Int32`
-   - **說明**：查詢目標物件當前之 StorageState（0: UnsavedNew, 1: Clean, 2: Dirty, 3: Dehydrated）。
-10. `ork_mark_dirty`
+10. `ork_unlock_object_shared`
+    - **符號規格**：`Function ork_unlock_object_shared(target_id: UInt64) -> Int32`
+    - **說明**：釋放目標物件控制區塊之共享讀取鎖。
+11. `ork_acquire_object_pointer`
+    - **符號規格**：`Function ork_acquire_object_pointer(target_id: UInt64, out_obj: MutablePointer<RawPointer>) -> Int32`
+    - **說明**：獲取目標物件實體指標；若目標物件處於脫水狀態，核心將自動透明觸發復水流程還原 Payload。
+12. `ork_set_active_owner`
+    - **符號規格**：`Function ork_set_active_owner(owner_id: UInt64) -> Int32`
+    - **說明**：設定當前執行緒之 Active Owner 上下文（供子物件建構時向父物件自動登記 Handle 槽位）。
+13. `ork_get_active_owner`
+    - **符號規格**：`Function ork_get_active_owner(out_owner_id: MutablePointer<UInt64>) -> Int32`
+    - **說明**：取得當前執行緒之 Active Owner 上下文 ID。
+14. `ork_get_storage_state`
+    - **符號規格**：`Function ork_get_storage_state(target_id: UInt64, out_state: MutablePointer<UInt8>) -> Int32`
+    - **說明**：查詢目標物件當前之 StorageState（0: UnsavedNew, 1: Clean, 2: Dirty, 3: Dehydrated）。
+15. `ork_mark_dirty`
     - **符號規格**：`Function ork_mark_dirty(target_id: UInt64) -> Int32`
     - **說明**：將目標物件狀態由 Clean 原子標記轉移為 Dirty。
-11. `ork_get_root_edge_count`
+16. `ork_get_root_edge_count`
     - **符號規格**：`Function ork_get_root_edge_count(target_id: UInt64, out_count: MutablePointer<UInt32>) -> Int32`
     - **說明**：查詢目標物件當前活躍之外部根指針（OuroPtr）引用計數。
-12. `ork_dehydrate_object`
+17. `ork_dehydrate_object`
     - **符號規格**：`Function ork_dehydrate_object(target_id: UInt64) -> Int32`
     - **說明**：對指定物件執行記憶體脫水；序列化落盤後安全釋放實體記憶體，保留控制區塊。
-13. `ork_register_edge`
+18. `ork_register_edge`
     - **符號規格**：`Function ork_register_edge(parent_id: UInt64, child_id: UInt64) -> Int32`
     - **說明**：向領域圖登記父物件至子物件之強引用拓撲邊緣（child 之 `strong_in_count` 遞增）。
-14. `ork_unregister_edge`
+19. `ork_unregister_edge`
     - **符號規格**：`Function ork_unregister_edge(parent_id: UInt64, child_id: UInt64) -> Int32`
     - **說明**：移除父對子之強引用拓撲邊緣（child 之 `strong_in_count` 遞減，降至 0 觸發延遲銷毀）。
-15. `ork_register_weak`
+20. `ork_register_weak`
     - **符號規格**：`Function ork_register_weak(target_id: UInt64) -> Int32`
     - **說明**：增加目標物件之無繫結弱引用計數（`unbound_count` 遞增）。
-16. `ork_unregister_weak`
+21. `ork_unregister_weak`
     - **符號規格**：`Function ork_unregister_weak(target_id: UInt64) -> Int32`
     - **說明**：減少目標物件之無繫結弱引用計數（`unbound_count` 遞減）。
-17. `ork_check_alive`
+22. `ork_check_alive`
     - **符號規格**：`Function ork_check_alive(target_id: UInt64, out_alive: MutablePointer<Int32>) -> Int32`
-    - **說明**：查詢目標物件是否存活且未處於銷毀/墓碑態。
-18. `ork_try_lock_weak`
+    - **說明**：查詢目標物件是否存活且未處於銷毀/墓碑態（純記憶體查詢，絕不引發脫水復水）。
+23. `ork_try_lock_weak`
     - **符號規格**：`Function ork_try_lock_weak(target_id: UInt64) -> Int32`
     - **說明**：嘗試原子晉升弱引用為根強引用，消滅 TOCTOU 競態。
 
@@ -87,28 +102,28 @@
 
 ### ⚙️ 類別 B：核心排程與延遲銷毀 (`core.h`)
 
-19. `ork_try_initialize_core`
+24. `ork_try_initialize_core`
     - **符號規格**：`Function ork_try_initialize_core() -> Int32`
     - **說明**：確保全域核心資料結構與背景服務初始化完成。
-20. `ork_collect_cycles`
+25. `ork_collect_cycles`
     - **符號規格**：`Function ork_collect_cycles() -> Int32`
     - **說明**：同步觸發一輪循環孤島分析與試探性斷鏈回收。
-21. `ork_flush_deferred_deletions`
+26. `ork_flush_deferred_deletions`
     - **符號規格**：`Function ork_flush_deferred_deletions() -> Int32`
     - **說明**：阻塞等待延遲銷毀隊列目前積壓之所有物件釋放任務執行完成。
-22. `ork_set_deferred_delete_mode`
+27. `ork_set_deferred_delete_mode`
     - **符號規格**：`Function ork_set_deferred_delete_mode(mode: Int32) -> Int32`
     - **說明**：切換延遲銷毀模式（0: 非同步背景執行緒池處理，1: 即時同步主執行緒處理）。
-23. `ork_get_deferred_delete_pending_count`
+28. `ork_get_deferred_delete_pending_count`
     - **符號規格**：`Function ork_get_deferred_delete_pending_count() -> Int32`
     - **說明**：查詢延遲銷毀隊列目前待處理的物件數量。
-24. `ork_get_cycle_suspect_count`
+29. `ork_get_cycle_suspect_count`
     - **符號規格**：`Function ork_get_cycle_suspect_count() -> Int32`
     - **說明**：查詢循環回收器中待分析之嫌疑節點數量。
-25. `ork_stop_cycle_collector`
+30. `ork_stop_cycle_collector`
     - **符號規格**：`Function ork_stop_cycle_collector() -> Int32`
     - **說明**：安全停止循環回收器之後台工作線程。
-26. `ork_stop_deferred_deletions`
+31. `ork_stop_deferred_deletions`
     - **符號規格**：`Function ork_stop_deferred_deletions() -> Int32`
     - **說明**：安全停止延遲銷毀佇列之後台工作線程。
 
@@ -116,21 +131,21 @@
 
 ### 🛡️ 類別 C：宿主特權專用介面 (`host_api.h`)
 
-27. `ork_flush_storage`
+32. `ork_flush_storage`
     - **符號規格**：`Function ork_flush_storage() -> Int32`
     - **說明**：宿主特權：雙管線同步排空，等待非同步 I/O 落盤與延遲銷毀全部執行完畢。
-28. `ork_shutdown_runtime`
+33. `ork_shutdown_runtime`
     - **符號規格**：`Function ork_shutdown_runtime() -> Int32`
     - **說明**：宿主特權：終止核心執行緒池與執行時期背景服務。
-29. `ork_set_object_destroyed_callback`
+34. `ork_set_object_destroyed_callback`
     - **符號規格**：`Function ork_set_object_destroyed_callback(callback: FunctionPointer<UInt64 -> Void>) -> Int32`
     - **說明**：宿主特權：註冊進程級全域物件銷毀監聽回呼。
-30. `ork_trigger_dehydration_rescue`
+35. `ork_trigger_dehydration_rescue`
     - **符號規格**：`Function ork_trigger_dehydration_rescue(bytes_needed: UInt64, out_freed: MutablePointer<UInt64>, out_has_more: MutablePointer<Int32>) -> Int32`
     - **說明**：宿主特權：主動調度脫水器執行緊急記憶體救援換頁。
-31. `ork_set_storage_state_for_testing`
+36. `ork_set_storage_state_for_testing`
     - **符號規格**：`Function ork_set_storage_state_for_testing(id: UInt64, state: UInt8) -> Int32`
     - **說明**：白盒測試特權：手動強制覆寫目標物件之 StorageState。
-32. `ork_clear_object_payload_for_testing`
+37. `ork_clear_object_payload_for_testing`
     - **符號規格**：`Function ork_clear_object_payload_for_testing(id: UInt64) -> Int32`
     - **說明**：白盒測試特權：直接置空目標物件之實體記憶體 Payload 模擬冷脫水態。

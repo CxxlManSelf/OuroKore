@@ -47,7 +47,7 @@ HandleID Registry::GenerateUniqueID()
   return id;
 }
 
-HandleID Registry::RegisterObject(OuroObject *obj, DestroyFn destroy_fn)
+HandleID Registry::RegisterObject(OuroObject *obj, DestroyFn destroy_fn, ork_type_id_t type_id)
 {
   if (!obj) return 0;
 
@@ -59,12 +59,12 @@ HandleID Registry::RegisterObject(OuroObject *obj, DestroyFn destroy_fn)
   }
 
   obj->SetObjectID(id);
-  ControlBlock *cb = new ControlBlock(obj, destroy_fn);
+  ControlBlock *cb = new ControlBlock(obj, destroy_fn, type_id);
   m_object_map[id] = cb;
   return id;
 }
 
-HandleID Registry::ReserveID()
+HandleID Registry::ReserveID(ork_type_id_t type_id)
 {
   std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
   HandleID id = GenerateUniqueID();
@@ -73,13 +73,13 @@ HandleID Registry::ReserveID()
     id = GenerateUniqueID();
   }
 
-  ControlBlock *cb = new ControlBlock(nullptr);
+  ControlBlock *cb = new ControlBlock(nullptr, nullptr, type_id);
   cb->m_is_reserved.store(true, std::memory_order_release);
   m_object_map[id] = cb;
   return id;
 }
 
-bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn)
+bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn, ork_type_id_t type_id)
 {
   std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
   auto it = m_object_map.find(id);
@@ -98,8 +98,35 @@ bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn)
     {
       cb->m_destroy_fn = destroy_fn;
     }
+    if (type_id != 0)
+    {
+      cb->m_type_id.store(type_id, std::memory_order_release);
+    }
     cb->m_payload.store(obj, std::memory_order_release);
     cb->m_is_reserved.store(false, std::memory_order_release);
+    return true;
+  }
+  return false;
+}
+
+ork_type_id_t Registry::GetObjectType(HandleID target_id) const
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    return it->second->m_type_id.load(std::memory_order_acquire);
+  }
+  return 0;
+}
+
+bool Registry::SetObjectType(HandleID target_id, ork_type_id_t type_id)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    it->second->m_type_id.store(type_id, std::memory_order_release);
     return true;
   }
   return false;

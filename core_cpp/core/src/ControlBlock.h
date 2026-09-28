@@ -52,9 +52,13 @@ struct ControlBlock
   // 兩階段構造預留旗標（預留期間強弱計數與 payload 皆為 0，嚴禁任何回收機制誤殺）
   std::atomic<bool> m_is_reserved{false};
 
-  explicit ControlBlock(OuroObject *payload = nullptr, DestroyFn destroy_fn = nullptr) :
+  // 全域唯一型別識別碼（脫水期間永久長存於 ControlBlock 墓碑中，查詢零 I/O 零復水）
+  std::atomic<ork_type_id_t> m_type_id{0};
+
+  explicit ControlBlock(OuroObject *payload = nullptr, DestroyFn destroy_fn = nullptr, ork_type_id_t type_id = 0) :
       m_payload(payload),
-      m_destroy_fn(destroy_fn)
+      m_destroy_fn(destroy_fn),
+      m_type_id(type_id)
   {}
 
   /**

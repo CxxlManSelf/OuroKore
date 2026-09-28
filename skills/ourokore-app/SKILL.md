@@ -37,6 +37,7 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
 #include <string>
 
 class Monster : public ork::OuroObject {
+    ORK_OBJECT(Monster, ork::OuroObject)
 public:
     // ----------------------------------------------------
     // 1. 拓撲槽位與弱引用宣告 (Handle Slots & Weak References)
@@ -168,6 +169,51 @@ if (result.success) {
 ork::DehydrateAsync(std::move(boss));
 ```
 
+### 模式 D：型別識別與安全多型轉型 (Type Casting & Inspection)
+```cpp
+ork::OuroPtr<Creature> creature = ork::CreateObject<Monster>();
+
+// 1. 型別檢查（純 ControlBlock 查詢，零 I/O 脫水安全）
+if (creature.Is<Monster>()) {
+    // 2. 向下轉型（左值拷貝：安全增加根引用）
+    ork::OuroPtr<Monster> monster = creature.As<Monster>();
+    monster->SetHp(200);
+}
+
+// 3. 右值所有權移動轉型（零引用計數變更開銷，完美轉移所有權）
+ork::OuroPtr<Monster> moved_monster = std::move(creature).As<Monster>();
+```
+
+### 模式 E：Base 現代高效能雜湊工具庫實戰 (Hash Utilities)
+```cpp
+#include <ourokore/base/Hash.hpp>
+using namespace ork::base::literals;
+
+// 1. FNV-1a 64-bit（全域 TypeID 與字串 ID 唯一標準）
+constexpr uint64_t type_id = "Monster"_fnv64;
+uint64_t hash_val = ork::base::Fnv1a64(str_view);
+
+// 2. CRC32 (IEEE 802.3 防竄改與資料校驗)
+constexpr uint32_t magic = "OURO_BLUEPRINT"_crc32;
+uint32_t checksum = ork::base::Crc32(data_span);
+
+// 3. MurmurHash3 32-bit & HashCombine 變參組合
+uint32_t hash32 = ork::base::MurmurHash3(data_span, 0x9747b28c);
+size_t combined = 0;
+ork::base::HashCombine(combined, id, tag, timestamp);
+```
+
+### 模式 F：脫水安全狀態判定（零 I/O 判空防線）
+```cpp
+// 正確：純 ControlBlock 判定，即使物件脫水亦絕不引發磁碟 I/O 復水
+if (monster) { /* 存活 */ }
+if (monster.IsAlive()) { /* 存活 */ }
+if (monster.Is<BossMonster>()) { /* 型別相符 */ }
+
+// 注意：operator->() 與 Get() 會在物件脫水時透明自儲存驅動載入復水
+monster->Attack();
+```
+
 ---
 
 ## ⚠️ 4. 應用開發高壓線條款 (Critical Invariants)
@@ -186,6 +232,11 @@ ork::DehydrateAsync(std::move(boss));
 5. **外掛插件 CMake 必須宣告為 MODULE（高壓鐵律）**：
    * 所有動態插件（透過 `DynamicLibrary` 動態載入之模組）在 CMake 中**必須使用 `add_library(<name> MODULE ...)`**，嚴格禁止宣告為 `SHARED`！
    * 宣告為 `SHARED` 會生成導入庫，極易被其他模組在編譯期誤鏈結（Mislink），徹底破壞插件的熱卸載與生命週期隔離。
+6. **嚴禁以 `Get()` 做物件判空（防範非預期復水）**：
+   * 欲判斷物件是否存活或有效，請一律使用 `if (ptr)` 或 `ptr.IsAlive()`。
+   * 嚴禁寫出 `if (ptr.Get() != nullptr)`，這會強行觸發 `ork_acquire_object_pointer` 將已脫水休眠的物件從磁碟透明拉回記憶體，造成效能雪崩與換頁失效。
+7. **全域 TypeID 雜湊標準統一 (Fnv1a64 Invariant)**：
+   * 領域物件型別定義一律使用 `ORK_OBJECT` 巨集；若需自訂常數識別碼，一律統一使用 `ork::base::Fnv1a64` 或字面量 `_fnv64`，嚴禁自寫重複雜湊邏輯。
 
 
 ---

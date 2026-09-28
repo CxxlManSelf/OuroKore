@@ -10,9 +10,10 @@ namespace ork::internal
  * @brief Reserve a HandleID and create a ControlBlock with a null payload.
  * Used internally by CreateObject two-phase construction.
  * @param out_id Pointer to receive the allocated HandleID.
+ * @param type_id The TypeID to pre-bind to the ControlBlock.
  * @return ORK_STATUS_OK on success, or an error code.
  */
-int32_t ReserveObjectId(HandleID* out_id);
+int32_t ReserveObjectId(HandleID* out_id, ork_type_id_t type_id = 0);
 
 /**
  * @brief Bind a constructed object payload to a reserved HandleID.
@@ -20,9 +21,10 @@ int32_t ReserveObjectId(HandleID* out_id);
  * @param id The HandleID reserved by ReserveObjectId.
  * @param obj Pointer to the OuroObject instance.
  * @param destroy_fn Pointer to in-place deleter function (executes in creating module's CRT).
+ * @param type_id Optional TypeID update.
  * @return ORK_STATUS_OK on success, or an error code.
  */
-int32_t BindObjectPayload(HandleID id, ::OuroObject* obj, ork_destroy_fn_t destroy_fn);
+int32_t BindObjectPayload(HandleID id, ::OuroObject* obj, ork_destroy_fn_t destroy_fn, ork_type_id_t type_id = 0);
 
 /**
  * @brief Unregister/release an object from the registry.

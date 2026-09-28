@@ -22,6 +22,8 @@
 #define ORK_STATUS_ERROR_DESTRUCTING -6
 
 typedef uint64_t HandleID;
+typedef uint64_t ork_type_id_t;
+#define ORK_INVALID_TYPE_ID 0
 
 #ifdef __cplusplus
 extern "C" {

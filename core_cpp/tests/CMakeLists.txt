@@ -39,3 +39,9 @@ add_executable(base_dynamic_library_tests base_dynamic_library_tests.cpp)
 target_link_libraries(base_dynamic_library_tests ourokore_base)
 add_dependencies(base_dynamic_library_tests test_plugin_dll)
 
+add_executable(type_system_tests type_system_tests.cpp)
+target_link_libraries(type_system_tests ourokore_core ourokore_base)
+
+add_executable(base_hash_tests base_hash_tests.cpp)
+target_link_libraries(base_hash_tests ourokore_base)
+

@@ -71,7 +71,17 @@ set_target_properties(MyPlugin PROPERTIES
    - 物件生命週期支援 `UnsavedNew`、`Clean`、`Dirty`、`Dehydrated` 四種儲存狀態。
    - 在記憶體壓力或 LRU 策略觸發時將 Dirty 物件序列化落盤並安全釋放記憶體 Payload，保留 ControlBlock。存取時透明按需自 `IStorageDriver` 復原。
 
-3. **三層邊界隔離與跨語言 FFI 友善架構**：
+3. **全域型別系統與安全多型轉型 (Type System & Safe Casting)**：
+   - 控制區塊（ControlBlock）墓碑長存 64 位元唯一 `TypeID`，物件脫水換頁至磁碟後**仍可進行型別檢查與繼承判定，絕不引發非預期 I/O 穿透復水**。
+   - C++ 高階包裝層 `OuroPtr<T>` 支援 `Is<U>()` 判定與 `As<U>()` 轉型；支援左值拷貝（安全增持根引用）與右值移動語意 `std::move(ptr).As<U>()`（**零引用計數變更開銷**，完美轉移所有權）。
+   - 純 C ABI 完整導出 `ork_register_type`、`ork_get_object_type`、`ork_is_instance_of`、`ork_is_subclass_of`，為 C#、Rust 等跨語言 FFI 提供同等安全轉型基石。
+
+4. **Base 通用現代基礎工具庫 (Base Foundation & Utilities)**：
+   - **高效能跨平台執行緒池 (ThreadPool)**：支援動態彈性排程與 Future/Promise 非同步鏈結。
+   - **動態模組載入器 (DynamicLibrary)**：具備物件生命週期反向錨定（Life-Bound Retention），防止模組卸載引發代碼段失效崩潰。
+   - **標準 C++20 現代雜湊模組 (Hash Utilities)**：[Hash.hpp](include/ourokore/base/Hash.hpp) 全面支援編譯期常數 `constexpr`，內建 FNV-1a (32/64-bit)、CRC32 (IEEE 802.3)、MurmurHash3 (32-bit)、`HashCombine` 及使用者自訂字面量（`_fnv64`、`_crc32`），供型別計算、屬性鍵比對與資料完整性校驗使用。
+
+5. **三層邊界隔離與跨語言 FFI 友善架構**：
    - 遵循「**C ABI 為底，各語言 Wrapper 為糖**」之核心設計哲學。
    - **Host 層獨佔特權**：全進程生命週期（`Init`、`Shutdown`、`Reset`）、基礎設施注入（儲存驅動、脫水器）、全域 GC 調度。
    - **Plugin/Component 隔離**：僅限使用受管物件、讀寫鎖與安全唯讀查詢，嚴禁碰觸系統級特權。

@@ -310,11 +310,12 @@ class Rehydrator
     // 4. Unpack Payload & Edge Roster (Exceptions safely bubble up while shell_guard frees memory)
     UnpackBlueprint(*shell_guard, *stream);
 
-    // 5. Re-bind payload pointer and atomic-bind in-place deleter & rehydrator to ControlBlock
+    TypeID type_id = detail::TypeTraits<T>::GetTypeID();
     if (!detail::BindRuntimeObjectPayload(id,
                                           reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get())),
                                           &ObjectDeleter<T>,
-                                          &RehydrateCallback))
+                                          &RehydrateCallback,
+                                          type_id))
     {
       throw std::runtime_error("OuroKore Rehydrate Error: Failed to re-bind payload pointer to ControlBlock.");
     }
@@ -369,7 +370,8 @@ HandleID CreateObjectInternal(Args &&...args)
       std::is_convertible_v<T *, OuroObject *>, "T* must be convertible to OuroObject* (Diamond Inheritance forbidden)"
   );
 
-  HandleID reserved_id = detail::ReserveRuntimeObjectID();
+  TypeID type_id = detail::TypeTraits<T>::GetTypeID();
+  HandleID reserved_id = detail::ReserveRuntimeObjectID(type_id);
 
   ActiveOwnerGuard guard(reserved_id);
 
@@ -409,7 +411,8 @@ HandleID CreateObjectInternal(Args &&...args)
   if (!detail::BindRuntimeObjectPayload(reserved_id,
                                         reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(obj)),
                                         &ObjectDeleter<T>,
-                                        &detail::Rehydrator<T>::RehydrateCallback))
+                                        &detail::Rehydrator<T>::RehydrateCallback,
+                                        type_id))
   {
     delete obj;
     detail::RollbackRuntimeObjectID(reserved_id);

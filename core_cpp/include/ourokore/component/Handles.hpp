@@ -230,8 +230,72 @@ public:
   explicit operator bool() const
   {
     if (m_target_id == 0) return false;
-    ::OuroObject *raw_obj = nullptr;
-    return ork_acquire_object_pointer(m_target_id, &raw_obj) == ORK_STATUS_OK;
+    int32_t alive = 0;
+    if (ork_check_alive(m_target_id, &alive, 0) == ORK_STATUS_OK)
+    {
+      return alive != 0;
+    }
+    return false;
+  }
+
+  TypeID GetTypeID() const
+  {
+    if (m_target_id == 0) return 0;
+    ork_type_id_t tid = 0;
+    if (ork_get_object_type(m_target_id, &tid) == ORK_STATUS_OK)
+    {
+      return tid;
+    }
+    return 0;
+  }
+
+  template <typename TargetT>
+  bool Is() const
+  {
+    if (m_target_id == 0) return false;
+    int32_t is_inst = 0;
+    ork_type_id_t target_type = detail::TypeTraits<TargetT>::GetTypeID();
+    if (ork_is_instance_of(m_target_id, target_type, &is_inst) == ORK_STATUS_OK)
+    {
+      return is_inst != 0;
+    }
+    return false;
+  }
+
+  template <typename TargetT>
+  OuroPtr<TargetT> As() const &
+  {
+    if (m_target_id == 0) return OuroPtr<TargetT>();
+    int32_t is_inst = 0;
+    ork_type_id_t target_type = detail::TypeTraits<TargetT>::GetTypeID();
+    if (ork_is_instance_of(m_target_id, target_type, &is_inst) == ORK_STATUS_OK && is_inst)
+    {
+      return OuroPtr<TargetT>(m_target_id);
+    }
+    return OuroPtr<TargetT>();
+  }
+
+  template <typename TargetT>
+  OuroPtr<TargetT> As() &&
+  {
+    if (m_target_id == 0) return OuroPtr<TargetT>();
+    int32_t is_inst = 0;
+    ork_type_id_t target_type = detail::TypeTraits<TargetT>::GetTypeID();
+    if (ork_is_instance_of(m_target_id, target_type, &is_inst) == ORK_STATUS_OK && is_inst)
+    {
+      HandleID tid = m_target_id;
+      m_target_id = 0;
+      return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
+    }
+    Release();
+    return OuroPtr<TargetT>();
+  }
+
+  HandleID DetachRootEdge() noexcept
+  {
+    HandleID tid = m_target_id;
+    m_target_id = 0;
+    return tid;
   }
 
   HandleID GetTargetID() const
@@ -242,6 +306,45 @@ public:
 private:
   HandleID m_target_id = 0;
 };
+
+template <typename TargetT, typename SourceT>
+inline OuroPtr<TargetT> dynamic_pointer_cast(const OuroPtr<SourceT> &ptr)
+{
+  return ptr.template As<TargetT>();
+}
+
+template <typename TargetT, typename SourceT>
+inline OuroPtr<TargetT> dynamic_pointer_cast(OuroPtr<SourceT> &&ptr)
+{
+  return std::move(ptr).template As<TargetT>();
+}
+
+template <typename TargetT, typename SourceT>
+inline OuroPtr<TargetT> static_pointer_cast(const OuroPtr<SourceT> &ptr)
+{
+  if (!ptr) return OuroPtr<TargetT>();
+  return OuroPtr<TargetT>(ptr.GetTargetID());
+}
+
+template <typename TargetT, typename SourceT>
+inline OuroPtr<TargetT> static_pointer_cast(OuroPtr<SourceT> &&ptr)
+{
+  if (!ptr) return OuroPtr<TargetT>();
+  HandleID tid = ptr.DetachRootEdge();
+  return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
+}
+
+template <typename TargetT, typename SourceT>
+inline OuroPtr<TargetT> const_pointer_cast(const OuroPtr<SourceT> &ptr)
+{
+  return static_pointer_cast<TargetT>(ptr);
+}
+
+template <typename TargetT, typename SourceT>
+inline OuroPtr<TargetT> const_pointer_cast(OuroPtr<SourceT> &&ptr)
+{
+  return static_pointer_cast<TargetT>(std::move(ptr));
+}
 
 /**
  * @brief Base class for all Owning Handles (Single and Container variant).
@@ -680,6 +783,15 @@ public:
     {
       return OuroPtr<TargetT>();
     }
+    if constexpr (!std::is_same_v<TargetT, T> && !std::is_same_v<TargetT, OuroObject>)
+    {
+      int32_t is_inst = 0;
+      ork_type_id_t target_type = detail::TypeTraits<TargetT>::GetTypeID();
+      if (ork_is_instance_of(tid, target_type, &is_inst) != ORK_STATUS_OK || !is_inst)
+      {
+        return OuroPtr<TargetT>();
+      }
+    }
     return OuroPtr<TargetT>(tid);
   }
 
@@ -951,6 +1063,16 @@ public:
 
     if (ork_try_lock_weak(tid) == ORK_STATUS_OK)
     {
+      if constexpr (!std::is_same_v<TargetT, T> && !std::is_same_v<TargetT, OuroObject>)
+      {
+        int32_t is_inst = 0;
+        ork_type_id_t target_type = detail::TypeTraits<TargetT>::GetTypeID();
+        if (ork_is_instance_of(tid, target_type, &is_inst) != ORK_STATUS_OK || !is_inst)
+        {
+          ork_unregister_edge(ORK_ROOT_ID, tid);
+          return OuroPtr<TargetT>();
+        }
+      }
       return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
     }
 

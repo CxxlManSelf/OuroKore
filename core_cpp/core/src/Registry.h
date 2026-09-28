@@ -60,18 +60,28 @@ public:
   /**
    * @brief Registers an OuroObject and creates its ControlBlock.
    */
-  HandleID RegisterObject(OuroObject *obj, DestroyFn destroy_fn = nullptr);
+  HandleID RegisterObject(OuroObject *obj, DestroyFn destroy_fn = nullptr, ork_type_id_t type_id = 0);
 
   /**
    * @brief Reserves a HandleID and creates a ControlBlock with a null payload.
    * Used to establish ActiveOwnerContext before construction.
    */
-  HandleID ReserveID();
+  HandleID ReserveID(ork_type_id_t type_id = 0);
 
   /**
    * @brief Binds a constructed object payload to a reserved HandleID.
    */
-  bool BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn = nullptr);
+  bool BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn = nullptr, ork_type_id_t type_id = 0);
+
+  /**
+   * @brief 取得物件之 TypeID
+   */
+  ork_type_id_t GetObjectType(HandleID target_id) const;
+
+  /**
+   * @brief 設定物件之 TypeID
+   */
+  bool SetObjectType(HandleID target_id, ork_type_id_t type_id);
 
   /**
    * @brief Forcefully unregisters an object by ID.

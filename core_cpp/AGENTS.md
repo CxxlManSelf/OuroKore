@@ -49,7 +49,7 @@
 > **核心原則：第三方插件僅能使用受管物件與安全查詢，絕不可具備干預系統運作或存取內部細節的能力。**
 
 1. **功能邊界界定**：
-   - 插件**可以使用**：受管物件生命週期指針（`CreateObject`, `OuroPtr`, `OuroWeakPtr`）、物件脫水/復水（`Dehydrate`, `Rehydrate`）、**純唯讀無副作用的狀態查詢**（`IsAlive`, `GetStorageState`, `GetRootEdgeCount`）。
+   - 插件**可以使用**：受管物件生命週期指針（`CreateObject`, `OuroPtr`, `OuroWeakPtr`）、物件脫水/復水（`Dehydrate`, `Rehydrate`）、**純唯讀無副作用的狀態查詢**（`IsAlive`, `GetStorageState`, `GetRootEdgeCount`, `Is<T>`, `GetTypeID`）。
    - 插件**絕對不可以碰觸**：上述準則一的所有 Host 特權、以及核心內部實作細節。
 2. **標頭檔與目錄防洩漏規則**：
    - 所有公開發布之 `include/` 目錄，**絕不可出現**任何內部私有標頭檔（如 `internal_api.h`）。
@@ -93,4 +93,18 @@
    - 系統回傳的字串訊息必須立即轉換為 UTF-8 儲存與傳播，杜絕平台特有編碼汙染核心。
 3. **二進位協議規範**：
    - 藍圖打包、脫水落盤與網路傳輸中的字串，統一採用「4 位元組長度前綴（Little-Endian `uint32_t len`）+ `len` 個位元組之 UTF-8 內容（無 null 結尾字元）」標準，確保多語言資料 100% 互通。
+
+---
+
+## 基礎工具層與型別唯一性規範 (Base Utilities & TypeID Invariant)
+
+> **核心原則：基礎模組為底，通用工具統一收斂，型別識別碼全域唯一且長存。**
+
+1. **Base 模組職責邊界**：
+   - `ourokore_base` 僅提供零依賴、高效能且相容 C++20 `constexpr` 之現代系統基礎設施（執行緒池、同步原語、動態庫載入器、標準雜湊演算法 `Hash.hpp`）。
+   - 基礎層嚴格禁止逆向依賴 `ourokore_core`，確保通用工具庫可獨立被任何宿主或外掛共用。
+2. **全域唯一 TypeID 雜湊標準**：
+   - 核心所有型別識別碼（`ork_type_id_t`）無論於編譯期巨集（`ORK_OBJECT`）或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，嚴禁各模組自定義重複邏輯。
+3. **脫水墓碑型別查詢零 I/O 保證 (Zero-I/O Dehydration Invariant)**：
+   - 控制區塊（ControlBlock）必須長存 `TypeID`，即使記憶體實體脫水落盤釋放，呼叫 `IsAlive()`、`Is<T>()`、`GetTypeID()` 或 C ABI `ork_is_instance_of` 必須保證純記憶體命中，絕不觸發復水與磁碟 I/O。
 

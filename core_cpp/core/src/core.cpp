@@ -9,6 +9,7 @@
 #include "DeferredDeleteQueue.h"
 #include "Registry.h"
 #include "RuntimeContext.h"
+#include "TypeRegistry.h"
 #include "ourokore/component/RuntimeAPI.hpp"
 #include "ourokore/host/HostRuntimeAPI.hpp"
 
@@ -63,8 +64,30 @@ extern "C"
     }
     try
     {
+      auto *cast_obj = reinterpret_cast<ork::OuroObject *>(obj);
+      ork_type_id_t type_id = cast_obj ? cast_obj->GetTypeID() : 0;
+      *out_id = ork::Registry::GetInstance().RegisterObject(cast_obj,
+                                                            reinterpret_cast<ork::DestroyFn>(destroy_fn),
+                                                            type_id);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_register_object_with_type(OuroObject *obj, ork_destroy_fn_t destroy_fn, ork_type_id_t type_id, HandleID *out_id)
+  {
+    if (!obj || !out_id)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
       *out_id = ork::Registry::GetInstance().RegisterObject(reinterpret_cast<ork::OuroObject *>(obj),
-                                                            reinterpret_cast<ork::DestroyFn>(destroy_fn));
+                                                            reinterpret_cast<ork::DestroyFn>(destroy_fn),
+                                                            type_id);
       return ORK_STATUS_OK;
     }
     catch (...)
@@ -497,6 +520,93 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_register_type(ork_type_id_t type_id, const char *name_utf8, ork_type_id_t parent_type_id)
+  {
+    if (type_id == ORK_INVALID_TYPE_ID || !name_utf8)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      if (ork::TypeRegistry::GetInstance().RegisterType(type_id, name_utf8, parent_type_id))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_get_object_type(HandleID target_id, ork_type_id_t *out_type_id)
+  {
+    if (target_id == ORK_ROOT_ID || !out_type_id)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      auto *cb = ork::Registry::GetInstance().GetControlBlock(target_id);
+      if (!cb)
+      {
+        return ORK_STATUS_ERROR_NOT_FOUND;
+      }
+      *out_type_id = cb->m_type_id.load(std::memory_order_acquire);
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_is_instance_of(HandleID target_id, ork_type_id_t target_type_id, int32_t *out_is_instance)
+  {
+    if (target_id == ORK_ROOT_ID || !out_is_instance || target_type_id == ORK_INVALID_TYPE_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      auto *cb = ork::Registry::GetInstance().GetControlBlock(target_id);
+      if (!cb)
+      {
+        return ORK_STATUS_ERROR_NOT_FOUND;
+      }
+      ork_type_id_t obj_type = cb->m_type_id.load(std::memory_order_acquire);
+      if (obj_type == ORK_INVALID_TYPE_ID)
+      {
+        *out_is_instance = 0;
+        return ORK_STATUS_OK;
+      }
+      *out_is_instance = ork::TypeRegistry::GetInstance().IsSubclassOf(obj_type, target_type_id) ? 1 : 0;
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_is_subclass_of(ork_type_id_t derived_type, ork_type_id_t base_type, int32_t *out_is_subclass)
+  {
+    if (!out_is_subclass)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      *out_is_subclass = ork::TypeRegistry::GetInstance().IsSubclassOf(derived_type, base_type) ? 1 : 0;
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
   int32_t ORK_CALL ork_flush_storage(void)
   {
     try
@@ -569,7 +679,7 @@ extern "C"
 namespace ork::internal
 {
 
-int32_t ReserveObjectId(HandleID *out_id)
+int32_t ReserveObjectId(HandleID *out_id, ork_type_id_t type_id)
 {
   if (!out_id)
   {
@@ -577,7 +687,7 @@ int32_t ReserveObjectId(HandleID *out_id)
   }
   try
   {
-    *out_id = ork::Registry::GetInstance().ReserveID();
+    *out_id = ork::Registry::GetInstance().ReserveID(type_id);
     return ORK_STATUS_OK;
   }
   catch (...)
@@ -586,7 +696,7 @@ int32_t ReserveObjectId(HandleID *out_id)
   }
 }
 
-int32_t BindObjectPayload(HandleID id, ::OuroObject *obj, ork_destroy_fn_t destroy_fn)
+int32_t BindObjectPayload(HandleID id, ::OuroObject *obj, ork_destroy_fn_t destroy_fn, ork_type_id_t type_id)
 {
   if (id == ORK_ROOT_ID)
   {
@@ -595,7 +705,8 @@ int32_t BindObjectPayload(HandleID id, ::OuroObject *obj, ork_destroy_fn_t destr
   try
   {
     if (ork::Registry::GetInstance().BindPayload(id, reinterpret_cast<ork::OuroObject *>(obj),
-                                                 reinterpret_cast<ork::DestroyFn>(destroy_fn)))
+                                                 reinterpret_cast<ork::DestroyFn>(destroy_fn),
+                                                 type_id))
     {
       return ORK_STATUS_OK;
     }
@@ -881,10 +992,10 @@ bool DehydrateRuntime(HandleID id)
   return RuntimeContext::GetInstance().Dehydrate(id);
 }
 
-HandleID ReserveRuntimeObjectID()
+HandleID ReserveRuntimeObjectID(ork_type_id_t type_id)
 {
   HandleID reserved_id = 0;
-  if (ork::internal::ReserveObjectId(&reserved_id) != ORK_STATUS_OK)
+  if (ork::internal::ReserveObjectId(&reserved_id, type_id) != ORK_STATUS_OK)
   {
     throw std::runtime_error("OuroKore Error: Failed to reserve HandleID from Registry.");
   }
@@ -894,11 +1005,13 @@ HandleID ReserveRuntimeObjectID()
 bool BindRuntimeObjectPayload(HandleID id,
                               ::OuroObject* payload,
                               void (*destroy_fn)(::OuroObject*),
-                              void (*rehydrate_fn)(HandleID))
+                              void (*rehydrate_fn)(HandleID),
+                              ork_type_id_t type_id)
 {
   if (ork::internal::BindObjectPayload(id,
                                        payload,
-                                       reinterpret_cast<ork_destroy_fn_t>(destroy_fn)) != ORK_STATUS_OK)
+                                       reinterpret_cast<ork_destroy_fn_t>(destroy_fn),
+                                       type_id) != ORK_STATUS_OK)
   {
     return false;
   }

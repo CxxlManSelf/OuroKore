@@ -10,7 +10,7 @@
 ## 2. 第三方插件（Plugin/Component）隔離審查
 - **判定要點**：第三方插件是否絕對不可使用？
 - **規範**：
-  - 插件僅能使用受管物件指針（`CreateObject`、`OuroPtr`、`OuroWeakPtr`）、物件脫水落盤，以及**安全唯讀狀態查詢**（`IsAlive`、`GetStorageState`、`GetRootEdgeCount`）。
+  - 插件僅能使用受管物件指針（`CreateObject`、`OuroPtr`、`OuroWeakPtr`）、物件脫水落盤，以及**安全唯讀狀態與型別查詢**（`IsAlive`、`GetStorageState`、`GetRootEdgeCount`、`Is<T>`、`GetTypeID`）。
   - 插件絕不可碰觸任何進程級特權或內部實作細節。
   - 公開之 `include/` 目錄絕不可含有內部私有標頭檔（如 `internal_api.h`，必須置於 `core/src/`）。
   - **CMake 建置型別鐵律**：插件庫必須強制使用 `add_library(<name> MODULE ...)` 宣告，嚴禁使用 `SHARED`，防止被其他模組在編譯期靜態鏈結而喪失熱卸載獨立性。
@@ -30,4 +30,8 @@
 ## 5. 文字與字串編碼規範（UTF-8 Invariant）
 - **唯一強制標準**：所有文字訊息、屬性鍵名、插槽名稱、錯誤描述、二進位字串序列化與 FFI 介面，**100% 統一採用 UTF-8 編碼**。
 - **OS 邊界隔離**：Windows 下涉及路徑或系統呼叫必須在底層顯式轉換為 `std::wstring` 呼叫 `W` 版 API，對外介面與儲存一律回歸 UTF-8，嚴禁混用 ANSI 本地編碼。
+
+## 6. 全域 TypeID 雜湊標準與脫水零 I/O 規範 (TypeID & Zero-I/O Invariant)
+- **統一雜湊標準**：核心所有型別識別碼（`ork_type_id_t`）無論在編譯期（`ORK_OBJECT`）或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，杜絕各自為政。
+- **脫水墓碑查詢零 I/O**：ControlBlock 必須長存 TypeID，脫水物件在磁碟未載入時進行 `Is<T>()`、`IsAlive()` 或 `ork_is_instance_of` 查詢**保證純記憶體完成，嚴禁誘發穿透性復水**。
 

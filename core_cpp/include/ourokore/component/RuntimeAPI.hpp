@@ -84,7 +84,7 @@ ORK_API bool DehydrateRuntime(HandleID id);
 /**
  * @brief 在核心預留 HandleID 並建立初始 ControlBlock（物件兩階段建構）
  */
-ORK_API HandleID ReserveRuntimeObjectID();
+ORK_API HandleID ReserveRuntimeObjectID(ork_type_id_t type_id = 0);
 
 /**
  * @brief 將客戶端建構之物件與 deleter/rehydrator 安全綁定至 ControlBlock
@@ -92,7 +92,8 @@ ORK_API HandleID ReserveRuntimeObjectID();
 ORK_API bool BindRuntimeObjectPayload(HandleID id,
                                       ::OuroObject* payload,
                                       void (*destroy_fn)(::OuroObject*),
-                                      void (*rehydrate_fn)(HandleID));
+                                      void (*rehydrate_fn)(HandleID),
+                                      ork_type_id_t type_id = 0);
 
 /**
  * @brief 取消預留並復位 ControlBlock（建構失敗異常回滾專用）

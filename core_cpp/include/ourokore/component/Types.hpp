@@ -19,6 +19,15 @@ constexpr HandleID kRootID = ORK_ROOT_ID;
 constexpr HandleID kInvalidHandleID = 0;
 
 /**
+ * @brief 物件全域唯一型別識別碼型別別名
+ * 與底層 C API (core.h) 的 ork_type_id_t 保持完全一致。
+ */
+using TypeID = ::ork_type_id_t;
+
+/// @brief 無效型別識別碼常數
+constexpr TypeID kInvalidTypeID = ORK_INVALID_TYPE_ID;
+
+/**
  * @brief 物件持久化與生命週期儲存狀態
  */
 enum class StorageState : uint8_t

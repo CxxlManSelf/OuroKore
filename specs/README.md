@@ -24,7 +24,7 @@
 
 1. [01. 系統架構設計規範](technical/01_system_architecture.md) - 三層隔離設計、圖論演算法、循環參照 GC 原理
 2. [02. 二進位串流與藍圖打包協議](technical/02_binary_protocols.md) - 純 Payload 與拓撲分離、防記憶體爆炸與防重複鍵
-3. [03. 純 C ABI 規格與記憶體佈局規範](technical/03_c_abi_and_memory.md) - 32 個純 C 導出函式規格、CRT 隔離、ControlBlock
+3. [03. 純 C ABI 規格與記憶體佈局規範](technical/03_c_abi_and_memory.md) - 37 個純 C 導出函式規格、CRT 隔離、ControlBlock
 4. [04. 併發模型、鎖階層規範與防死鎖設計](technical/04_concurrency_and_locks.md) - 單向鎖順序、執行緒池防自我死鎖機制
 
 ---

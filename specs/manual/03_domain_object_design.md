@@ -69,3 +69,48 @@ void DeserializePayload(ork::OuroStream &stream) override {
 為確保跨模組 CRT 記憶體安全釋放（Deleter）與物件型別精確轉換：
 * `T*` 必須能無二義性隱式轉換為 `OuroObject*`。
 * 核心在編譯時期透過 `static_assert` 嚴格禁止菱形繼承。
+
+---
+
+## 🏷️ 4. 型別系統宣告與安全多型轉型 (Type System & Safe Casting)
+
+所有領域物件強烈建議在類別定義內使用 `ORK_OBJECT(Derived, Base)` 巨集宣告靜態與動態型別資訊：
+
+```cpp
+class Creature : public ork::OuroObject {
+    ORK_OBJECT(Creature, ork::OuroObject)
+public:
+    // ...
+};
+
+class BossMonster : public Creature {
+    ORK_OBJECT(BossMonster, Creature)
+public:
+    void CastUltimateSkill();
+};
+```
+
+### 多型判定與安全轉型介面：
+1. **型別判定（純記憶體查詢，脫水狀態零 I/O 保證）**：
+   ```cpp
+   ork::OuroPtr<Creature> c = ork::CreateObject<BossMonster>();
+   if (c.Is<BossMonster>()) {
+       // c 為 BossMonster 或其子類別，內部純 ControlBlock TypeID 比對，絕不觸發非預期復水
+   }
+   ```
+2. **向下安全轉型**：
+   ```cpp
+   // 左值轉型：校驗型別層級，合法時安全增持根引用
+   ork::OuroPtr<BossMonster> boss = c.As<BossMonster>();
+   if (boss) {
+       boss->CastUltimateSkill();
+   }
+
+   // 右值移動轉型：零引用計數變更開銷，完美轉移根引用所有權！
+   ork::OuroPtr<BossMonster> moved_boss = std::move(c).As<BossMonster>();
+   ```
+3. **STL 風格轉型支援**：
+   ```cpp
+   auto boss = ork::dynamic_pointer_cast<BossMonster>(c);
+   auto static_boss = ork::static_pointer_cast<BossMonster>(c);
+   ```
