@@ -72,6 +72,8 @@ void DeserializePayload(ork::OuroStream &stream) override {
 
 ---
 
+---
+
 ## 🏷️ 4. 型別系統宣告與安全多型轉型 (Type System & Safe Casting)
 
 所有領域物件強烈建議在類別定義內使用 `ORK_OBJECT(Derived, Base)` 巨集宣告靜態與動態型別資訊：
@@ -80,37 +82,105 @@ void DeserializePayload(ork::OuroStream &stream) override {
 class Creature : public ork::OuroObject {
     ORK_OBJECT(Creature, ork::OuroObject)
 public:
-    // ...
+    int32_t GetHp() const { ork::OuroReadLock lock(*this); return m_hp; }
+    void SetHp(int32_t hp) { ork::OuroWriteLock lock(*this); m_hp = hp; }
+private:
+    int32_t m_hp{100};
 };
 
-class BossMonster : public Creature {
-    ORK_OBJECT(BossMonster, Creature)
+// 繼承時，第二個參數必須準確指定「直接父類別」，核心自動構建繼承鏈
+class Monster : public Creature {
+    ORK_OBJECT(Monster, Creature)
 public:
-    void CastUltimateSkill();
+    int32_t GetRage() const { ork::OuroReadLock lock(*this); return m_rage; }
+private:
+    int32_t m_rage{50};
+};
+
+class BossMonster : public Monster {
+    ORK_OBJECT(BossMonster, Monster)
+public:
+    void CastUltimateSkill() {
+        ork::OuroWriteLock lock(*this);
+        // 施放絕招...
+    }
 };
 ```
 
-### 多型判定與安全轉型介面：
-1. **型別判定（純記憶體查詢，脫水狀態零 I/O 保證）**：
-   ```cpp
-   ork::OuroPtr<Creature> c = ork::CreateObject<BossMonster>();
-   if (c.Is<BossMonster>()) {
-       // c 為 BossMonster 或其子類別，內部純 ControlBlock TypeID 比對，絕不觸發非預期復水
-   }
-   ```
-2. **向下安全轉型**：
-   ```cpp
-   // 左值轉型：校驗型別層級，合法時安全增持根引用
-   ork::OuroPtr<BossMonster> boss = c.As<BossMonster>();
-   if (boss) {
-       boss->CastUltimateSkill();
-   }
+### 1. 成員呼叫鐵律：嚴禁使用 `operator->`
+為徹底消除裸指標逃逸與懸垂指標（UAF）漏洞，`OuroPtr<T>` 徹底拔除了 `operator->`、`operator*` 與 `get()`：
+* **標準調用方式**：透過運算子轉發 `ptr(&ClassName::Method, args...)`。
+* **Lambda 批次操作**：`ptr([](ClassName &obj) { obj.DoSomething(); })`。
+* **原生極速延遲快取**：首次呼叫時透明復水並快取指標，後續呼叫直接以 $O(1)$ 純暫存器原生速度執行。
 
-   // 右值移動轉型：零引用計數變更開銷，完美轉移根引用所有權！
-   ork::OuroPtr<BossMonster> moved_boss = std::move(c).As<BossMonster>();
-   ```
-3. **STL 風格轉型支援**：
-   ```cpp
-   auto boss = ork::dynamic_pointer_cast<BossMonster>(c);
-   auto static_boss = ork::static_pointer_cast<BossMonster>(c);
-   ```
+```cpp
+ork::OuroPtr<BossMonster> boss = ork::CreateObject<BossMonster>();
+
+// 正確調用方式：
+boss(&BossMonster::CastUltimateSkill);
+boss(&BossMonster::SetHp, 9999);
+
+// 錯誤語法（編譯失敗）：
+// boss->CastUltimateSkill(); // ❌ OuroPtr 無 operator->
+```
+
+### 2. 型別判定（純 ControlBlock 查詢，零 I/O 脫水安全）
+使用 `ptr.Is<TargetT>()` 可以檢查物件是否為 `TargetT` 或其派生子類別（支援完整多型繼承樹判定）：
+```cpp
+ork::OuroPtr<Creature> c = ork::CreateObject<BossMonster>();
+
+// 支援沿著繼承鏈向上判定：
+assert(c.Is<BossMonster>() == true);
+assert(c.Is<Monster>() == true);
+assert(c.Is<Creature>() == true);
+assert(c.Is<ork::OuroObject>() == true);
+
+// 脫水保證：物件即使脫水落盤，型別資訊永存於 ControlBlock 墓碑中，
+// 呼叫 Is<T>() 為純記憶體比對，絕對不會觸發磁碟 I/O 復水！
+```
+
+### 3. 安全向下/向上轉型（Downcasting & Upcasting）
+* **左值轉型 (`ptr.As<TargetT>()`)**：
+  若型別相符，安全增加一條根引用（Root Edge）並回傳型別為 `OuroPtr<TargetT>` 的新句柄；若型別不符則安全回傳空句柄（可直接作為 `bool` 判空），**絕不拋出未定義行為或記憶體崩潰**。
+  ```cpp
+  ork::OuroPtr<BossMonster> boss_ptr = c.As<BossMonster>();
+  if (boss_ptr) {
+      // 轉型成功，安全執行專屬方法
+      boss_ptr(&BossMonster::CastUltimateSkill);
+  }
+  ```
+* **右值移動轉型 (`std::move(ptr).As<TargetT>()`，極度推薦)**：
+  **零引用計數變更開銷！** 原指標的根引用所有權會直接原子移交給新指標，原指標被安全清空；若轉型失敗，原根引用會自動釋放歸零。
+  ```cpp
+  // 零開銷原子轉移所有權
+  ork::OuroPtr<BossMonster> moved_boss = std::move(c).As<BossMonster>();
+  assert(!c); // c 已被掏空
+  assert(moved_boss);
+  ```
+
+### 4. STL 風格轉型函式
+框架亦提供與標準庫慣例相容的模板轉型函式（全面支援左值拷貝與右值移動）：
+```cpp
+// 動態安全檢查轉型（同 As<T>()）
+auto boss1 = ork::dynamic_pointer_cast<BossMonster>(creature_ptr);
+auto boss2 = ork::dynamic_pointer_cast<BossMonster>(std::move(creature_ptr));
+
+// 靜態轉型（不檢查 TypeID，極致效能，需由開發者保證型別安全）
+auto static_boss = ork::static_pointer_cast<BossMonster>(creature_ptr);
+```
+
+### 5. 插槽與弱引用的多型賦值與晉升轉型
+* **OwningHandle 協變賦值**：基底類別插槽可直接接收衍生類別指標：
+  ```cpp
+  ork::OwningHandle<Creature> occupant{"OccupantSlot"};
+  occupant = boss_ptr; // 自動註冊擁有權拓撲邊緣
+  ```
+* **UnboundHandle 晉升轉型**：弱引用在呼叫 `LockAndAcquire` 時可直接模板化指定子型別：
+  ```cpp
+  ork::UnboundHandle<Creature> visitor = boss_ptr;
+
+  // 晉升時直接轉型為 BossMonster，若物件已銷毀或型別不符則回傳空 OuroPtr
+  if (auto boss = visitor.LockAndAcquire<BossMonster>()) {
+      boss(&BossMonster::CastUltimateSkill);
+  }
+  ```

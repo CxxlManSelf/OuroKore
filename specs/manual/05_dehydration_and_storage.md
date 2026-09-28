@@ -41,5 +41,5 @@ auto lru = std::make_shared<ork::OuroLRUAutoDehydrator>(storage, 1000);
 ork::HostContext host = ork::Init(storage, lru);
 
 // 隨時可由 Host 調整或更換脫水策略
-host->SetAutoDehydrator(lru);
+host.SetAutoDehydrator(lru);
 ```

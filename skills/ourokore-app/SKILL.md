@@ -177,17 +177,38 @@ ork::DehydrateAsync(std::move(boss));
 
 ### 模式 D：型別識別與安全多型轉型 (Type Casting & Inspection)
 ```cpp
-ork::OuroPtr<Creature> creature = ork::CreateObject<Monster>();
+// 假設繼承階層：OuroObject -> Creature -> Monster -> BossMonster
+ork::OuroPtr<Creature> creature = ork::CreateObject<BossMonster>();
 
-// 1. 型別檢查（純 ControlBlock 查詢，零 I/O 脫水安全）
-if (creature.Is<Monster>()) {
-    // 2. 向下轉型（左值拷貝：安全增加根引用）
-    ork::OuroPtr<Monster> monster = creature.As<Monster>();
-    monster(&Monster::SetHp, 200);
+// 1. 多型型別檢查（純 ControlBlock 墓碑長存查詢，零 I/O 脫水安全）
+// 支援整條繼承鏈向上/向下安全比對，即使物件已脫水落盤亦絕不誘發穿透復水
+if (creature.Is<BossMonster>()) {
+    std::cout << "確認為 BossMonster 實例" << std::endl;
 }
 
-// 3. 右值所有權移動轉型（零引用計數變更開銷，完美轉移所有權）
-ork::OuroPtr<Monster> moved_monster = std::move(creature).As<Monster>();
+// 2. 向下安全轉型（左值拷貝：型別相符時安全增加根引用；不符時安全回傳空 OuroPtr）
+ork::OuroPtr<BossMonster> boss = creature.As<BossMonster>();
+if (boss) {
+    boss(&BossMonster::CastUltimateSkill);
+}
+
+// 3. 右值所有權移動轉型（極度推薦：零引用計數變更開銷，原子轉移所有權！）
+// 若轉型成功，creature 自動被掏空歸零，boss_moved 接管根引用；若失敗則安全銷毀根引用
+ork::OuroPtr<BossMonster> boss_moved = std::move(creature).As<BossMonster>();
+
+// 4. STL 風格轉型支援（相容標準庫動態與靜態轉型習慣）
+auto dyn_boss = ork::dynamic_pointer_cast<BossMonster>(boss_moved);
+auto stat_boss = ork::static_pointer_cast<Creature>(boss_moved);
+
+// 5. 弱引用晉升轉型（UnboundHandle 直接於晉升時安全向下轉型）
+ork::UnboundHandle<Creature> creature_weak = boss_moved;
+if (auto acquired_boss = creature_weak.LockAndAcquire<BossMonster>()) {
+    acquired_boss(&BossMonster::CastUltimateSkill);
+}
+
+// 6. 插槽協變多型賦值（基底插槽直接接收衍生類別指標）
+ork::OwningHandle<Creature> slot{"MinionSlot"};
+slot = boss_moved; // 自動建立拓撲邊緣
 ```
 
 ### 模式 E：Base 現代高效能雜湊工具庫實戰 (Hash Utilities)

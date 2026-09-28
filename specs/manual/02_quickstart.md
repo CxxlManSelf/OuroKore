@@ -92,8 +92,8 @@ private:
 ```cpp
 // 1. 建立玩家物件
 ork::OuroPtr<Player> player = ork::CreateObject<Player>();
-player->SetName("亞瑟王");
-player->AddScore(100);
+player(&Player::SetName, "亞瑟王");
+player(&Player::AddScore, 100);
 
 // 2. 存檔至儲存驅動
 bool save_ok = ork::Save(player);
