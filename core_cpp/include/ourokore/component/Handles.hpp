@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -155,9 +156,11 @@ public:
 
   // Enable moving
   OuroPtr(OuroPtr &&other) noexcept :
-      m_target_id(other.m_target_id)
+      m_target_id(other.m_target_id),
+      m_cached_ptr(other.m_cached_ptr)
   {
     other.m_target_id = 0;
+    other.m_cached_ptr = nullptr;
   }
 
   OuroPtr &operator=(OuroPtr &&other) noexcept
@@ -166,17 +169,21 @@ public:
     {
       Release();
       m_target_id = other.m_target_id;
+      m_cached_ptr = other.m_cached_ptr;
       other.m_target_id = 0;
+      other.m_cached_ptr = nullptr;
     }
     return *this;
   }
 
-  // Template converting move constructor (allows OuroPtr<T> -> OuroPtr<const T>)
+  // Template converting move constructor (allows OuroPtr<U> -> OuroPtr<T>)
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
   OuroPtr(OuroPtr<U> &&other) noexcept :
-      m_target_id(other.m_target_id)
+      m_target_id(other.m_target_id),
+      m_cached_ptr(static_cast<T *>(other.m_cached_ptr))
   {
     other.m_target_id = 0;
+    other.m_cached_ptr = nullptr;
   }
 
   // Template converting move assignment
@@ -187,7 +194,9 @@ public:
     {
       Release();
       m_target_id = other.m_target_id;
+      m_cached_ptr = static_cast<T *>(other.m_cached_ptr);
       other.m_target_id = 0;
+      other.m_cached_ptr = nullptr;
     }
     return *this;
   }
@@ -199,32 +208,36 @@ public:
       ork_unregister_edge(ORK_ROOT_ID, m_target_id);
       m_target_id = 0;
     }
+    m_cached_ptr = nullptr;
   }
 
-  T *get() const noexcept
+  /**
+   * @brief 安全調用受管物件之成員函式或 Callable，指標完全封閉在內部，極速執行。
+   * 首次呼叫時延遲快取記憶體指標（若脫水則透明復水一次），後續呼叫為 O(1) 零鎖、零查表之原生速度。
+   */
+  template <typename Fn, typename... Args>
+  decltype(auto) operator()(Fn &&fn, Args &&...args) const
   {
-    if (m_target_id == 0) return nullptr;
-    ::OuroObject *raw_obj = nullptr;
-    if (ork_acquire_object_pointer(m_target_id, &raw_obj) == ORK_STATUS_OK)
+    if (m_target_id == 0)
     {
-      return static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
+      throw std::runtime_error("Attempted to invoke on a null OuroPtr");
     }
-    return nullptr;
-  }
-
-  T *operator->() const noexcept
-  {
-    return get();
-  }
-
-  T &operator*() const
-  {
-    T *ptr = operator->();
-    if (!ptr)
+    if (!m_cached_ptr)
     {
-      throw std::runtime_error("Attempted to dereference a null or dead object via OuroPtr");
+      ::OuroObject *raw_obj = nullptr;
+      if (ork_acquire_object_pointer(m_target_id, &raw_obj) != ORK_STATUS_OK || !raw_obj)
+      {
+        throw std::runtime_error("Attempted to invoke on a dead or invalid object via OuroPtr");
+      }
+      m_cached_ptr = static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
     }
-    return *ptr;
+    return std::invoke(std::forward<Fn>(fn), *m_cached_ptr, std::forward<Args>(args)...);
+  }
+
+  template <typename Fn, typename... Args>
+  decltype(auto) Invoke(Fn &&fn, Args &&...args) const
+  {
+    return operator()(std::forward<Fn>(fn), std::forward<Args>(args)...);
   }
 
   explicit operator bool() const
@@ -285,6 +298,7 @@ public:
     {
       HandleID tid = m_target_id;
       m_target_id = 0;
+      m_cached_ptr = nullptr;
       return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
     }
     Release();
@@ -295,6 +309,7 @@ public:
   {
     HandleID tid = m_target_id;
     m_target_id = 0;
+    m_cached_ptr = nullptr;
     return tid;
   }
 
@@ -305,6 +320,7 @@ public:
 
 private:
   HandleID m_target_id = 0;
+  mutable T *m_cached_ptr = nullptr;
 };
 
 template <typename TargetT, typename SourceT>

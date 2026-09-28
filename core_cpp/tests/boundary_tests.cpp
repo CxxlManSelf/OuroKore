@@ -79,7 +79,7 @@ int main()
 
   // 5. 驗證第三方外掛雖無特權，但正常業務功能（物件建立、CRUD、Save/Load）完全不受影響
   auto item = ork::CreateObject<PluginItem>();
-  item->value = 999;
+  item(&PluginItem::value) = 999;
   assert(ork::Save(item) == true);
   assert(storage->Contains(item.GetTargetID()) == true);
   std::cout << "  -> 第三方外掛之常規物件建立與業務存檔功能運作正常。" << std::endl;
@@ -107,7 +107,7 @@ int main()
     ork::HostContext host2 = ork::Init(restart_storage);
     assert(host2.IsValid() == true);
     auto item2 = ork::CreateObject<PluginItem>();
-    item2->value = 777;
+    item2(&PluginItem::value) = 777;
     assert(ork::Save(item2) == true);
 
     // 執行 Reset，驗證能優雅收斂並重置白紙狀態

@@ -18,7 +18,7 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
    - 物件不由裸指標或標準 `std::shared_ptr` 直接持有，而是由全域唯一的 64 位元識別碼 `HandleID` 與底層控制區塊託管。
    - `OwningHandle<T>` / `OwningContainerHandle`：表示強引用與擁有權（邊緣拓撲），自動向所屬父物件註冊槽位（Slot）。內部業務拓撲（含雙向關聯）放膽使用，由 `CycleCollector` 背景非同步消化。
    - `UnboundHandle<T>`：純旁觀者句柄（只記住電話號碼，絕不干涉對方生死）。專為「外掛隨時卸載防卡死」、「UI 暫時瞄一眼」等情境設計。要使用時打電話確認（`LockAndAcquire()`），對方在就安心用，對方若已銷毀或卸載就自動傳回 null 並擦乾淨記錄，絕不強留對方。
-   - `OuroPtr<T>`：棧上 / 全域根引用守衛（Root Edge），內部自動調用 `ork_acquire_object_pointer` 與讀寫鎖。
+   - `OuroPtr<T>`：棧上 / 全域根引用守衛（Root Edge）。為杜絕指標逃逸與 UAF，徹底移除裸指標存取（無 `get()`/`operator->`），改以 `operator()(Fn&&, Args&&...)` 安全轉發執行；持有期間受 Root Edge 保護保證不脫水，內部自動延遲快取指標實現 $O(1)$ 極速原生調用。
    - ⚠️ **循環參照使用鐵律**：業務圖內部雙向互指（A <-> B）一律 100% 使用 `OwningHandle`，交由背景 `CycleCollector` 自動安全回收。**千萬不要為了「破環」而濫用 `UnboundHandle`**，只有在你「完全不想為對方的生命週期負責」時才使用它。
 
 2. **記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)**：
@@ -148,10 +148,11 @@ ork::base::HashCombine(combined, obj_id, slot_name, timestamp);
   if (creature.IsAlive()) { ... } // 純 ControlBlock 活躍判定，零 I/O
   if (creature.Is<Boss>()) { ... } // 純 ControlBlock TypeID 判定，零 I/O
   ```
-- **取得實體記憶體指標（若脫水則透明復水）**：
+- **安全調用成員方法（零指標暴露與延遲快取極速執行）**：
   ```cpp
-  creature->Attack();           // operator->() 觸發 ork_acquire_object_pointer，必要時自磁碟載入
-  Creature* raw = creature.Get(); // 觸發復水
+  creature(&Creature::Attack);              // 首次呼叫延遲快取指標（若脫水則透明復水），後續為 O(1) 極速原生呼叫
+  int hp = creature(&Creature::GetHp);      // decltype(auto) 完美保留回傳型別
+  creature([](Creature &c) { c.Buff(); });  // 亦支援以 Lambda 閉包在安全生命週期內執行批次操作
   ```
 
 ---

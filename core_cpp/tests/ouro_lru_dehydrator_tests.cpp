@@ -56,13 +56,13 @@ void test_lru_order_and_access(ork::HostContext &host)
 
   // 1. 建立三個子物件：A、B、C
   // 建立時依序放入 Head，目前順序為：C (頭/最熱) -> B -> A (尾/最冷)
-  root->m_item0 = CreateObject<TestItem>(1, "ItemA");
-  root->m_item1 = CreateObject<TestItem>(2, "ItemB");
-  root->m_item2 = CreateObject<TestItem>(3, "ItemC");
+  root(&TestContainer::m_item0) = CreateObject<TestItem>(1, "ItemA");
+  root(&TestContainer::m_item1) = CreateObject<TestItem>(2, "ItemB");
+  root(&TestContainer::m_item2) = CreateObject<TestItem>(3, "ItemC");
 
-  HandleID id_a = root->m_item0.GetTargetID();
-  HandleID id_b = root->m_item1.GetTargetID();
-  HandleID id_c = root->m_item2.GetTargetID();
+  HandleID id_a = root(&TestContainer::m_item0).GetTargetID();
+  HandleID id_b = root(&TestContainer::m_item1).GetTargetID();
+  HandleID id_c = root(&TestContainer::m_item2).GetTargetID();
 
   assert(dehydrator->IsTracked(id_a));
   assert(dehydrator->IsTracked(id_b));
@@ -117,10 +117,10 @@ void test_memory_quota_eviction(ork::HostContext &host)
   host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
-  root->m_item0 = CreateObject<TestItem>(1, "QuotaA");
-  root->m_item1 = CreateObject<TestItem>(2, "QuotaB");
-  root->m_item2 = CreateObject<TestItem>(3, "QuotaC");
-  root->m_item3 = CreateObject<TestItem>(4, "QuotaD");
+  root(&TestContainer::m_item0) = CreateObject<TestItem>(1, "QuotaA");
+  root(&TestContainer::m_item1) = CreateObject<TestItem>(2, "QuotaB");
+  root(&TestContainer::m_item2) = CreateObject<TestItem>(3, "QuotaC");
+  root(&TestContainer::m_item3) = CreateObject<TestItem>(4, "QuotaD");
 
   size_t single_size = sizeof(TestItem);
   assert(dehydrator->GetTrackedMemoryBytes() == single_size * 4);
@@ -151,14 +151,14 @@ void test_in_flight_protection(ork::HostContext &host)
 
   auto root = CreatePermanentObject<TestContainer>();
   // 先建立 hot_item（在串列尾端/較冷），後建立 cold_item（在串列頭端/較熱）
-  root->m_item0 = CreateObject<TestItem>(1, "HotItem");
-  root->m_item1 = CreateObject<TestItem>(2, "ColdItem");
+  root(&TestContainer::m_item0) = CreateObject<TestItem>(1, "HotItem");
+  root(&TestContainer::m_item1) = CreateObject<TestItem>(2, "ColdItem");
 
-  HandleID hot_id = root->m_item0.GetTargetID();
-  HandleID cold_id = root->m_item1.GetTargetID();
+  HandleID hot_id = root(&TestContainer::m_item0).GetTargetID();
+  HandleID cold_id = root(&TestContainer::m_item1).GetTargetID();
 
   // 主執行緒此時正持有處於尾端之 hot 物件的活躍 OuroPtr（In-Flight，root_count == 1）
-  auto hot_ptr = root->m_item0.LockAndAcquire();
+  auto hot_ptr = root(&TestContainer::m_item0).LockAndAcquire();
   assert(hot_ptr);
 
   // 觸發脫水：hot 物件處於 LRU 尾端，但由於正在使用中，脫水必須安全略過它，轉而脫水 cold 物件
@@ -184,8 +184,8 @@ void test_background_thread_and_stop(ork::HostContext &host)
   host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
-  root->m_item0 = CreateObject<TestItem>(100, "BackgroundTest");
-  HandleID id = root->m_item0.GetTargetID();
+  root(&TestContainer::m_item0) = CreateObject<TestItem>(100, "BackgroundTest");
+  HandleID id = root(&TestContainer::m_item0).GetTargetID();
 
   // 啟動背景執行緒，每隔 30 毫秒掃描一次
   assert(dehydrator->Start(std::chrono::milliseconds(30)));
@@ -216,15 +216,15 @@ void test_failed_dehydration_requeue(ork::HostContext &host)
   host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
-  root->m_item0 = CreateObject<TestItem>(1, "BusyTailItem");
-  root->m_item1 = CreateObject<TestItem>(2, "IdleItem");
+  root(&TestContainer::m_item0) = CreateObject<TestItem>(1, "BusyTailItem");
+  root(&TestContainer::m_item1) = CreateObject<TestItem>(2, "IdleItem");
 
-  HandleID busy_id = root->m_item0.GetTargetID();
-  HandleID idle_id = root->m_item1.GetTargetID();
+  HandleID busy_id = root(&TestContainer::m_item0).GetTargetID();
+  HandleID idle_id = root(&TestContainer::m_item1).GetTargetID();
 
   // busy_id 在建立時較早，處於 LRU 最冷端 (Tail)；idle_id 在 MRU 頭端
   // 主執行緒此時鎖定並持有 busy_id (In-Flight)
-  auto busy_ptr = root->m_item0.LockAndAcquire();
+  auto busy_ptr = root(&TestContainer::m_item0).LockAndAcquire();
   assert(busy_ptr);
 
   // 設定批次大小為 1
@@ -257,10 +257,10 @@ void test_target_driven_dehydration_and_report(ork::HostContext &host)
   host.SetAutoDehydrator(dehydrator);
 
   auto root = CreatePermanentObject<TestContainer>();
-  root->m_item0 = CreateObject<TestItem>(1, "TargetA");
-  root->m_item1 = CreateObject<TestItem>(2, "TargetB");
-  root->m_item2 = CreateObject<TestItem>(3, "TargetC");
-  root->m_item3 = CreateObject<TestItem>(4, "TargetD");
+  root(&TestContainer::m_item0) = CreateObject<TestItem>(1, "TargetA");
+  root(&TestContainer::m_item1) = CreateObject<TestItem>(2, "TargetB");
+  root(&TestContainer::m_item2) = CreateObject<TestItem>(3, "TargetC");
+  root(&TestContainer::m_item3) = CreateObject<TestItem>(4, "TargetD");
 
   size_t single_sz = sizeof(TestItem);
   assert(dehydrator->GetTrackedMemoryBytes() == single_sz * 4);

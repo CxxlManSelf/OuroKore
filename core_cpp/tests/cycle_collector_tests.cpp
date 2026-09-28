@@ -24,7 +24,7 @@ void Test1_SelfLoop(ork::HostContext &host)
 
   {
     ork::OuroPtr<CycleNode> node = ork::CreateObject<CycleNode>();
-    node->next = node; // 建立自環 edge: node -> node
+    node(&CycleNode::next) = node; // 建立自環 edge: node -> node
     assert(g_cycle_node_dtor.load() == 0);
   } // node 離開作用域，Root edge 斷開，因自環計數仍為 1
 
@@ -47,8 +47,8 @@ void Test2_MutualCycle(ork::HostContext &host)
     ork::OuroPtr<CycleNode> a = ork::CreateObject<CycleNode>();
     ork::OuroPtr<CycleNode> b = ork::CreateObject<CycleNode>();
 
-    a->next = b; // a 擁有 b
-    b->next = a; // b 擁有 a
+    a(&CycleNode::next) = b; // a 擁有 b
+    b(&CycleNode::next) = a; // b 擁有 a
     assert(g_cycle_node_dtor.load() == 0);
   } // a, b 離開作用域，Root edges 斷開，彼此互指孤島
 
@@ -69,8 +69,8 @@ void Test3_ExternalRootProtection(ork::HostContext &host)
     ork::OuroPtr<CycleNode> a = ork::CreateObject<CycleNode>();
     ork::OuroPtr<CycleNode> b = ork::CreateObject<CycleNode>();
 
-    a->next = b;
-    b->next = a;
+    a(&CycleNode::next) = b;
+    b(&CycleNode::next) = a;
 
     // 保留 a 的強引用在外部 root_keeper
     root_keeper = std::move(a);
@@ -101,12 +101,12 @@ void Test4_DeepTreeStackOverflowPrevention(ork::HostContext &host)
 
   ork::OuroPtr<CycleNode> head = ork::CreateObject<CycleNode>();
   ork::OuroPtr<CycleNode> curr = ork::CreateObject<CycleNode>();
-  head->next = curr;
+  head(&CycleNode::next) = curr;
 
   for (int i = 0; i < DEPTH - 1; ++i)
   {
     ork::OuroPtr<CycleNode> next_node = ork::CreateObject<CycleNode>();
-    curr->next = next_node;
+    curr(&CycleNode::next) = next_node;
     curr = std::move(next_node);
   }
 
@@ -132,7 +132,7 @@ void Test5_AntiZombieReanimation(ork::HostContext &host)
   ork::UnboundHandle<CycleNode> unbound;
   {
     ork::OuroPtr<CycleNode> node = ork::CreateObject<CycleNode>();
-    node->next = node; // 建立自環
+    node(&CycleNode::next) = node; // 建立自環
     unbound = node;    // 建立無繫結句柄
     assert(unbound.IsAlive());
   } // node 離開作用域，失去外部根

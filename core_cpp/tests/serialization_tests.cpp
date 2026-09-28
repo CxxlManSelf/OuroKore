@@ -227,30 +227,30 @@ void Test2_PurePayload_And_EdgeRoster()
   std::cout << "[Test 2] Pure Payload & Edge Roster Packaging (OuroStream Interface)..." << std::endl;
 
   auto player = ork::CreateObject<PlayerObject>();
-  player->SetHp(150);
-  player->SetName("Excalibur");
+  player(&PlayerObject::SetHp, 150);
+  player(&PlayerObject::SetName, "Excalibur");
 
   // 1. Test direct BlueprintStream
   ork::BlueprintStream stream1;
-  ork::PackBlueprint(*player, stream1);
+  player([&](PlayerObject &p) { ork::PackBlueprint(p, stream1); });
   assert(stream1.GetSize() > 0);
 
   auto restored = ork::CreateObject<PlayerObject>();
-  ork::UnpackBlueprint(*restored, stream1);
+  restored([&](PlayerObject &p) { ork::UnpackBlueprint(p, stream1); });
 
-  assert(restored->GetHp() == 150);
-  assert(restored->GetName() == "Excalibur");
+  assert(restored(&PlayerObject::GetHp) == 150);
+  assert(restored(&PlayerObject::GetName) == "Excalibur");
 
   // 2. Test direct OuroStream& polymorphic interface
   ork::BlueprintStream direct_stream;
   ork::OuroStream &stream_ref = direct_stream;
-  ork::PackBlueprint(*player, stream_ref);
+  player([&](PlayerObject &p) { ork::PackBlueprint(p, stream_ref); });
   assert(direct_stream.GetSize() == stream1.GetSize());
 
   auto restored_via_stream = ork::CreateObject<PlayerObject>();
-  ork::UnpackBlueprint(*restored_via_stream, stream_ref);
-  assert(restored_via_stream->GetHp() == 150);
-  assert(restored_via_stream->GetName() == "Excalibur");
+  restored_via_stream([&](PlayerObject &p) { ork::UnpackBlueprint(p, stream_ref); });
+  assert(restored_via_stream(&PlayerObject::GetHp) == 150);
+  assert(restored_via_stream(&PlayerObject::GetName) == "Excalibur");
 
   std::cout << "  Test 2 Passed!\n" << std::endl;
 }
@@ -264,11 +264,11 @@ void Test3_SingleObject_Dehydration_Rehydration(ork::HostContext &host)
   assert(storage != nullptr);
 
   auto parent = ork::CreateObject<ParentCharacter>();
-  auto weapon = parent->m_weapon.LockAndAcquire();
+  auto weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
   ork::HandleID original_id = weapon.GetTargetID();
-  assert(weapon->GetStorageState() == ork::StorageState::UnsavedNew);
+  assert(weapon(&WeaponObject::GetStorageState) == ork::StorageState::UnsavedNew);
 
-  weapon->SetDamage(250);
+  weapon(&WeaponObject::SetDamage, 250);
 
   // Perform Dehydrate on weapon (owned by parent->m_weapon, strong_count == 1)
   ork::Dehydrate(std::move(weapon));
@@ -281,12 +281,12 @@ void Test3_SingleObject_Dehydration_Rehydration(ork::HostContext &host)
   // Rehydrate: reload payload and re-bind to same HandleID!
   auto rehydrated_weapon = ork::Rehydrate<WeaponObject>(original_id);
   assert(rehydrated_weapon.GetTargetID() == original_id);
-  assert(rehydrated_weapon->GetDamage() == 250);
-  assert(rehydrated_weapon->GetStorageState() == ork::StorageState::Clean);
+  assert(rehydrated_weapon(&WeaponObject::GetDamage) == 250);
+  assert(rehydrated_weapon(&WeaponObject::GetStorageState) == ork::StorageState::Clean);
 
   // Modify property via WriteLock -> automatically marked Dirty!
-  rehydrated_weapon->SetDamage(300);
-  assert(rehydrated_weapon->GetStorageState() == ork::StorageState::Dirty);
+  rehydrated_weapon(&WeaponObject::SetDamage, 300);
+  assert(rehydrated_weapon(&WeaponObject::GetStorageState) == ork::StorageState::Dirty);
 
   std::cout << "  Test 3 Passed!\n" << std::endl;
   std::cout.flush();
@@ -304,20 +304,20 @@ void Test4_ParentChild_Dehydration_Rehydration(ork::HostContext &host)
   std::cout.flush();
 
   auto world = ork::CreateObject<WorldObject>();
-  auto parent = world->m_character.LockAndAcquire();
+  auto parent = world(&WorldObject::m_character).LockAndAcquire();
   ork::HandleID parent_id = parent.GetTargetID();
-  ork::HandleID child_id = parent->m_weapon.GetTargetID();
+  ork::HandleID child_id = parent(&ParentCharacter::m_weapon).GetTargetID();
   std::cout << "  Step 1: Created parent ID=" << parent_id << ", child ID=" << child_id << std::endl;
   std::cout.flush();
 
-  parent->SetLevel(25);
+  parent(&ParentCharacter::SetLevel, 25);
 
   {
-    auto weapon_ptr = parent->m_weapon.LockAndAcquire();
+    auto weapon_ptr = parent(&ParentCharacter::m_weapon).LockAndAcquire();
     std::cout << "  Step 2: Acquired weapon_ptr, valid=" << (bool)weapon_ptr << std::endl;
     std::cout.flush();
 
-    weapon_ptr->SetDamage(120);
+    weapon_ptr(&WeaponObject::SetDamage, 120);
     std::cout << "  Step 3: Set damage to 120" << std::endl;
     std::cout.flush();
 
@@ -335,28 +335,28 @@ void Test4_ParentChild_Dehydration_Rehydration(ork::HostContext &host)
   assert(storage->Contains(child_id));
 
   // Rehydrate parent via world handle
-  auto rehydrated_parent = world->m_character.LockAndAcquire();
+  auto rehydrated_parent = world(&WorldObject::m_character).LockAndAcquire();
   std::cout << "  Step 5: Rehydrated parent, targetID=" << rehydrated_parent.GetTargetID() << std::endl;
   std::cout.flush();
 
   assert(rehydrated_parent.GetTargetID() == parent_id);
-  assert(rehydrated_parent->GetLevel() == 25);
+  assert(rehydrated_parent(&ParentCharacter::GetLevel) == 25);
 
   // Step 6: Verify child handle inside parent has correct TargetID
-  ork::HandleID rehydrated_child_id = rehydrated_parent->m_weapon.GetTargetID();
+  ork::HandleID rehydrated_child_id = rehydrated_parent(&ParentCharacter::m_weapon).GetTargetID();
   std::cout << "  Step 7: Rehydrated parent m_weapon targetID=" << rehydrated_child_id << " (expected " << child_id << ")"
             << std::endl;
   std::cout.flush();
   assert(rehydrated_child_id == child_id);
 
   // Step 7: Access child via Parent's handle -> lock & verify weapon state
-  auto rehydrated_weapon = rehydrated_parent->m_weapon.LockAndAcquire();
+  auto rehydrated_weapon = rehydrated_parent(&ParentCharacter::m_weapon).LockAndAcquire();
   std::cout << "  Step 8: Rehydrated weapon valid=" << (bool)rehydrated_weapon << std::endl;
   std::cout.flush();
 
   assert(static_cast<bool>(rehydrated_weapon));
   assert(rehydrated_weapon.GetTargetID() == child_id);
-  assert(rehydrated_weapon->GetDamage() == 120);
+  assert(rehydrated_weapon(&WeaponObject::GetDamage) == 120);
 
   std::cout << "  Test 4 Passed!\n" << std::endl;
   std::cout.flush();
@@ -372,26 +372,26 @@ void Test5_InMemoryStorage_Save_And_Load(ork::HostContext &host)
 
   // 1. Single Object Save & Load
   auto hero = ork::CreateObject<PlayerObject>();
-  hero->SetHp(500);
-  hero->SetName("Lancelot");
+  hero(&PlayerObject::SetHp, 500);
+  hero(&PlayerObject::SetName, "Lancelot");
 
   // Save 1: UnsavedNew/Dirty -> saves to storage
   assert(ork::Save(hero) == true);
   assert(storage->Contains(hero.GetTargetID()));
-  assert(hero->GetStorageState() == ork::StorageState::Clean);
+  assert(hero(&PlayerObject::GetStorageState) == ork::StorageState::Clean);
 
   // Save 2: Clean -> fast skip
   assert(ork::Save(hero) == true);
 
   // Modify hero property via WriteLock -> automatically marked Dirty
-  hero->SetHp(50);
-  assert(hero->GetStorageState() == ork::StorageState::Dirty);
+  hero(&PlayerObject::SetHp, 50);
+  assert(hero(&PlayerObject::GetStorageState) == ork::StorageState::Dirty);
 
   // Load hero from storage -> reverts hp back to 500!
   assert(ork::Load(hero) == true);
-  assert(hero->GetHp() == 500);
-  assert(hero->GetName() == "Lancelot");
-  assert(hero->GetStorageState() == ork::StorageState::Clean);
+  assert(hero(&PlayerObject::GetHp) == 500);
+  assert(hero(&PlayerObject::GetName) == "Lancelot");
+  assert(hero(&PlayerObject::GetStorageState) == ork::StorageState::Clean);
 
   // Load non-existent ID -> returns false
   auto stranger = ork::CreateObject<PlayerObject>();
@@ -399,9 +399,9 @@ void Test5_InMemoryStorage_Save_And_Load(ork::HostContext &host)
 
   // 2. Sub-Object Edge Replacement & Load Rollback
   auto parent = ork::CreateObject<ParentCharacter>();
-  ork::HandleID weapon1_id = parent->m_weapon.GetTargetID();
-  auto weapon1 = parent->m_weapon.LockAndAcquire();
-  weapon1->SetDamage(77);
+  ork::HandleID weapon1_id = parent(&ParentCharacter::m_weapon).GetTargetID();
+  auto weapon1 = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+  weapon1(&WeaponObject::SetDamage, 77);
 
   // Save parent and weapon1 independently
   assert(ork::Save(parent) == true);
@@ -410,27 +410,27 @@ void Test5_InMemoryStorage_Save_And_Load(ork::HostContext &host)
   // Now replace weapon1 with weapon2 (e.g. gameplay equip new weapon)
   auto weapon2 = ork::CreateObject<WeaponObject>();
   ork::HandleID weapon2_id = weapon2.GetTargetID();
-  weapon2->SetDamage(999);
-  parent->m_weapon = weapon2;
-  assert(parent->m_weapon.GetTargetID() == weapon2_id);
+  weapon2(&WeaponObject::SetDamage, 999);
+  parent(&ParentCharacter::m_weapon) = weapon2;
+  assert(parent(&ParentCharacter::m_weapon).GetTargetID() == weapon2_id);
 
   // Load parent from storage (roll back to saved snapshot)
   assert(ork::Load(parent) == true);
-  assert(parent->m_weapon.GetTargetID() == weapon1_id);
+  assert(parent(&ParentCharacter::m_weapon).GetTargetID() == weapon1_id);
 
   // 3. Child Destructed/Deleted Defense Verification
   auto char_a = ork::CreateObject<ParentCharacter>();
   ork::Save(char_a);
 
   // Explicitly release sword, causing sword strong count to drop to 0 and get deleted from Registry
-  char_a->m_weapon.Release();
+  char_a(&ParentCharacter::m_weapon).Release();
   host.FlushDeferredDeletions();
 
   // Load char_a from storage: char_a blueprint has sword_id, but sword is dead in Registry
   assert(ork::Load(char_a) == true);
   // Verified: m_weapon safely skips dead ID and remains empty (0), preventing phantom dangling references!
-  assert(char_a->m_weapon.GetTargetID() == 0);
-  assert((bool)char_a->m_weapon.LockAndAcquire() == false);
+  assert(char_a(&ParentCharacter::m_weapon).GetTargetID() == 0);
+  assert((bool)char_a(&ParentCharacter::m_weapon).LockAndAcquire() == false);
 
   std::cout << "  Test 5 Passed!\n" << std::endl;
   std::cout.flush();
@@ -478,7 +478,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
   {
     auto parent = ork::CreateObject<ParentCharacter>();
     ork::BlueprintStream stream_valid;
-    ork::PackBlueprint(*parent, stream_valid);
+    parent([&](ParentCharacter &p) { ork::PackBlueprint(p, stream_valid); });
     const auto &valid_packed = stream_valid.GetBuffer();
     assert(valid_packed.size() > 8);
 
@@ -490,7 +490,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
     bool unpack_truncated_caught = false;
     try
     {
-      ork::UnpackBlueprint(*test_target, truncated_stream);
+      test_target([&](ParentCharacter &p) { ork::UnpackBlueprint(p, truncated_stream); });
     }
     catch (const ork::OuroCorruptedStreamException &ex)
     {
@@ -508,14 +508,14 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
     // 1. Maliciously oversized edge_count (Allocation bomb defense)
     {
       ork::BlueprintStream bomb_stream;
-      test_target->SerializePayload(bomb_stream);
+      test_target(&ParentCharacter::SerializePayload, bomb_stream);
       uint32_t malicious_edge_count = 0x7FFFFFFF;
       bomb_stream.WriteBytes(reinterpret_cast<const uint8_t *>(&malicious_edge_count), sizeof(malicious_edge_count));
 
       bool bomb_caught = false;
       try
       {
-        ork::UnpackBlueprint(*test_target, bomb_stream);
+        test_target([&](ParentCharacter &p) { ork::UnpackBlueprint(p, bomb_stream); });
       }
       catch (const ork::OuroCorruptedStreamException &ex)
       {
@@ -528,7 +528,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
     // 2. Duplicate Slot Name Defense (Duplicate slot Fail-Fast)
     {
       ork::BlueprintStream dup_slot_stream;
-      test_target->SerializePayload(dup_slot_stream);
+      test_target(&ParentCharacter::SerializePayload, dup_slot_stream);
       uint32_t edge_count = 2;
       dup_slot_stream.WriteBytes(reinterpret_cast<const uint8_t *>(&edge_count), sizeof(edge_count));
 
@@ -542,7 +542,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
       bool dup_slot_caught = false;
       try
       {
-        ork::UnpackBlueprint(*test_target, dup_slot_stream);
+        test_target([&](ParentCharacter &p) { ork::UnpackBlueprint(p, dup_slot_stream); });
       }
       catch (const ork::OuroDuplicateKeyException &ex)
       {
@@ -578,7 +578,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
 
   auto dummy = ork::CreatePermanentObject<PlayerObject>();
   ork::HandleID dummy_id = dummy.GetTargetID();
-  dummy->SetName("CorruptedTest");
+  dummy(&PlayerObject::SetName, "CorruptedTest");
 
   // Save invalid/mismatched corrupted payload to storage raw buffer
   std::vector<uint8_t> corrupted_data = {0xFF, 0xFE, 0xFD, 0xFC};
@@ -691,27 +691,27 @@ void Test7_ThirdParty_Custom_Stream_Implementation()
   std::cout.flush();
 
   auto parent = ork::CreateObject<ParentCharacter>();
-  parent->SetLevel(99);
+  parent(&ParentCharacter::SetLevel, 99);
 
   // Third party creates their own stream implementation
   CustomThirdPartyStream custom_stream;
 
   // 1. Pack object into third-party custom stream
-  ork::PackBlueprint(*parent, custom_stream);
+  parent([&](ParentCharacter &p) { ork::PackBlueprint(p, custom_stream); });
   assert(custom_stream.HasRemainingBytes() == true);
 
   // 2. Unpack into a new instance using third-party custom stream
   auto restored = ork::CreateObject<ParentCharacter>();
-  ork::UnpackBlueprint(*restored, custom_stream);
+  restored([&](ParentCharacter &p) { ork::UnpackBlueprint(p, custom_stream); });
 
-  assert(restored->GetLevel() == 99);
-  assert(restored->m_weapon.GetTargetID() == parent->m_weapon.GetTargetID());
+  assert(restored(&ParentCharacter::GetLevel) == 99);
+  assert(restored(&ParentCharacter::m_weapon).GetTargetID() == parent(&ParentCharacter::m_weapon).GetTargetID());
 
   // 3. ResetCursors and load again into a second instance
   custom_stream.ResetCursors();
   auto restored2 = ork::CreateObject<ParentCharacter>();
-  ork::UnpackBlueprint(*restored2, custom_stream);
-  assert(restored2->GetLevel() == 99);
+  restored2([&](ParentCharacter &p) { ork::UnpackBlueprint(p, custom_stream); });
+  assert(restored2(&ParentCharacter::GetLevel) == 99);
 
   std::cout << "  Test 7 Passed!\n" << std::endl;
   std::cout.flush();
@@ -725,8 +725,8 @@ void Test8_Transparent_Auto_Rehydration()
   // 1. Single Object Transparent Auto-Rehydration
   {
     auto parent = ork::CreateObject<ParentCharacter>();
-    auto weapon = parent->m_weapon.LockAndAcquire();
-    weapon->SetDamage(350);
+    auto weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+    weapon(&WeaponObject::SetDamage, 350);
     ork::HandleID weapon_id = weapon.GetTargetID();
 
     // Dehydrate the weapon object via move (consumes weapon pointer)
@@ -737,9 +737,9 @@ void Test8_Transparent_Auto_Rehydration()
     assert(ork::GetStorageState(weapon_id) == ork::StorageState::Dehydrated);
 
     // Client accesses weapon via parent handle -> triggers transparent auto-rehydration!
-    auto auto_weapon = parent->m_weapon.LockAndAcquire();
+    auto auto_weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
     assert(static_cast<bool>(auto_weapon));
-    assert(auto_weapon->GetDamage() == 350);
+    assert(auto_weapon(&WeaponObject::GetDamage) == 350);
 
     // StorageState should automatically be Clean now while alive
     assert(ork::GetStorageState(weapon_id) == ork::StorageState::Clean);
@@ -748,12 +748,12 @@ void Test8_Transparent_Auto_Rehydration()
   // 2. Parent-Child Hierarchy Transparent Auto-Rehydration
   {
     auto root = ork::CreateObject<ParentCharacter>();
-    root->SetLevel(77);
+    root(&ParentCharacter::SetLevel, 77);
     ork::HandleID root_id = root.GetTargetID();
 
-    auto weapon = root->m_weapon.LockAndAcquire();
+    auto weapon = root(&ParentCharacter::m_weapon).LockAndAcquire();
     assert(static_cast<bool>(weapon));
-    weapon->SetDamage(888);
+    weapon(&WeaponObject::SetDamage, 888);
     ork::HandleID weapon_id = weapon.GetTargetID();
 
     // Dehydrate child weapon first
@@ -763,9 +763,9 @@ void Test8_Transparent_Auto_Rehydration()
     assert(ork::GetStorageState(weapon_id) == ork::StorageState::Dehydrated);
 
     // Access weapon through parent's handle -> Auto Rehydrate Weapon!
-    auto auto_weapon = root->m_weapon.LockAndAcquire();
+    auto auto_weapon = root(&ParentCharacter::m_weapon).LockAndAcquire();
     assert(static_cast<bool>(auto_weapon));
-    assert(auto_weapon->GetDamage() == 888);
+    assert(auto_weapon(&WeaponObject::GetDamage) == 888);
 
     assert(ork::GetStorageState(weapon_id) == ork::StorageState::Clean);
   }
@@ -773,8 +773,8 @@ void Test8_Transparent_Auto_Rehydration()
   // 3. Concurrent Multi-Thread Auto-Rehydration Safety Test
   {
     auto parent = ork::CreateObject<ParentCharacter>();
-    auto weapon = parent->m_weapon.LockAndAcquire();
-    weapon->SetDamage(999);
+    auto weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+    weapon(&WeaponObject::SetDamage, 999);
     ork::HandleID weapon_id = weapon.GetTargetID();
 
     ork::Dehydrate(std::move(weapon));
@@ -788,7 +788,7 @@ void Test8_Transparent_Auto_Rehydration()
     {
       workers.emplace_back([weapon_id, &success_count]() {
         ork::OuroPtr<WeaponObject> ptr(weapon_id);
-        if (ptr && ptr->GetDamage() == 999)
+        if (ptr && ptr(&WeaponObject::GetDamage) == 999)
         {
           success_count.fetch_add(1);
         }
@@ -815,8 +815,8 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
   // 1. In-Flight Root Edge Guard (Safe rejection when multiple active OuroPtr instances exist)
   {
     auto parent = ork::CreateObject<ParentCharacter>();
-    auto weapon1 = parent->m_weapon.LockAndAcquire();
-    weapon1->SetDamage(500);
+    auto weapon1 = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+    weapon1(&WeaponObject::SetDamage, 500);
     ork::HandleID wid = weapon1.GetTargetID();
 
     // Another function / stack frame creates a second active OuroPtr to the same object
@@ -837,15 +837,15 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
     assert(ork::GetStorageState(wid) == ork::StorageState::Dehydrated);
 
     // Auto-rehydrate on access via parent handle
-    auto reloaded = parent->m_weapon.LockAndAcquire();
-    assert(reloaded->GetDamage() == 500);
+    auto reloaded = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+    assert(reloaded(&WeaponObject::GetDamage) == 500);
   }
 
   // 2. Concurrent Reader vs Dehydrator Lock Safety
   {
     auto parent = ork::CreateObject<ParentCharacter>();
-    auto weapon = parent->m_weapon.LockAndAcquire();
-    weapon->SetDamage(888);
+    auto weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+    weapon(&WeaponObject::SetDamage, 888);
     ork::HandleID wid = weapon.GetTargetID();
 
     std::atomic<bool> reader_started{false};
@@ -855,7 +855,7 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
     std::thread reader_thread([wid, &reader_started, &reader_finished]() {
       ork::OuroPtr<WeaponObject> ptr(wid);
       reader_started.store(true);
-      ptr->ReadAndSleep(50);
+      ptr(&WeaponObject::ReadAndSleep, 50);
       reader_finished.store(true);
     });
 
@@ -878,8 +878,8 @@ void Test9_InFlight_And_Concurrent_Dehydration_Protection()
     assert(ork::GetStorageState(wid) == ork::StorageState::Dehydrated);
 
     // Subsequent access auto-rehydrates seamlessly
-    auto reloaded = parent->m_weapon.LockAndAcquire();
-    assert(reloaded->GetDamage() == 888);
+    auto reloaded = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+    assert(reloaded(&WeaponObject::GetDamage) == 888);
   }
 
   std::cout << "  Test 9 Passed!\n" << std::endl;
@@ -892,8 +892,8 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
   std::cout.flush();
 
   auto parent = ork::CreateObject<ParentCharacter>();
-  auto weapon = parent->m_weapon.LockAndAcquire();
-  weapon->SetDamage(777);
+  auto weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+  weapon(&WeaponObject::SetDamage, 777);
   ork::HandleID wid = weapon.GetTargetID();
 
   // Dehydrate the weapon
@@ -917,7 +917,7 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
       }
 
       auto ptr = ork::Rehydrate<WeaponObject>(wid);
-      if (ptr && ptr->GetDamage() == 777)
+      if (ptr && ptr(&WeaponObject::GetDamage) == 777)
       {
         success_count.fetch_add(1);
       }
@@ -937,7 +937,7 @@ void Test10_Concurrent_Rehydration_Thread_Safety()
   // Re-acquiring via main thread rehydrates it to Clean
   {
     auto final_ptr = ork::Rehydrate<WeaponObject>(wid);
-    assert(final_ptr->GetDamage() == 777);
+    assert(final_ptr(&WeaponObject::GetDamage) == 777);
     assert(ork::GetStorageState(wid) == ork::StorageState::Clean);
   }
 
@@ -1077,7 +1077,7 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
   size_t initial_memory = mock_dehydrator->GetTrackedMemoryBytes();
   auto parent = ork::CreateObject<ParentCharacter>();
   ork::HandleID parent_id = parent.GetTargetID();
-  ork::HandleID managed_weapon_id = parent->m_weapon.GetTargetID();
+  ork::HandleID managed_weapon_id = parent(&ParentCharacter::m_weapon).GetTargetID();
 
   // Verify both parent and managed weapon are tracked by the dehydrator
   assert(mock_dehydrator->IsTracked(parent_id) == true);
@@ -1088,8 +1088,8 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
   // 3. Named Factory 2: Create permanent object (CreatePermanentObject) -> NOT registered
   ork::HandleID permanent_id = 0;
   auto perm_player = ork::CreatePermanentObject<PlayerObject>();
-  perm_player->SetHp(999);
-  perm_player->SetName("PermanentHero");
+  perm_player(&PlayerObject::SetHp, 999);
+  perm_player(&PlayerObject::SetName, "PermanentHero");
   permanent_id = perm_player.GetTargetID();
 
   assert(mock_dehydrator->IsTracked(permanent_id) == false);
@@ -1118,9 +1118,9 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
   // 5. Auto-rehydration test for managed weapon when accessed via parent -> OnObjectRehydrated notification
   size_t rehydrate_notify_before = mock_dehydrator->m_rehydrate_notify_count.load();
   {
-    auto weapon_ptr = parent->m_weapon.LockAndAcquire();
+    auto weapon_ptr = parent(&ParentCharacter::m_weapon).LockAndAcquire();
     assert((bool)weapon_ptr);
-    assert(weapon_ptr->GetDamage() == 50);  // Default damage
+    assert(weapon_ptr(&WeaponObject::GetDamage) == 50);  // Default damage
   }
   // Verify OnObjectRehydrated was called and tracked memory is restored
   assert(mock_dehydrator->m_rehydrate_notify_count.load() == rehydrate_notify_before + 1);
@@ -1134,11 +1134,11 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
     assert(mock_dehydrator->IsTracked(perm_parent_id) == false);
 
     // Weapon created within ParentCharacter constructor defaults to CreateObject, so it is tracked
-    ork::HandleID perm_child_weapon_id = perm_parent->m_weapon.GetTargetID();
+    ork::HandleID perm_child_weapon_id = perm_parent(&ParentCharacter::m_weapon).GetTargetID();
     assert(mock_dehydrator->IsTracked(perm_child_weapon_id) == true);
 
     // Dehydrate child weapon
-    auto child_ptr = perm_parent->m_weapon.LockAndAcquire();
+    auto child_ptr = perm_parent(&ParentCharacter::m_weapon).LockAndAcquire();
     size_t mem_before_dehydrate = mock_dehydrator->GetTrackedMemoryBytes();
     size_t d_count = mock_dehydrator->m_dehydrate_notify_count.load();
     ork::Dehydrate(std::move(child_ptr));
@@ -1150,7 +1150,7 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
 
     // Rehydrate child weapon via access
     size_t r_count = mock_dehydrator->m_rehydrate_notify_count.load();
-    auto rehydrated_child = perm_parent->m_weapon.LockAndAcquire();
+    auto rehydrated_child = perm_parent(&ParentCharacter::m_weapon).LockAndAcquire();
     assert((bool)rehydrated_child);
     assert(mock_dehydrator->m_rehydrate_notify_count.load() == r_count + 1);
     assert(mock_dehydrator->GetTrackedMemoryBytes() == mem_before_dehydrate);
@@ -1198,8 +1198,8 @@ void Test12_WriteStream_Commit_Rollback_On_Exception(ork::HostContext &host)
 
   // 1. 建立正常物件並成功存檔一次 (Initial good save with data = 100)
   auto faulty_obj = ork::CreateObject<FaultyObject>();
-  faulty_obj->data = 100;
-  faulty_obj->should_throw = false;
+  faulty_obj(&FaultyObject::data) = 100;
+  faulty_obj(&FaultyObject::should_throw) = false;
   ork::HandleID id = faulty_obj.GetTargetID();
 
   bool save_ok = ork::Save(faulty_obj);
@@ -1213,11 +1213,11 @@ void Test12_WriteStream_Commit_Rollback_On_Exception(ork::HostContext &host)
   assert(read_val == 100);
 
   // 2. 修改資料為 999，但設定中途拋出例外模擬寫入失敗
-  {
-    ork::OuroWriteLock lock(*faulty_obj);
-    faulty_obj->data = 999;
-    faulty_obj->should_throw = true;
-  }
+  faulty_obj([](FaultyObject &f) {
+    ork::OuroWriteLock lock(f);
+    f.data = 999;
+    f.should_throw = true;
+  });
 
   bool caught_exception = false;
   try
@@ -1241,8 +1241,8 @@ void Test12_WriteStream_Commit_Rollback_On_Exception(ork::HostContext &host)
 
   // 4. 驗證全新未存檔物件在中途失敗時，Storage 絕不殘留任何半殘垃圾
   auto brand_new_faulty = ork::CreateObject<FaultyObject>();
-  brand_new_faulty->data = 555;
-  brand_new_faulty->should_throw = true;
+  brand_new_faulty(&FaultyObject::data) = 555;
+  brand_new_faulty(&FaultyObject::should_throw) = true;
   ork::HandleID new_id = brand_new_faulty.GetTargetID();
 
   try
@@ -1273,7 +1273,7 @@ void Test13_Object_Deletion_Notification_Under_Unbound_References(ork::HostConte
   {
     auto weapon = ork::CreateObject<WeaponObject>();
     target_id = weapon.GetTargetID();
-    weapon->SetDamage(350);
+    weapon(&WeaponObject::SetDamage, 350);
 
     // 登記至脫水器
     dehydrator->Register(target_id, sizeof(WeaponObject));
@@ -1410,19 +1410,19 @@ static void Test14_Utf8_Properties_And_Handles_Serialization()
   {
     auto parent = ork::CreateObject<Utf8TestParent>();
     auto child = ork::CreateObject<Utf8TestChild>();
-    parent->m_slot_utf8 = child;
+    parent(&Utf8TestParent::m_slot_utf8) = child;
 
-    assert(parent->m_slot_utf8.GetSlotName() == "裝備槽_右手");
+    assert(parent(&Utf8TestParent::m_slot_utf8).GetSlotName() == "裝備槽_右手");
 
     ork::BlueprintStream stream;
-    ork::PackBlueprint(*parent, stream);
+    parent([&](Utf8TestParent &p) { ork::PackBlueprint(p, stream); });
 
     auto restored_parent = ork::CreateObject<Utf8TestParent>();
-    ork::UnpackBlueprint(*restored_parent, stream);
+    restored_parent([&](Utf8TestParent &p) { ork::UnpackBlueprint(p, stream); });
 
-    assert(restored_parent->m_u8_desc == u8"這是C++20原生UTF8描述");
-    assert(restored_parent->m_str_title == "傳奇之劍");
-    assert(restored_parent->m_slot_utf8.GetTargetID() == child.GetTargetID());
+    assert(restored_parent(&Utf8TestParent::m_u8_desc) == u8"這是C++20原生UTF8描述");
+    assert(restored_parent(&Utf8TestParent::m_str_title) == "傳奇之劍");
+    assert(restored_parent(&Utf8TestParent::m_slot_utf8).GetTargetID() == child.GetTargetID());
 
     std::cout << "  ✅ OwningHandle UTF-8 插槽名稱與完整藍圖打包還原驗證通過！\n" << std::endl;
   }

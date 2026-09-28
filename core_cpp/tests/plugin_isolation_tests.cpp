@@ -48,11 +48,11 @@ int main()
   {
     ork::OuroPtr<ThirdPartyPluginEntity> ptr = ork::CreateObject<ThirdPartyPluginEntity>();
     assert(ptr.GetTargetID() != 0);
-    assert(ptr->score == 123);
-    assert(ptr->name == "PluginPlayer");
+    assert(ptr(&ThirdPartyPluginEntity::score) == 123);
+    assert(ptr(&ThirdPartyPluginEntity::name) == "PluginPlayer");
 
-    ptr->score = 999;
-    assert(ptr->score == 999);
+    ptr(&ThirdPartyPluginEntity::score) = 999;
+    assert(ptr(&ThirdPartyPluginEntity::score) == 999);
 
     // 驗證 2: 脫水與復水機制在插件環境下運作健全
     ork::HandleID id = ptr.GetTargetID();

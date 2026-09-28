@@ -45,36 +45,32 @@ bool Save(const OuroPtr<T> &ptr)
   }
 
   HandleID id = ptr.GetTargetID();
-  T *obj = ptr.get();
-  if (!obj)
-  {
-    throw std::runtime_error("OuroKore Save Error: Cannot access payload.");
-  }
+  return ptr([id](T &obj) {
+    StorageState state = obj.GetStorageState();
+    if (state == StorageState::Clean || state == StorageState::Dehydrated)
+    {
+      return true;  // Fast skip!
+    }
 
-  StorageState state = obj->GetStorageState();
-  if (state == StorageState::Clean || state == StorageState::Dehydrated)
-  {
-    return true;  // Fast skip!
-  }
+    auto stream = detail::CreateRuntimeWriteStream(id);
+    if (!stream)
+    {
+      throw std::runtime_error(
+          "OuroKore Save Error: Storage driver not initialized or stream creation failed. Ensure host storage driver is properly configured."
+      );
+    }
 
-  auto stream = detail::CreateRuntimeWriteStream(id);
-  if (!stream)
-  {
-    throw std::runtime_error(
-        "OuroKore Save Error: Storage driver not initialized or stream creation failed. Ensure host storage driver is properly configured."
-    );
-  }
+    {
+      OuroReadLock lock(obj);
+      PackBlueprint(obj, *stream);
+    }
 
-  {
-    OuroReadLock lock(*obj);
-    PackBlueprint(*obj, *stream);
-  }
+    // 顯式提交串流（若 PackBlueprint 拋出例外，stream 自動解構回滾丟棄，不執行 Commit）
+    stream->Commit();
 
-  // 顯式提交串流（若 PackBlueprint 拋出例外，stream 自動解構回滾丟棄，不執行 Commit）
-  stream->Commit();
-
-  detail::MarkRuntimeObjectClean(id);
-  return true;
+    detail::MarkRuntimeObjectClean(id);
+    return true;
+  });
 }
 
 /**
@@ -89,25 +85,21 @@ bool Load(const OuroPtr<T> &ptr)
   }
 
   HandleID id = ptr.GetTargetID();
-  T *obj = ptr.get();
-  if (!obj)
-  {
-    throw std::runtime_error("OuroKore Load Error: Cannot access payload.");
-  }
+  return ptr([id](T &obj) {
+    auto stream = detail::OpenRuntimeReadStream(id);
+    if (!stream)
+    {
+      return false;
+    }
 
-  auto stream = detail::OpenRuntimeReadStream(id);
-  if (!stream)
-  {
-    return false;
-  }
+    {
+      OuroWriteLock lock(obj);
+      UnpackBlueprint(obj, *stream);
+    }
 
-  {
-    OuroWriteLock lock(*obj);
-    UnpackBlueprint(*obj, *stream);
-  }
-
-  detail::MarkRuntimeObjectClean(id);
-  return true;
+    detail::MarkRuntimeObjectClean(id);
+    return true;
+  });
 }
 
 /**

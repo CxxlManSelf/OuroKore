@@ -76,12 +76,12 @@ void test_single_async_save_load()
   assert(static_cast<bool>(res_save));
 
   // 2. 修改記憶體中的活體資料
-  {
-    OuroWriteLock lock(*ptr);
-    ptr->m_id_val = 999;
-    ptr->m_tag = "ModifiedTag";
-  }
-  assert(ptr->m_id_val == 999);
+  ptr([](AsyncTestEntity &obj) {
+    OuroWriteLock lock(obj);
+    obj.m_id_val = 999;
+    obj.m_tag = "ModifiedTag";
+  });
+  assert(ptr(&AsyncTestEntity::m_id_val) == 999);
 
   // 3. 非同步載入（刷回儲存體先前的狀態）
   auto fut_load = LoadAsync(ptr);
@@ -93,8 +93,8 @@ void test_single_async_save_load()
   assert(res_load.error.empty());
 
   // 驗證狀態已成功還原
-  assert(ptr->m_id_val == 42);
-  assert(ptr->m_tag == "OriginalTag");
+  assert(ptr(&AsyncTestEntity::m_id_val) == 42);
+  assert(ptr(&AsyncTestEntity::m_tag) == "OriginalTag");
   std::cout << "  -> SaveAsync 與 LoadAsync 驗證通過！" << std::endl;
 }
 
@@ -103,8 +103,8 @@ void test_single_async_dehydrate_rehydrate()
   std::cout << "[測試 2] 單一物件非同步 DehydrateAsync 與 RehydrateAsync 測試..." << std::endl;
 
   auto container = CreatePermanentObject<AsyncEntityContainer>();
-  container->m_child = CreateObject<AsyncTestEntity>(100, "ChildToDehydrate");
-  HandleID child_id = container->m_child.GetTargetID();
+  container(&AsyncEntityContainer::m_child) = CreateObject<AsyncTestEntity>(100, "ChildToDehydrate");
+  HandleID child_id = container(&AsyncEntityContainer::m_child).GetTargetID();
 
   // 1. 非同步脫水（child_id 處於 root_count == 0 狀態）
   auto fut_deh = DehydrateAsync(child_id);
@@ -182,8 +182,10 @@ void test_parallel_batch_operations()
   // 修改所有活體資料
   for (auto &item : batch)
   {
-    OuroWriteLock lock(*item);
-    item->m_id_val += 1000;
+    item([](AsyncTestEntity &obj) {
+      OuroWriteLock lock(obj);
+      obj.m_id_val += 1000;
+    });
   }
 
   // 2. 批次多核心平行載入（全部還原）
@@ -192,7 +194,7 @@ void test_parallel_batch_operations()
   for (size_t i = 0; i < BATCH_COUNT; ++i)
   {
     assert(load_results[i].success);
-    assert(batch[i]->m_id_val == static_cast<int>(i));
+    assert(batch[i](&AsyncTestEntity::m_id_val) == static_cast<int>(i));
   }
 
   // 3. 批次多核心平行脫水 (DehydrateBatch)
@@ -204,8 +206,8 @@ void test_parallel_batch_operations()
   for (size_t i = 0; i < BATCH_COUNT; ++i)
   {
     auto c = CreateObject<AsyncEntityContainer>();
-    c->m_child = CreateObject<AsyncTestEntity>(static_cast<int>(i + 2000), "DehydrateBatchItem_" + std::to_string(i));
-    dehydrate_ids.push_back(c->m_child.GetTargetID());
+    c(&AsyncEntityContainer::m_child) = CreateObject<AsyncTestEntity>(static_cast<int>(i + 2000), "DehydrateBatchItem_" + std::to_string(i));
+    dehydrate_ids.push_back(c(&AsyncEntityContainer::m_child).GetTargetID());
     containers.push_back(std::move(c));
   }
 
@@ -230,8 +232,8 @@ void test_parallel_batch_operations()
     assert(rehydrate_results[i].error.empty());
 
     // 驗證復水後資料正確性與儲存狀態
-    assert(rehydrate_results[i].ptr->m_id_val == static_cast<int>(i + 2000));
-    assert(rehydrate_results[i].ptr->m_tag == "DehydrateBatchItem_" + std::to_string(i));
+    assert(rehydrate_results[i].ptr(&AsyncTestEntity::m_id_val) == static_cast<int>(i + 2000));
+    assert(rehydrate_results[i].ptr(&AsyncTestEntity::m_tag) == "DehydrateBatchItem_" + std::to_string(i));
     assert(GetStorageState(dehydrate_ids[i]) == StorageState::Clean);
   }
 
@@ -280,7 +282,7 @@ void test_async_result_converting_move()
 
   assert(derived_res);
   assert(derived_res.id == id);
-  assert(derived_res.ptr->m_extra == 99.9);
+  assert(derived_res.ptr(&AsyncDerivedEntity::m_extra) == 99.9);
 
   // 1. 測試 AsyncResult<Derived> -> AsyncResult<Base> 轉換移動建構
   AsyncResult<AsyncTestEntity> base_res(std::move(derived_res));

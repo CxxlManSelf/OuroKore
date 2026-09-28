@@ -256,14 +256,14 @@ int main()
       {
         ork::OuroPtr<SimpleObject> child = ork::CreateObject<SimpleObject>();
         child_id = child.GetTargetID();
-        parent->m_child1 = child;
+        parent(&ParentWithTwoChildren::m_child1) = child;
       }
       // Lock and acquire temporary OuroPtr guard
-      child_guard = parent->m_child1.LockAndAcquire();
+      child_guard = parent(&ParentWithTwoChildren::m_child1).LockAndAcquire();
       assert(child_guard.GetTargetID() == child_id);
 
       // Parent releases its handle
-      parent->m_child1.Release();
+      parent(&ParentWithTwoChildren::m_child1).Release();
 
       // Object must STILL be alive because child_guard holds an active root edge!
       assert(g_deconstruct_count == 0);
@@ -284,7 +284,7 @@ int main()
   {
     ork::OuroPtr<ParentObject> parent = ork::CreateObject<ParentObject>();
     parent_id = parent.GetTargetID();
-    child_id = parent->m_child.GetTargetID();
+    child_id = parent(&ParentObject::m_child).GetTargetID();
 
     assert(parent_id != 0);
     assert(child_id != 0);
@@ -352,8 +352,8 @@ int main()
     ork::OuroPtr<ParentWithTwoChildren> parent = ork::CreateObject<ParentWithTwoChildren>();
     {
       ork::OuroPtr<SimpleObject> childA = ork::CreateObject<SimpleObject>();
-      parent->m_child1 = childA;
-      assert(parent->m_child1.GetTargetID() == childA.GetTargetID());
+      parent(&ParentWithTwoChildren::m_child1) = childA;
+      assert(parent(&ParentWithTwoChildren::m_child1).GetTargetID() == childA.GetTargetID());
     }
     // childA OuroPtr went out of scope. Since parent->m_child1 points to it,
     // strong count should be 1, so it shouldn't be deconstructed yet!
@@ -370,17 +370,17 @@ int main()
     ork::OuroPtr<SimpleObject> childA = ork::CreateObject<SimpleObject>();
     ork::OuroPtr<SimpleObject> childB = ork::CreateObject<SimpleObject>();
 
-    parent->m_child1 = childA;
-    parent->m_child2 = childB;
+    parent(&ParentWithTwoChildren::m_child1) = childA;
+    parent(&ParentWithTwoChildren::m_child2) = childB;
 
-    assert(parent->m_child1.GetTargetID() == childA.GetTargetID());
-    assert(parent->m_child2.GetTargetID() == childB.GetTargetID());
+    assert(parent(&ParentWithTwoChildren::m_child1).GetTargetID() == childA.GetTargetID());
+    assert(parent(&ParentWithTwoChildren::m_child2).GetTargetID() == childB.GetTargetID());
 
     // Copy assign h1 = h2. Same owner, different targets.
-    parent->m_child1 = parent->m_child2;
+    parent(&ParentWithTwoChildren::m_child1) = parent(&ParentWithTwoChildren::m_child2);
 
     // parent->m_child1 should now point to childB!
-    assert(parent->m_child1.GetTargetID() == childB.GetTargetID());
+    assert(parent(&ParentWithTwoChildren::m_child1).GetTargetID() == childB.GetTargetID());
   }
   std::cout << "Test 6 Passed." << std::endl;
 
@@ -398,8 +398,8 @@ int main()
       ork::OuroPtr<SimpleObject> childB = ork::CreateObject<SimpleObject>();
       childB_id = childB.GetTargetID();
 
-      parent1->m_child1 = childA;
-      parent2->m_child1 = childB;
+      parent1(&ParentWithTwoChildren::m_child1) = childA;
+      parent2(&ParentWithTwoChildren::m_child1) = childB;
     }
     // childA and childB OuroPtrs went out of scope.
     // childA is owned by parent1->m_child1.
@@ -408,12 +408,12 @@ int main()
 
     // Move assign: parent1->m_child1 = std::move(parent2->m_child1)
     // Different owners, different targets.
-    parent1->m_child1 = std::move(parent2->m_child1);
+    parent1(&ParentWithTwoChildren::m_child1) = std::move(parent2(&ParentWithTwoChildren::m_child1));
 
     // childA is no longer owned by parent1, so it should be deconstructed!
     assert(g_deconstruct_count == 1);
-    assert(parent1->m_child1.GetTargetID() == childB_id);
-    assert(parent2->m_child1.GetTargetID() == 0);
+    assert(parent1(&ParentWithTwoChildren::m_child1).GetTargetID() == childB_id);
+    assert(parent2(&ParentWithTwoChildren::m_child1).GetTargetID() == 0);
   }
   std::cout << "Test 7 Passed." << std::endl;
 
@@ -526,17 +526,17 @@ int main()
     {
       ork::OuroPtr<SimpleObject> childA = ork::CreateObject<SimpleObject>();
       childA_id = childA.GetTargetID();
-      parent1->m_child1 = childA;
+      parent1(&ParentWithTwoChildren::m_child1) = childA;
     }
 
     {
       ork::OuroPtr<SimpleObject> childB = ork::CreateObject<SimpleObject>();
       childB_id = childB.GetTargetID();
-      parent2->m_child1 = childB;
+      parent2(&ParentWithTwoChildren::m_child1) = childB;
     }
 
-    assert(parent1->m_child1.GetOwnerID() == parent1_id);
-    assert(parent2->m_child1.GetOwnerID() == parent2_id);
+    assert(parent1(&ParentWithTwoChildren::m_child1).GetOwnerID() == parent1_id);
+    assert(parent2(&ParentWithTwoChildren::m_child1).GetOwnerID() == parent2_id);
     assert(g_deconstruct_count == 0);
 
     // 跨宿主 Move Assignment：把 parent2 的子物件移交給 parent1 的 Handle
@@ -545,17 +545,17 @@ int main()
     // 2. 將 childB 的 Target ID 移交，並把 parent2->m_child1 的 target 設為 0
     // 3. 偵測到 Owner ID 不同 (parent1_id != parent2_id)，呼叫 Registry 註冊新邊 (parent1_id -> childB_id) 並解除舊邊
     // (parent2_id -> childB_id)
-    parent1->m_child1 = std::move(parent2->m_child1);
+    parent1(&ParentWithTwoChildren::m_child1) = std::move(parent2(&ParentWithTwoChildren::m_child1));
 
     // 1. 驗證 childA 已經被釋放並析構
     assert(g_deconstruct_count == 1);
 
     // 2. 驗證 parent1->m_child1 現在持有 childB，且 owner 依然是 parent1_id
-    assert(parent1->m_child1.GetTargetID() == childB_id);
-    assert(parent1->m_child1.GetOwnerID() == parent1_id);
+    assert(parent1(&ParentWithTwoChildren::m_child1).GetTargetID() == childB_id);
+    assert(parent1(&ParentWithTwoChildren::m_child1).GetOwnerID() == parent1_id);
 
     // 3. 驗證 parent2->m_child1 的 target 被安全置零
-    assert(parent2->m_child1.GetTargetID() == 0);
+    assert(parent2(&ParentWithTwoChildren::m_child1).GetTargetID() == 0);
 
     // 4. 驗證 childB 依然存活，且其 Owner Roster 被 Registry 正確更新為僅有 parent1_id
     assert(ork::IsAlive(childB_id));
@@ -574,12 +574,12 @@ int main()
     HandleID parent_id = parent.GetTargetID();
 
     // Create child post-construction
-    parent->InitChildren();
-    HandleID child_id = parent->m_child.GetTargetID();
+    parent(&ParentDrivenObject::InitChildren);
+    HandleID child_id = parent(&ParentDrivenObject::m_child).GetTargetID();
 
     assert(parent_id != 0);
     assert(child_id != 0);
-    assert(parent->m_child.GetOwnerID() == parent_id);
+    assert(parent(&ParentDrivenObject::m_child).GetOwnerID() == parent_id);
 
     assert(ork::IsAlive(child_id));
   }
@@ -590,8 +590,8 @@ int main()
   {
     ork::OuroPtr<ParentDrivenCtorObject> parent = ork::CreateObject<ParentDrivenCtorObject>();
     assert(parent.GetTargetID() != 0);
-    assert(parent->m_child.GetTargetID() != 0);
-    assert(parent->m_child.GetOwnerID() == parent.GetTargetID());
+    assert(parent(&ParentDrivenCtorObject::m_child).GetTargetID() != 0);
+    assert(parent(&ParentDrivenCtorObject::m_child).GetOwnerID() == parent.GetTargetID());
   }
   assert(g_deconstruct_count == 2);
   std::cout << "Test 11 Passed." << std::endl;
@@ -610,9 +610,9 @@ int main()
       child_id = child.GetTargetID();
 
       // Adopt via OuroPtr assignment
-      parent->m_child = child;
-      assert(parent->m_child.GetTargetID() == child_id);
-      assert(parent->m_child.GetOwnerID() == parent_id);
+      parent(&ParentDrivenAdoptObject::m_child) = child;
+      assert(parent(&ParentDrivenAdoptObject::m_child).GetTargetID() == child_id);
+      assert(parent(&ParentDrivenAdoptObject::m_child).GetOwnerID() == parent_id);
     }
     // child OuroPtr goes out of scope, but parent still owns it
     assert(g_deconstruct_count == 0);
@@ -631,26 +631,26 @@ int main()
     ork::OuroPtr<ParentWithTwoChildren> parent = ork::CreateObject<ParentWithTwoChildren>();
     {
       ork::OuroPtr<SimpleObject> child = ork::CreateObject<SimpleObject>();
-      parent->m_child1 = child;
-      parent->m_child2 = child;
+      parent(&ParentWithTwoChildren::m_child1) = child;
+      parent(&ParentWithTwoChildren::m_child2) = child;
     }
     assert(g_deconstruct_count == 0);
 
     // Move assign: same target, same owner
-    parent->m_child1 = std::move(parent->m_child2);
-    assert(parent->m_child1.GetTargetID() != 0);
-    assert(parent->m_child2.GetTargetID() == 0);
+    parent(&ParentWithTwoChildren::m_child1) = std::move(parent(&ParentWithTwoChildren::m_child2));
+    assert(parent(&ParentWithTwoChildren::m_child1).GetTargetID() != 0);
+    assert(parent(&ParentWithTwoChildren::m_child2).GetTargetID() == 0);
     assert(g_deconstruct_count == 0);  // Target should not be deconstructed!
 
     // Move assign: same target, different owner (cross-host)
     ork::OuroPtr<ParentWithTwoChildren> parent2 = ork::CreateObject<ParentWithTwoChildren>();
-    parent2->m_child1 = parent->m_child1.LockAndAcquire();
-    assert(parent->m_child1.GetTargetID() == parent2->m_child1.GetTargetID());
+    parent2(&ParentWithTwoChildren::m_child1) = parent(&ParentWithTwoChildren::m_child1).LockAndAcquire();
+    assert(parent(&ParentWithTwoChildren::m_child1).GetTargetID() == parent2(&ParentWithTwoChildren::m_child1).GetTargetID());
 
-    HandleID target_id = parent->m_child1.GetTargetID();
-    parent->m_child1 = std::move(parent2->m_child1);
-    assert(parent->m_child1.GetTargetID() == target_id);
-    assert(parent2->m_child1.GetTargetID() == 0);
+    HandleID target_id = parent(&ParentWithTwoChildren::m_child1).GetTargetID();
+    parent(&ParentWithTwoChildren::m_child1) = std::move(parent2(&ParentWithTwoChildren::m_child1));
+    assert(parent(&ParentWithTwoChildren::m_child1).GetTargetID() == target_id);
+    assert(parent2(&ParentWithTwoChildren::m_child1).GetTargetID() == 0);
     assert(g_deconstruct_count == 0);
   }
   assert(g_deconstruct_count == 3);  // 2 parents + 1 child
@@ -667,7 +667,7 @@ int main()
     assert(parent_id != 0);
 
     // 驗證 RegisterHandle 成功將私有 OwningContainerHandle 註冊進父物件的名冊
-    const auto &roster = parent->GetRegisteredHandles();
+    const auto &roster = parent(&ParentWithContainer::GetRegisteredHandles);
     assert(roster.find("children_slot") != roster.end());
     assert(roster.at("children_slot")->GetSlotName() == "children_slot");
 
@@ -684,11 +684,11 @@ int main()
       child2_id = child2.GetTargetID();
       child3_id = child3.GetTargetID();
 
-      parent->AddChildObject(child1);
-      parent->AddChildObject(child2);
-      parent->AddChildObject(child3);
+      parent(&ParentWithContainer::AddChildObject, child1);
+      parent(&ParentWithContainer::AddChildObject, child2);
+      parent(&ParentWithContainer::AddChildObject, child3);
 
-      assert(parent->GetChildrenCount() == 3);
+      assert(parent(&ParentWithContainer::GetChildrenCount) == 3);
     }
     // 3 個臨時 CreateObject 的 OuroPtr 寫鎖離開作用域並釋放，但 parent 的 OwningContainerHandle
     // 持有拓撲強引用，皆未析構
@@ -696,7 +696,7 @@ int main()
 
     // 測試透過 Parent 封裝介面在 Parent 鎖定下無衝突打包與鎖定所有子物件
     {
-      auto acquired_all = parent->GetChildrenObjects();
+      auto acquired_all = parent(&ParentWithContainer::GetChildrenObjects);
       assert(acquired_all.size() == 3);
       assert(acquired_all[0].GetTargetID() == child1_id);
       assert(acquired_all[1].GetTargetID() == child2_id);
@@ -704,8 +704,8 @@ int main()
     }
 
     // 測試從容器中透過 Parent 封裝介面個別移除子物件
-    parent->RemoveChildObject(child1_id);
-    assert(parent->GetChildrenCount() == 2);
+    parent(&ParentWithContainer::RemoveChildObject, child1_id);
+    assert(parent(&ParentWithContainer::GetChildrenCount) == 2);
     // child1 失去所有 Owner 引用，觸發即時析構
     assert(g_deconstruct_count == 1);
 
@@ -716,10 +716,10 @@ int main()
     // 測試 OwningContainerHandle 跨宿主 Move Assignment 邊緣轉移
     {
       ork::OuroPtr<ParentWithContainer> parent2 = ork::CreateObject<ParentWithContainer>();
-      parent2->MoveChildrenFrom(*parent);
+      parent([&](ParentWithContainer &p) { parent2(&ParentWithContainer::MoveChildrenFrom, p); });
 
-      assert(parent->GetChildrenCount() == 0);
-      assert(parent2->GetChildrenCount() == 2);
+      assert(parent(&ParentWithContainer::GetChildrenCount) == 0);
+      assert(parent2(&ParentWithContainer::GetChildrenCount) == 2);
 
       // 驗證移轉後 child2 與 child3 依然活著（在 parent2 名下）
       assert(ork::IsAlive(child2_id));
@@ -742,41 +742,41 @@ int main()
     {
       ork::OuroPtr<SimpleObject> child_ptr = ork::CreateObject<SimpleObject>();
       // 測試由 SimpleObject 成員函式內部自主呼叫 OuroWriteLock 修改屬性
-      child_ptr->SetValue(42);
-      assert(child_ptr->GetValue() == 42);
-      std::cout << "  [1. 物件建立與寫鎖更新] 初始化 Value: " << child_ptr->GetValue() << std::endl;
+      child_ptr(&SimpleObject::SetValue, 42);
+      assert(child_ptr(&SimpleObject::GetValue) == 42);
+      std::cout << "  [1. 物件建立與寫鎖更新] 初始化 Value: " << child_ptr(&SimpleObject::GetValue) << std::endl;
 
-      parent->m_child1 = child_ptr;
+      parent(&ParentWithTwoChildren::m_child1) = child_ptr;
     }
 
     // 1. 測試在 const 上下文 (const Handle) 呼叫 LockAndAcquire()
     const auto &const_parent = parent;
     {
       // const Handle 自動發放 OuroPtr<const SimpleObject>
-      ork::OuroPtr<const SimpleObject> const_ptr = const_parent->m_child1.LockAndAcquire();
-      assert(const_ptr->GetValue() == 42);
-      std::cout << "  [2. Const 重載] const Handle 匯出 OuroPtr<const T>，唯讀 Value: " << const_ptr->GetValue()
+      ork::OuroPtr<const SimpleObject> const_ptr = const_parent(&ParentWithTwoChildren::m_child1).LockAndAcquire();
+      assert(const_ptr(&SimpleObject::GetValue) == 42);
+      std::cout << "  [2. Const 重載] const Handle 匯出 OuroPtr<const T>，唯讀 Value: " << const_ptr(&SimpleObject::GetValue)
                 << std::endl;
-      // 說明：此時若嘗試呼叫 const_ptr->SetValue(100)，將在編譯期直接觸發編譯錯誤！
+      // 說明：此時若嘗試呼叫 const_ptr(&SimpleObject::SetValue, 100)，將在編譯期直接觸發編譯錯誤！
     }
 
     // 2. 測試在非 const 上下文 (非 const Handle) 呼叫 LockAndAcquire()
     {
       // 非 const Handle 自動發放 OuroPtr<SimpleObject> (可變內容)
-      ork::OuroPtr<SimpleObject> mutable_ptr = parent->m_child1.LockAndAcquire();
-      mutable_ptr->SetValue(100);
-      assert(mutable_ptr->GetValue() == 100);
-      std::cout << "  [3. 可變重載] 可變 Handle 匯出 OuroPtr<T>，更新 Value 為: " << mutable_ptr->GetValue()
+      ork::OuroPtr<SimpleObject> mutable_ptr = parent(&ParentWithTwoChildren::m_child1).LockAndAcquire();
+      mutable_ptr(&SimpleObject::SetValue, 100);
+      assert(mutable_ptr(&SimpleObject::GetValue) == 100);
+      std::cout << "  [3. 可變重載] 可變 Handle 匯出 OuroPtr<T>，更新 Value 為: " << mutable_ptr(&SimpleObject::GetValue)
                 << std::endl;
     }
 
     // 3. 測試 OwningHandle 及 UnboundHandle 接受 OuroPtr<const SimpleObject> 指派與建構
     {
-      ork::OuroPtr<const SimpleObject> const_ptr = parent->m_child1.LockAndAcquire();
+      ork::OuroPtr<const SimpleObject> const_ptr = parent(&ParentWithTwoChildren::m_child1).LockAndAcquire();
 
       // OwningHandle &operator=(const OuroPtr<U>&) 支援 const T / OuroPtr<const T>
-      parent->m_child2 = const_ptr;
-      assert(parent->m_child2.GetTargetID() == const_ptr.GetTargetID());
+      parent(&ParentWithTwoChildren::m_child2) = const_ptr;
+      assert(parent(&ParentWithTwoChildren::m_child2).GetTargetID() == const_ptr.GetTargetID());
 
       // UnboundHandle 支援從 OuroPtr<const T> 建構與指派
       ork::UnboundHandle<SimpleObject> unbound_from_const(const_ptr);
@@ -846,7 +846,7 @@ int main()
     for (int i = 0; i < ITERATIONS; ++i)
     {
       auto obj = ork::CreateObject<SimpleObject>();
-      obj->SetValue(42 + i);
+      obj(&SimpleObject::SetValue, 42 + i);
       ork::UnboundHandle<SimpleObject> unbound_handle(obj);
 
       std::atomic<bool> start_flag{false};
@@ -859,7 +859,7 @@ int main()
         if (locked_ptr)
         {
           // 若成功晉升鎖定，物件必定完好存活且值必定正確，絕無 UAF！
-          assert(locked_ptr->GetValue() == 42 + i);
+          assert(locked_ptr(&SimpleObject::GetValue) == 42 + i);
         }
       });
 
@@ -893,35 +893,37 @@ int main()
         child1_id = c1.GetTargetID();
         child2_id = c2.GetTargetID();
 
-        parent1->m_child1 = c1;
-        parent1->m_container.AddTarget(child2_id);
+        parent1(&ParentMoveConstructible::m_child1) = c1;
+        parent1(&ParentMoveConstructible::m_container).AddTarget(child2_id);
       }
 
-      assert(parent1->m_child1.GetOwnerID() == parent1_id);
-      assert(parent1->m_container.GetOwnerID() == parent1_id);
-      assert(parent1->m_child1.GetTargetID() == child1_id);
-      assert(parent1->m_container.GetTargetCount() == 1);
+      assert(parent1(&ParentMoveConstructible::m_child1).GetOwnerID() == parent1_id);
+      assert(parent1(&ParentMoveConstructible::m_container).GetOwnerID() == parent1_id);
+      assert(parent1(&ParentMoveConstructible::m_child1).GetTargetID() == child1_id);
+      assert(parent1(&ParentMoveConstructible::m_container).GetTargetCount() == 1);
       assert(g_deconstruct_count == 0);
 
       // 執行跨宿主移動建構：建立全新 parent2，將 parent1 移動建構進 parent2
       ork::OuroPtr<ParentMoveConstructible> parent2 =
-          ork::CreateObject<ParentMoveConstructible>(std::move(*parent1));
+          parent1([](ParentMoveConstructible &p) {
+            return ork::CreateObject<ParentMoveConstructible>(std::move(p));
+          });
       parent2_id = parent2.GetTargetID();
 
       assert(parent2_id != parent1_id);
 
       // 1. 驗證 parent2 的 Handle 其 Owner ID 已正確更新為 parent2_id（而非舊的 parent1_id）
-      assert(parent2->m_child1.GetOwnerID() == parent2_id);
-      assert(parent2->m_container.GetOwnerID() == parent2_id);
+      assert(parent2(&ParentMoveConstructible::m_child1).GetOwnerID() == parent2_id);
+      assert(parent2(&ParentMoveConstructible::m_container).GetOwnerID() == parent2_id);
 
       // 2. 驗證 Target ID 成功移交，來源被置零
-      assert(parent2->m_child1.GetTargetID() == child1_id);
-      assert(parent2->m_container.GetTargetCount() == 1);
-      assert(parent1->m_child1.GetTargetID() == 0);
-      assert(parent1->m_container.GetTargetCount() == 0);
+      assert(parent2(&ParentMoveConstructible::m_child1).GetTargetID() == child1_id);
+      assert(parent2(&ParentMoveConstructible::m_container).GetTargetCount() == 1);
+      assert(parent1(&ParentMoveConstructible::m_child1).GetTargetID() == 0);
+      assert(parent1(&ParentMoveConstructible::m_container).GetTargetCount() == 0);
 
       // 3. 驗證 parent2 名下註冊名冊已包含 child1_slot 與 container_slot
-      const auto &roster = parent2->GetRegisteredHandles();
+      const auto &roster = parent2(&ParentMoveConstructible::GetRegisteredHandles);
       assert(roster.find("child1_slot") != roster.end());
       assert(roster.find("container_slot") != roster.end());
 
@@ -955,18 +957,18 @@ int main()
         ork::OuroPtr<DerivedSimpleObject> derived_obj =
             ork::CreateObject<DerivedSimpleObject>();
         derived_id = derived_obj.GetTargetID();
-        parent->m_derived_handle = derived_obj;
+        parent(&ParentWithPolymorphicChild::m_derived_handle) = derived_obj;
       }
 
-      assert(parent->m_derived_handle.GetTargetID() == derived_id);
-      assert(parent->m_base_handle.GetTargetID() == 0);
+      assert(parent(&ParentWithPolymorphicChild::m_derived_handle).GetTargetID() == derived_id);
+      assert(parent(&ParentWithPolymorphicChild::m_base_handle).GetTargetID() == 0);
       assert(g_deconstruct_count == 0);
 
       // 1. 同宿主多型轉換移動賦值：m_base_handle = std::move(m_derived_handle)
       // 驗證來源 m_derived_handle 確實被清空置零（絕非退化為 Copy！），且 m_base_handle 順利接管
-      parent->m_base_handle = std::move(parent->m_derived_handle);
-      assert(parent->m_base_handle.GetTargetID() == derived_id);
-      assert(parent->m_derived_handle.GetTargetID() == 0);  // 關鍵：來源必須置零！
+      parent(&ParentWithPolymorphicChild::m_base_handle) = std::move(parent(&ParentWithPolymorphicChild::m_derived_handle));
+      assert(parent(&ParentWithPolymorphicChild::m_base_handle).GetTargetID() == derived_id);
+      assert(parent(&ParentWithPolymorphicChild::m_derived_handle).GetTargetID() == 0);  // 關鍵：來源必須置零！
       assert(g_deconstruct_count == 0);  // 過程中無析構
 
       // 2. 跨宿主多型轉換移動賦值：parent2->m_base_handle = std::move(parent->m_base_handle)
@@ -975,19 +977,19 @@ int main()
             ork::CreateObject<ParentWithPolymorphicChild>();
         HandleID parent2_id = parent2.GetTargetID();
 
-        parent2->m_base_handle = std::move(parent->m_base_handle);
-        assert(parent2->m_base_handle.GetTargetID() == derived_id);
-        assert(parent2->m_base_handle.GetOwnerID() == parent2_id);
-        assert(parent->m_base_handle.GetTargetID() == 0);
+        parent2(&ParentWithPolymorphicChild::m_base_handle) = std::move(parent(&ParentWithPolymorphicChild::m_base_handle));
+        assert(parent2(&ParentWithPolymorphicChild::m_base_handle).GetTargetID() == derived_id);
+        assert(parent2(&ParentWithPolymorphicChild::m_base_handle).GetOwnerID() == parent2_id);
+        assert(parent(&ParentWithPolymorphicChild::m_base_handle).GetTargetID() == 0);
 
         // 3. 多型轉換移動建構子：OwningHandle<SimpleObject>(std::move(other_derived))
-        parent->m_derived_handle = ork::CreateObject<DerivedSimpleObject>();
-        HandleID another_derived_id = parent->m_derived_handle.GetTargetID();
+        parent(&ParentWithPolymorphicChild::m_derived_handle) = ork::CreateObject<DerivedSimpleObject>();
+        HandleID another_derived_id = parent(&ParentWithPolymorphicChild::m_derived_handle).GetTargetID();
 
         // 透過多型轉換移動建構建立全新 handle
-        ork::OwningHandle<SimpleObject> moved_base_handle(std::move(parent->m_derived_handle));
+        ork::OwningHandle<SimpleObject> moved_base_handle(std::move(parent(&ParentWithPolymorphicChild::m_derived_handle)));
         assert(moved_base_handle.GetTargetID() == another_derived_id);
-        assert(parent->m_derived_handle.GetTargetID() == 0);  // 來源必須置零！
+        assert(parent(&ParentWithPolymorphicChild::m_derived_handle).GetTargetID() == 0);  // 來源必須置零！
       }
       // parent2 及 moved_base_handle 出作用域，derived_id 與 another_derived_id 析構 (+2)
       assert(g_deconstruct_count == 2);

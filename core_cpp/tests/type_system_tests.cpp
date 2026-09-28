@@ -82,7 +82,6 @@ void TestBasicTypeInfoAndMacro()
   assert(creature_id != human_id);
 
   auto boss = ork::CreateObject<BossMonster>();
-  assert(boss->GetTypeID() == boss_id);
   assert(boss.GetTypeID() == boss_id);
 
   std::cout << "  -> 靜態與動態 TypeID 一致且全域唯一驗證通過！" << std::endl;
@@ -93,8 +92,8 @@ void TestInheritanceAndCasting()
   std::cout << "[測試 2] 多型繼承判定與向下/向上轉型測試..." << std::endl;
 
   auto boss = ork::CreateObject<BossMonster>();
-  boss->m_hp = 5000;
-  boss->m_rage = 100;
+  boss(&BossMonster::m_hp) = 5000;
+  boss(&BossMonster::m_rage) = 100;
 
   // 1. Is<T>() 判定
   assert(boss.Is<BossMonster>());
@@ -186,11 +185,11 @@ void TestDehydratedTypeCheckingWithoutRehydration()
 
   auto room = ork::CreateObject<DungeonRoom>();
   auto boss = ork::CreateObject<BossMonster>();
-  boss->m_hp = 9999;
+  boss(&BossMonster::m_hp) = 9999;
   ork::HandleID boss_id = boss.GetTargetID();
 
   // 由 room 強持有，確保脱水期間 strong_count > 0（非孤島待垃圾回收）
-  room->m_occupant = boss;
+  room(&DungeonRoom::m_occupant) = boss;
 
   // 儲存至 Storage
   bool saved = ork::Save(boss);
@@ -226,8 +225,8 @@ void TestDehydratedTypeCheckingWithoutRehydration()
   ork_get_storage_state(boss_id, &state);
   assert(state == static_cast<uint8_t>(ork::StorageState::Dehydrated));
 
-  // 直到使用者真正解引用存取成員（->）時，才進行透明復水
-  assert(boss_ptr->m_hp == 9999);
+  // 直到使用者真正存取成員時，才進行透明復水
+  assert(boss_ptr(&BossMonster::m_hp) == 9999);
   ork_get_storage_state(boss_id, &state);
   assert(state == static_cast<uint8_t>(ork::StorageState::Clean));
 
@@ -240,22 +239,22 @@ void TestHandleLockAndAcquireTypeSafety()
 
   auto room = ork::CreateObject<DungeonRoom>();
   auto boss = ork::CreateObject<BossMonster>();
-  room->m_occupant = boss;
-  room->m_visitor = boss;
+  room(&DungeonRoom::m_occupant) = boss;
+  room(&DungeonRoom::m_visitor) = boss;
 
   // 1. 匹配的合法型別晉升
-  auto acquired_boss = room->m_occupant.LockAndAcquire<BossMonster>();
+  auto acquired_boss = room(&DungeonRoom::m_occupant).LockAndAcquire<BossMonster>();
   assert(acquired_boss);
   assert(acquired_boss.GetTargetID() == boss.GetTargetID());
 
-  auto acquired_visitor_boss = room->m_visitor.LockAndAcquire<BossMonster>();
+  auto acquired_visitor_boss = room(&DungeonRoom::m_visitor).LockAndAcquire<BossMonster>();
   assert(acquired_visitor_boss);
 
   // 2. 不匹配的型別晉升（傳入 Human）必須安全回傳 null，嚴防 UB
-  auto invalid_occupant = room->m_occupant.LockAndAcquire<Human>();
+  auto invalid_occupant = room(&DungeonRoom::m_occupant).LockAndAcquire<Human>();
   assert(!invalid_occupant);
 
-  auto invalid_visitor = room->m_visitor.LockAndAcquire<Human>();
+  auto invalid_visitor = room(&DungeonRoom::m_visitor).LockAndAcquire<Human>();
   assert(!invalid_visitor);
 
   std::cout << "  -> Handle 跨型別晉升校驗與防禦全部生效！" << std::endl;
