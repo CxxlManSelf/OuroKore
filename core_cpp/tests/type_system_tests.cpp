@@ -106,13 +106,13 @@ void TestInheritanceAndCasting()
   ork::OuroPtr<Creature> creature_ptr = boss.As<Creature>();
   assert(creature_ptr);
   assert(creature_ptr.GetTargetID() == boss.GetTargetID());
-  assert(creature_ptr->m_hp == 5000);
+  assert(creature_ptr(&Creature::m_hp) == 5000);
 
   // 3. 向下轉型（Downcasting 回 BossMonster）
   ork::OuroPtr<BossMonster> restored_boss = creature_ptr.As<BossMonster>();
   assert(restored_boss);
   assert(restored_boss.GetTargetID() == boss.GetTargetID());
-  assert(restored_boss->m_special_skill == "Meteor");
+  assert(restored_boss(&BossMonster::m_special_skill) == "Meteor");
 
   // 4. 不合法向下轉型（嘗試將 BossMonster 轉為 Human）
   ork::OuroPtr<Human> invalid_human = creature_ptr.As<Human>();
@@ -122,7 +122,7 @@ void TestInheritanceAndCasting()
   // 5. dynamic_pointer_cast 與 static_pointer_cast
   auto dyn_cast_monster = ork::dynamic_pointer_cast<Monster>(creature_ptr);
   assert(dyn_cast_monster);
-  assert(dyn_cast_monster->m_rage == 100);
+  assert(dyn_cast_monster(&Monster::m_rage) == 100);
 
   auto dyn_cast_human = ork::dynamic_pointer_cast<Human>(creature_ptr);
   assert(!dyn_cast_human);
@@ -299,7 +299,7 @@ void TestFallbackTypeTraitsWithoutMacro()
 
   auto legacy = ork::CreateObject<SimpleLegacyObject>();
   assert(legacy);
-  assert(legacy->m_val == 999);
+  assert(legacy(&SimpleLegacyObject::m_val) == 999);
 
   ork::TypeID tid = legacy.GetTypeID();
   assert(tid != 0);

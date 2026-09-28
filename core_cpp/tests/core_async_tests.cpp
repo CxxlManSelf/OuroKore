@@ -126,8 +126,8 @@ void test_single_async_dehydrate_rehydrate()
   assert(res_reh.error.empty());
 
   // 驗證復水後資料正確性
-  assert(res_reh.ptr->m_id_val == 100);
-  assert(res_reh.ptr->m_tag == "ChildToDehydrate");
+  assert(res_reh.ptr(&AsyncTestEntity::m_id_val) == 100);
+  assert(res_reh.ptr(&AsyncTestEntity::m_tag) == "ChildToDehydrate");
 
   std::cout << "  -> DehydrateAsync 與 RehydrateAsync 驗證通過！" << std::endl;
 }
