@@ -1152,6 +1152,7 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
     size_t r_count = mock_dehydrator->m_rehydrate_notify_count.load();
     auto rehydrated_child = perm_parent(&ParentCharacter::m_weapon).LockAndAcquire();
     assert((bool)rehydrated_child);
+    assert(rehydrated_child(&WeaponObject::GetDamage) == 50);
     assert(mock_dehydrator->m_rehydrate_notify_count.load() == r_count + 1);
     assert(mock_dehydrator->GetTrackedMemoryBytes() == mem_before_dehydrate);
 

@@ -4,6 +4,7 @@
 #include <type_traits>
 
 #include "ourokore/host/OuroHost.hpp"
+#include "ourokore/component/Handles.hpp"
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
 #include "ourokore/component/builtin/NoOpAutoDehydrator.hpp"
 
@@ -19,6 +20,12 @@ public:
   {
     stream.ReadProperty("value", value);
   }
+};
+
+class PluginContainer : public ork::Subclass<PluginContainer, ork::OuroObject>
+{
+public:
+  ork::OwningHandle<PluginItem> m_item{"PluginItemSlot"};
 };
 
 int main()
@@ -82,8 +89,10 @@ int main()
   test_unauthorized([&]() { plugin_host.GetModuleBinder(); }, "GetModuleBinder");
 
   // 5. 驗證第三方外掛雖無特權，但正常業務功能（物件建立、CRUD、Save/Load）完全不受影響
+  auto container = ork::CreateObject<PluginContainer>();
   auto item = ork::CreateObject<PluginItem>();
   item(&PluginItem::value) = 999;
+  container(&PluginContainer::m_item) = item;
   assert(ork::Save(item) == true);
   assert(storage->Contains(item.GetTargetID()) == true);
   std::cout << "  -> 第三方外掛之常規物件建立與業務存檔功能運作正常。" << std::endl;
@@ -118,9 +127,10 @@ int main()
     }
 
     // 脫水測試：驗證物件脫水 Payload 釋放後，墓碑依然持有 loader
-    assert(ork::Dehydrate(item) == true);
-    assert(ork::GetStorageState(item) == ork::StorageState::Dehydrated);
-    auto dehydrated_loader = moved_host.GetObjectModuleLoader(item.GetTargetID());
+    ork::HandleID item_id = item.GetTargetID();
+    assert(ork::Dehydrate(std::move(item)) == true);
+    assert(ork::GetStorageState(item_id) == ork::StorageState::Dehydrated);
+    auto dehydrated_loader = moved_host.GetObjectModuleLoader(item_id);
     assert(dehydrated_loader.is_loaded() == loader.is_loaded());
     if (loader.is_loaded())
     {
@@ -148,13 +158,16 @@ int main()
       assert(retrieved.is_loaded() == worker_loader.is_loaded());
     };
 
+    auto worker_container = ork::CreateObject<PluginContainer>();
     auto worker_item = ork::CreateObject<PluginItem>();
+    worker_container(&PluginContainer::m_item) = worker_item;
     mock_plugin_worker(*binder, worker_item.GetTargetID());
 
     // 脫水驗證：透過專職介面設定的模組載入器同樣長存於墓碑
-    assert(ork::Dehydrate(worker_item) == true);
-    auto after_dehydrate = binder->GetObjectModuleLoader(worker_item.GetTargetID());
-    auto orig_loader = moved_host.GetObjectModuleLoader(worker_item.GetTargetID());
+    ork::HandleID worker_item_id = worker_item.GetTargetID();
+    assert(ork::Dehydrate(std::move(worker_item)) == true);
+    auto after_dehydrate = binder->GetObjectModuleLoader(worker_item_id);
+    auto orig_loader = moved_host.GetObjectModuleLoader(worker_item_id);
     assert(after_dehydrate.is_loaded() == orig_loader.is_loaded());
 
     std::cout << "  -> IObjectModuleBinder 專職單元介面委派與特權收斂驗證通過。" << std::endl;
