@@ -212,11 +212,11 @@ public:
   }
 
   /**
-   * @brief 安全調用受管物件之成員函式或 Callable，指標完全封閉在內部，極速執行。
-   * 首次呼叫時延遲快取記憶體指標（若脫水則透明復水一次），後續呼叫為 O(1) 零鎖、零查表之原生速度。
+   * @brief 提供內部受信任工具或進階閉包操作受管物件之介面。
+   * 注意：此方法允許傳入 Callable/Lambda，呼叫端需嚴格確保不得逃逸受管物件之裸指標。
    */
   template <typename Fn, typename... Args>
-  decltype(auto) operator()(Fn &&fn, Args &&...args) const
+  decltype(auto) WithObject(Fn &&fn, Args &&...args) const
   {
     if (m_target_id == 0)
     {
@@ -234,10 +234,25 @@ public:
     return std::invoke(std::forward<Fn>(fn), *m_cached_ptr, std::forward<Args>(args)...);
   }
 
+  /**
+   * @brief 安全調用受管物件之成員函式或成員欄位，指標完全封閉在內部，極速執行。
+   * 限制只能傳入 T 及其基底類別之成員指標（成員函式或成員欄位），杜絕 Lambda 捕獲裸指標外洩。
+   * 首次呼叫時延遲快取記憶體指標（若脫水則透明復水一次），後續呼叫為 O(1) 零鎖、零查表之原生速度。
+   */
   template <typename Fn, typename... Args>
+    requires std::is_member_pointer_v<std::decay_t<Fn>>
+          && std::invocable<Fn, T&, Args...>
+  decltype(auto) operator()(Fn &&fn, Args &&...args) const
+  {
+    return WithObject(std::forward<Fn>(fn), std::forward<Args>(args)...);
+  }
+
+  template <typename Fn, typename... Args>
+    requires std::is_member_pointer_v<std::decay_t<Fn>>
+          && std::invocable<Fn, T&, Args...>
   decltype(auto) Invoke(Fn &&fn, Args &&...args) const
   {
-    return operator()(std::forward<Fn>(fn), std::forward<Args>(args)...);
+    return WithObject(std::forward<Fn>(fn), std::forward<Args>(args)...);
   }
 
   explicit operator bool() const

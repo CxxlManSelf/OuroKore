@@ -33,6 +33,27 @@ private:
   int m_value = 0;
 };
 
+// Helper types and concepts for Test 20
+struct TestFunctor
+{
+  void operator()(SimpleObject &) {}
+};
+
+struct UnrelatedClass
+{
+  void ForeignMethod() {}
+};
+
+template <typename Ptr, typename Fn, typename... Args>
+concept CanCallOperator = requires(Ptr ptr, Fn fn, Args... args) {
+  ptr(fn, args...);
+};
+
+template <typename Ptr, typename Fn, typename... Args>
+concept CanCallInvoke = requires(Ptr ptr, Fn fn, Args... args) {
+  ptr.Invoke(fn, args...);
+};
+
 // Classes for Test 2 (Parent-Child topology)
 class ChildObject : public ork::Subclass<ChildObject, ork::OuroObject>
 {
@@ -716,7 +737,7 @@ int main()
     // 測試 OwningContainerHandle 跨宿主 Move Assignment 邊緣轉移
     {
       ork::OuroPtr<ParentWithContainer> parent2 = ork::CreateObject<ParentWithContainer>();
-      parent([&](ParentWithContainer &p) { parent2(&ParentWithContainer::MoveChildrenFrom, p); });
+      parent.WithObject([&](ParentWithContainer &p) { parent2(&ParentWithContainer::MoveChildrenFrom, p); });
 
       assert(parent(&ParentWithContainer::GetChildrenCount) == 0);
       assert(parent2(&ParentWithContainer::GetChildrenCount) == 2);
@@ -905,7 +926,7 @@ int main()
 
       // 執行跨宿主移動建構：建立全新 parent2，將 parent1 移動建構進 parent2
       ork::OuroPtr<ParentMoveConstructible> parent2 =
-          parent1([](ParentMoveConstructible &p) {
+          parent1.WithObject([](ParentMoveConstructible &p) {
             return ork::CreateObject<ParentMoveConstructible>(std::move(p));
           });
       parent2_id = parent2.GetTargetID();
@@ -996,7 +1017,42 @@ int main()
     }
     // parent 本身析構 (+1)
   }
-  std::cout << "Test 19 Passed." << std::endl;
+  // Test 20: OuroPtr operator() 與 Invoke() 成員指標 (Member Pointer) 編譯期概念約束防禦測試
+  {
+    std::cout << "Test 20: OuroPtr 成員指標 Concepts 編譯期約束防禦測試..." << std::endl;
+
+    // 1. 編譯期 Concept 判定：禁止傳入 Functor / Lambda
+    static_assert(!CanCallOperator<ork::OuroPtr<SimpleObject>, TestFunctor>,
+                  "OuroPtr operator() 必須在編譯期拒絕任意 Functor 傳入！");
+    static_assert(!CanCallInvoke<ork::OuroPtr<SimpleObject>, TestFunctor>,
+                  "OuroPtr Invoke() 必須在編譯期拒絕任意 Functor 傳入！");
+
+    // 2. 編譯期 Concept 判定：禁止傳入非目標類別（無繼承關係）之成員函式指標
+    static_assert(!CanCallOperator<ork::OuroPtr<SimpleObject>, decltype(&UnrelatedClass::ForeignMethod)>,
+                  "OuroPtr 必須在編譯期拒絕不屬於目標類別的成員函式指標！");
+
+    // 3. 編譯期 Concept 判定：允許受管物件合法成員函式指標
+    static_assert(CanCallOperator<ork::OuroPtr<SimpleObject>, decltype(&SimpleObject::GetValue)>,
+                  "OuroPtr 必須允許合法的目標成員函式指標！");
+    static_assert(CanCallOperator<ork::OuroPtr<SimpleObject>, decltype(&SimpleObject::SetValue), int>,
+                  "OuroPtr 必須允許合法的目標成員函式指標與參數！");
+
+    // 4. 執行期實測：合法成員函式指標運作正確，WithObject 依然支援受信任閉包
+    {
+      ork::OuroPtr<SimpleObject> obj = ork::CreateObject<SimpleObject>();
+      obj(&SimpleObject::SetValue, 777);
+      assert(obj(&SimpleObject::GetValue) == 777);
+      assert(obj.Invoke(&SimpleObject::GetValue) == 777);
+
+      // 受信任通道 WithObject
+      int fetched_via_closure = 0;
+      obj.WithObject([&](SimpleObject &s) {
+        fetched_via_closure = s.GetValue();
+      });
+      assert(fetched_via_closure == 777);
+    }
+    std::cout << "Test 20 Passed." << std::endl;
+  }
 
   std::cout << "\n=== All Tests Passed Successfully! ===" << std::endl;
   return 0;

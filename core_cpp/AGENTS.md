@@ -49,7 +49,7 @@
 > **核心原則：第三方插件僅能使用受管物件與安全查詢，絕不可具備干預系統運作或存取內部細節的能力。**
 
 1. **功能邊界界定**：
-   - 插件**可以使用**：受管物件生命週期句柄（`CreateObject`, `OuroPtr`, `UnboundHandle`，其中 `OuroPtr` 透過 `operator()` 轉發呼叫，嚴禁解引用裸指標）、物件脫水/復水（`Dehydrate`, `Rehydrate`）、**純唯讀無副作用的狀態查詢**（`IsAlive`, `GetStorageState`, `GetRootEdgeCount`, `Is<T>`, `GetTypeID`）。
+   - 插件**可以使用**：受管物件生命週期句柄（`CreateObject`, `OuroPtr`, `UnboundHandle`，其中 `OuroPtr` 透過 `operator()` / `Invoke()` 僅接受成員指標以阻絕 Lambda 閉包外洩裸指標，嚴禁解引用裸指標；進階閉包僅限 `WithObject`）、物件脫水/復水（`Dehydrate`, `Rehydrate`）、**純唯讀無副作用的狀態查詢**（`IsAlive`, `GetStorageState`, `GetRootEdgeCount`, `Is<T>`, `GetTypeID`）。
    - 插件**絕對不可以碰觸**：上述準則一的所有 Host 特權、以及核心內部實作細節。
 2. **標頭檔與目錄防洩漏規則**：
    - 所有公開發布之 `include/` 目錄，**絕不可出現**任何內部私有標頭檔（如 `internal_api.h`）。
@@ -107,4 +107,20 @@
    - 核心所有型別識別碼（`ork_type_id_t`）無論於編譯期 `ork::Subclass` 樣板基底或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，嚴禁各模組自定義重複邏輯。
 3. **脫水墓碑型別查詢零 I/O 保證 (Zero-I/O Dehydration Invariant)**：
    - 控制區塊（ControlBlock）必須長存 `TypeID`，即使記憶體實體脫水落盤釋放，呼叫 `IsAlive()`、`Is<T>()`、`GetTypeID()` 或 C ABI `ork_is_instance_of` 必須保證純記憶體命中，絕不觸發復水與磁碟 I/O。
+
+---
+
+## 應用端文件與 Skill 存放路徑規範 (Application Docs & Skill Path Invariant)
+
+> **⚠️ 核心重要記憶：給應用端看的使用文件與 skill 位於上一層目錄（`../`）！**
+
+未來凡是涉及到對外 API 介面、公開調用語意、範本程式碼或應用端開發避坑指南之變更，**必須強制連動更新上一層目錄之應用端文件**：
+1. **應用端專用 AI 維護與範本 Skill**：`../skills/ourokore-app/SKILL.md`
+2. **應用端使用手冊 (Specs Manual)**：`../specs/manual/`
+   - `01_introduction.md`、`02_quickstart.md`
+   - `03_domain_object_design.md`（領域物件設計與型別系統）
+   - `04_handles_and_topology.md`（句柄、拓撲與 OuroPtr 調用語意）
+   - `05_dehydration_and_storage.md`（脫水與儲存）
+   - `07_api_reference.md`（完整 API 規格手冊）
+3. **技術架構與底層協議 (Specs Technical)**：`../specs/technical/`
 

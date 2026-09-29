@@ -10,7 +10,7 @@
 ## 2. 第三方插件（Plugin/Component）隔離審查
 - **判定要點**：第三方插件是否絕對不可使用？
 - **規範**：
-  - 插件僅能使用受管物件指針（`CreateObject`、`OuroPtr`、`OuroWeakPtr`）、物件脫水落盤，以及**安全唯讀狀態與型別查詢**（`IsAlive`、`GetStorageState`、`GetRootEdgeCount`、`Is<T>`、`GetTypeID`）。
+  - 插件僅能使用受管物件指針（`CreateObject`、`OuroPtr`、`UnboundHandle`，其中 `OuroPtr` 透過 `operator()` 嚴格限定成員指標以杜絕閉包外洩裸指標）、物件脫水落盤，以及**安全唯讀狀態與型別查詢**（`IsAlive`、`GetStorageState`、`GetRootEdgeCount`、`Is<T>`、`GetTypeID`）。
   - 插件絕不可碰觸任何進程級特權或內部實作細節。
   - 公開之 `include/` 目錄絕不可含有內部私有標頭檔（如 `internal_api.h`，必須置於 `core/src/`）。
   - **CMake 建置型別鐵律**：插件庫必須強制使用 `add_library(<name> MODULE ...)` 宣告，嚴禁使用 `SHARED`，防止被其他模組在編譯期靜態鏈結而喪失熱卸載獨立性。

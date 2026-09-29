@@ -16,7 +16,7 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
    - 所有實例化操作一律呼叫 `ork::CreateObject<T>(args...)`，它會回傳棧上安全保護的 `ork::OuroPtr<T>`。
 2. **`OuroPtr<T>` 安全轉發調用機制 (Zero Raw Pointer Guarantee)**：
    - 為杜絕裸指標逃逸與懸垂指標（UAF）漏洞，`OuroPtr` **全面移除 `get()`、`operator->` 與 `operator*`**。
-   - 所有物件調用一律透過安全運算子轉發：`operator()(Fn&&, Args&&...)` 或 `Invoke(...)`。
+   - 所有物件調用一律透過安全運算子轉發：operator()(Fn&&, Args&&...) 或 Invoke(...)。**C++20 編譯期嚴格限制只能傳入成員指標（成員函式或欄位指標）**，排斥任意 Lambda / Functor，杜絕呼叫端透過閉包外洩受管物件裸指標；進階受信任閉包操作由 WithObject 提供。
    - **延遲快取極速執行 (Lazy Pointer Caching)**：`OuroPtr` 持有期間受到 Root Edge 保護，保證物件絕對不會被脫水。內部在首次調用時延遲解析並快取記憶體指標（若脫水則透明復水），後續所有調用繞過核心鎖定機制，直接以 **$O(1)$ 純原生暫存器速度**極速執行。
 3. **三種 Handle 職責分工**：
    - `OwningHandle<T>`：宣告單一子物件插槽（擁有權拓撲邊緣），子物件生命週期由父物件持有。業務圖內部雙向與網狀關聯亦直接使用 `OwningHandle`，充分享受背景 `CycleCollector` 的非同步卸載。
@@ -132,16 +132,16 @@ boss(&Monster::SetHp, 5000);
 // 2. 建立寵物子物件並掛載至槽位
 ork::OuroPtr<Monster> drake = ork::CreateObject<Monster>();
 drake(&Monster::SetName, "幼龍");
-boss([&](Monster &b) { b.m_pet.Set(drake); }); // 由 boss 持有 drake 的擁有權
+boss(&Monster::m_pet).Set(drake); // 直接透過成員指標安全持有 drake 擁有權
 
 // 3. 關聯外部動態 DLL 模組（使用 UnboundHandle，避免釘死動態庫導致無法卸載）
 ork::OuroPtr<ork::OuroObject> dynamic_plugin = LoadPluginFromDll("AIPlugin.dll");
-boss([&](Monster &b) { b.m_plugin_module = dynamic_plugin; });
+boss(&Monster::m_plugin_module) = dynamic_plugin; // 成員指標直接賦值
 
 // 4. 弱引用安全存取 (Anti-Dangling Guard & Decoupled Access)
-ork::OuroPtr<ork::OuroObject> plugin = boss([](Monster &b) {
-    return b.m_plugin_module.LockAndAcquire();
-});
+ork::OuroPtr<ork::OuroObject> plugin = boss(&Monster::m_plugin_module).LockAndAcquire();
+// 亦可使用進階閉包通道：boss.WithObject([](Monster &b) { return b.m_plugin_module.LockAndAcquire(); });
+
 
 if (plugin) {
     // 目標存活且已取得根鎖定，安全執行操作
@@ -285,7 +285,7 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
 
 1. **全面杜絕裸指標解引用 (Zero Raw Pointer Guarantee)**：
    * `OuroPtr<T>` 徹底移除了 `get()`、`operator->` 與 `operator*`，嚴禁任何將裸指標逃逸至 Handle 保護之外的行為。
-   * 一律透過 `operator()(Fn&&, Args&&...)` 或 Lambda 閉包調用，由框架保證生命週期安全並透過內部延遲快取提供原生極速。
+   * 一律透過 operator()(Fn&&, Args&&...) 或 Invoke(...) 調用成員函式或成員欄位（受 C++20 std::is_member_pointer_v 約束，編譯期阻絕 Lambda 閉包偷渡外洩裸指標）；若確有跨步驟複合閉包需求，顯式使用 WithObject，由框架保證生命週期安全並透過內部延遲快取提供原生極速。
 2. **嚴禁在棧上或全域宣告 `OwningHandle<T>`**：
    * `OwningHandle` 僅能作為繼承自 `OuroObject` 的成員變數使用。
    * 棧上與臨時變數請一律使用 `OuroPtr<T>`！違者在 Debug 模式下會觸發 Fail-Fast 斷言拋出例外。

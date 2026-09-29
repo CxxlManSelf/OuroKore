@@ -1,4 +1,4 @@
-# 07. 公開 C++ API 參照手冊 (API Reference)
+﻿# 07. 公開 C++ API 參照手冊 (API Reference)
 
 本手冊彙整 OuroKore 面向應用開發者與宿主主程式之所有公開核心類別與全域介面。
 
@@ -41,7 +41,7 @@
   * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
   * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
   * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
-  * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator()(Fn&&, Args&&...)`, `Invoke(...)`, `operator bool()`, `IsAlive()`, `GetTargetID()`, `Release()`。
+  * OuroPtr<T>：棧上活躍根指標守衛，支援 operator()(Fn&&, Args&&...)、Invoke(...)（受 C++20 std::is_member_pointer_v 約束，僅接受成員函式或欄位指標）、WithObject(Fn&&, Args&&...)（受信任進階閉包通道）、operator bool()、IsAlive()、GetTargetID()、Release()。
     * `template <typename U> bool Is() const`：判定物件是否屬於或繼承自型別 `U`（純記憶體查詢，脫水狀態零 I/O 保證）。
     * `template <typename U> OuroPtr<U> As() const &`：向下/向上安全轉型（左值增持根引用）。
     * `template <typename U> OuroPtr<U> As() &&`：右值移動轉型（**零引用計數開銷**轉移所有權）。

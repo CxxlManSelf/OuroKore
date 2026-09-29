@@ -76,7 +76,7 @@ void test_single_async_save_load()
   assert(static_cast<bool>(res_save));
 
   // 2. 修改記憶體中的活體資料
-  ptr([](AsyncTestEntity &obj) {
+  ptr.WithObject([](AsyncTestEntity &obj) {
     OuroWriteLock lock(obj);
     obj.m_id_val = 999;
     obj.m_tag = "ModifiedTag";
@@ -182,7 +182,7 @@ void test_parallel_batch_operations()
   // 修改所有活體資料
   for (auto &item : batch)
   {
-    item([](AsyncTestEntity &obj) {
+    item.WithObject([](AsyncTestEntity &obj) {
       OuroWriteLock lock(obj);
       obj.m_id_val += 1000;
     });

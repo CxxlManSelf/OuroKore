@@ -126,6 +126,35 @@ ork::OuroPtr<BossMonster> restored = creature_ptr.As<BossMonster>();
 assert(restored);
 ```
 
+### 3. 受管物件呼叫與防逃逸呼叫語法 (Member Pointer Invariant)
+
+> ⚠️ **呼叫語意與防逃逸鐵律**：
+> 為杜絕呼叫端透過裸指標逃逸破壞脫水機制或引發 UAF，`OuroPtr<T>` **徹底移除 `get()` 與 `operator->` 裸指標解引用**。
+> `operator()` 與 `Invoke()` 在 C++20 編譯期**強制限制只能傳入「成員指標」（成員函式或欄位指標）**，任何直接傳入 Lambda / Functor 的行為均會被編譯期 Concepts 攔截阻斷。
+
+```cpp
+auto player = ork::CreateObject<PlayerObject>();
+
+// 1. 成員函式安全調用（原生 O(1) 極速執行）
+player(&PlayerObject::SetHp, 200);
+int hp = player(&PlayerObject::GetHp);
+player.Invoke(&PlayerObject::Attack);
+
+// 2. 成員變數指標安全存取（讀寫公開欄位）
+player(&PlayerObject::m_score) = 999;
+assert(player(&PlayerObject::m_score) == 999);
+
+// 3. ⚠️ 編譯期防禦：operator() 禁止任意 Lambda 閉包（防止私自捕捉裸指標外洩）
+// player([](PlayerObject &p) { ... });  // ❌ 編譯錯誤！Concept 判定失敗
+
+// 4. 受信任進階閉包操作（WithObject）：
+// 僅供跨步驟批次運算或高階內部串流操作，呼叫端需嚴格保證閉包內不逃逸物件裸指標
+player.WithObject([](PlayerObject &p) {
+    p.ApplyBuff();
+    p.SetHp(p.GetHp() * 2);
+});
+```
+
 ---
 
 ## 🧭 核心架構特色
@@ -134,7 +163,7 @@ assert(restored);
    - 透過全域唯一 64-bit `HandleID` 與控制區塊管理物件生命週期。
    - `OwningHandle<T>`：持有圖拓撲的強引用，支援循環參照並由背景 `CycleCollector` 非同步安全回收。
    - `UnboundHandle<T>`：純旁觀者弱引用（只看不管生死），專為外掛模組隨時卸載防卡死、UI 介面暫時觀察與快取索引設計。
-   - `OuroPtr<T>`：棧上與根參照守衛（Root Edge），徹底移除裸指標暴露以防止 UAF 與逃逸，透過 `operator()` 安全轉發成員呼叫，並由內部延遲快取指標在保證不脫水條件下提供原生極速執行。
+   - `OuroPtr<T>`：棧上與根參照守衛（Root Edge），徹底移除裸指標暴露以防止 UAF 與逃逸，透過 `operator()` 與 `Invoke()` 安全轉發成員呼叫（受 C++20 `std::is_member_pointer_v` 約束，僅接受成員函式或欄位指標，阻絕 Lambda 閉包外洩裸指標）；內部延遲快取指標在保證不脫水條件下提供原生極速執行。高階閉包存取由 `WithObject` 顯式提供。
 
 2. **記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)**：
    - 物件生命週期支援 `UnsavedNew`、`Clean`、`Dirty`、`Dehydrated` 四種儲存狀態。

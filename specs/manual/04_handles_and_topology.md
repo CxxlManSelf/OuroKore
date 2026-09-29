@@ -1,4 +1,4 @@
-# 04. Handle 拓撲管理系統 (Handles & Topology)
+﻿# 04. Handle 拓撲管理系統 (Handles & Topology)
 
 OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜的持有、引用與生命週期關係。
 
@@ -147,5 +147,5 @@ ai_instance.reset(); // 底層自動安全執行 FreeLibrary / dlclose
 
 `OuroPtr` 代表活躍的「根引用（Root Edge）」。只要有任何執行緒在棧上持有某物件的 `OuroPtr`：
 * 核心 100% 保證：**該物件絕不會被自動脫水或銷毀！**
-* **安全轉發執行 (Zero Raw Pointer Guarantee)**：徹底拔除 `get()`、`operator->` 與 `operator*`，透過 `operator()(Fn&&, Args&&...)` 或 `Invoke(...)` 調用成員函式、成員欄位或 Lambda 閉包，徹底杜絕裸指標逃逸與 UAF 漏洞。
+* **安全轉發執行 (Zero Raw Pointer Guarantee)**：徹底拔除 get()、operator-> 與 operator*，透過 operator()(Fn&&, Args&&...) 或 Invoke(...) 調用成員函式或成員欄位（受 C++20 std::is_member_pointer_v 編譯期約束，徹底阻絕 Lambda 閉包外洩受管物件裸指標）；若有進階受信任閉包操作，由 WithObject 顯式提供，杜絕裸指標逃逸與 UAF 漏洞。
 * **原生極速延遲快取**：首次呼叫時透明復水並快取記憶體指標，後續呼叫直接以 $O(1)$ 純暫存器/記憶體原生速度執行。

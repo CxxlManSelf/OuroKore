@@ -45,7 +45,7 @@ bool Save(const OuroPtr<T> &ptr)
   }
 
   HandleID id = ptr.GetTargetID();
-  return ptr([id](T &obj) {
+  return ptr.WithObject([id](T &obj) {
     StorageState state = obj.GetStorageState();
     if (state == StorageState::Clean || state == StorageState::Dehydrated)
     {
@@ -85,7 +85,7 @@ bool Load(const OuroPtr<T> &ptr)
   }
 
   HandleID id = ptr.GetTargetID();
-  return ptr([id](T &obj) {
+  return ptr.WithObject([id](T &obj) {
     auto stream = detail::OpenRuntimeReadStream(id);
     if (!stream)
     {

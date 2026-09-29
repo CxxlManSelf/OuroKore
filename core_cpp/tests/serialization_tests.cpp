@@ -232,11 +232,11 @@ void Test2_PurePayload_And_EdgeRoster()
 
   // 1. Test direct BlueprintStream
   ork::BlueprintStream stream1;
-  player([&](PlayerObject &p) { ork::PackBlueprint(p, stream1); });
+  player.WithObject([&](PlayerObject &p) { ork::PackBlueprint(p, stream1); });
   assert(stream1.GetSize() > 0);
 
   auto restored = ork::CreateObject<PlayerObject>();
-  restored([&](PlayerObject &p) { ork::UnpackBlueprint(p, stream1); });
+  restored.WithObject([&](PlayerObject &p) { ork::UnpackBlueprint(p, stream1); });
 
   assert(restored(&PlayerObject::GetHp) == 150);
   assert(restored(&PlayerObject::GetName) == "Excalibur");
@@ -244,11 +244,11 @@ void Test2_PurePayload_And_EdgeRoster()
   // 2. Test direct OuroStream& polymorphic interface
   ork::BlueprintStream direct_stream;
   ork::OuroStream &stream_ref = direct_stream;
-  player([&](PlayerObject &p) { ork::PackBlueprint(p, stream_ref); });
+  player.WithObject([&](PlayerObject &p) { ork::PackBlueprint(p, stream_ref); });
   assert(direct_stream.GetSize() == stream1.GetSize());
 
   auto restored_via_stream = ork::CreateObject<PlayerObject>();
-  restored_via_stream([&](PlayerObject &p) { ork::UnpackBlueprint(p, stream_ref); });
+  restored_via_stream.WithObject([&](PlayerObject &p) { ork::UnpackBlueprint(p, stream_ref); });
   assert(restored_via_stream(&PlayerObject::GetHp) == 150);
   assert(restored_via_stream(&PlayerObject::GetName) == "Excalibur");
 
@@ -478,7 +478,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
   {
     auto parent = ork::CreateObject<ParentCharacter>();
     ork::BlueprintStream stream_valid;
-    parent([&](ParentCharacter &p) { ork::PackBlueprint(p, stream_valid); });
+    parent.WithObject([&](ParentCharacter &p) { ork::PackBlueprint(p, stream_valid); });
     const auto &valid_packed = stream_valid.GetBuffer();
     assert(valid_packed.size() > 8);
 
@@ -490,7 +490,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
     bool unpack_truncated_caught = false;
     try
     {
-      test_target([&](ParentCharacter &p) { ork::UnpackBlueprint(p, truncated_stream); });
+      test_target.WithObject([&](ParentCharacter &p) { ork::UnpackBlueprint(p, truncated_stream); });
     }
     catch (const ork::OuroCorruptedStreamException &ex)
     {
@@ -515,7 +515,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
       bool bomb_caught = false;
       try
       {
-        test_target([&](ParentCharacter &p) { ork::UnpackBlueprint(p, bomb_stream); });
+        test_target.WithObject([&](ParentCharacter &p) { ork::UnpackBlueprint(p, bomb_stream); });
       }
       catch (const ork::OuroCorruptedStreamException &ex)
       {
@@ -542,7 +542,7 @@ void Test6_Stream_Exception_Safety_And_Void_API(ork::HostContext &host)
       bool dup_slot_caught = false;
       try
       {
-        test_target([&](ParentCharacter &p) { ork::UnpackBlueprint(p, dup_slot_stream); });
+        test_target.WithObject([&](ParentCharacter &p) { ork::UnpackBlueprint(p, dup_slot_stream); });
       }
       catch (const ork::OuroDuplicateKeyException &ex)
       {
@@ -697,12 +697,12 @@ void Test7_ThirdParty_Custom_Stream_Implementation()
   CustomThirdPartyStream custom_stream;
 
   // 1. Pack object into third-party custom stream
-  parent([&](ParentCharacter &p) { ork::PackBlueprint(p, custom_stream); });
+  parent.WithObject([&](ParentCharacter &p) { ork::PackBlueprint(p, custom_stream); });
   assert(custom_stream.HasRemainingBytes() == true);
 
   // 2. Unpack into a new instance using third-party custom stream
   auto restored = ork::CreateObject<ParentCharacter>();
-  restored([&](ParentCharacter &p) { ork::UnpackBlueprint(p, custom_stream); });
+  restored.WithObject([&](ParentCharacter &p) { ork::UnpackBlueprint(p, custom_stream); });
 
   assert(restored(&ParentCharacter::GetLevel) == 99);
   assert(restored(&ParentCharacter::m_weapon).GetTargetID() == parent(&ParentCharacter::m_weapon).GetTargetID());
@@ -710,7 +710,7 @@ void Test7_ThirdParty_Custom_Stream_Implementation()
   // 3. ResetCursors and load again into a second instance
   custom_stream.ResetCursors();
   auto restored2 = ork::CreateObject<ParentCharacter>();
-  restored2([&](ParentCharacter &p) { ork::UnpackBlueprint(p, custom_stream); });
+  restored2.WithObject([&](ParentCharacter &p) { ork::UnpackBlueprint(p, custom_stream); });
   assert(restored2(&ParentCharacter::GetLevel) == 99);
 
   std::cout << "  Test 7 Passed!\n" << std::endl;
@@ -1213,7 +1213,7 @@ void Test12_WriteStream_Commit_Rollback_On_Exception(ork::HostContext &host)
   assert(read_val == 100);
 
   // 2. 修改資料為 999，但設定中途拋出例外模擬寫入失敗
-  faulty_obj([](FaultyObject &f) {
+  faulty_obj.WithObject([](FaultyObject &f) {
     ork::OuroWriteLock lock(f);
     f.data = 999;
     f.should_throw = true;
@@ -1415,10 +1415,10 @@ static void Test14_Utf8_Properties_And_Handles_Serialization()
     assert(parent(&Utf8TestParent::m_slot_utf8).GetSlotName() == "裝備槽_右手");
 
     ork::BlueprintStream stream;
-    parent([&](Utf8TestParent &p) { ork::PackBlueprint(p, stream); });
+    parent.WithObject([&](Utf8TestParent &p) { ork::PackBlueprint(p, stream); });
 
     auto restored_parent = ork::CreateObject<Utf8TestParent>();
-    restored_parent([&](Utf8TestParent &p) { ork::UnpackBlueprint(p, stream); });
+    restored_parent.WithObject([&](Utf8TestParent &p) { ork::UnpackBlueprint(p, stream); });
 
     assert(restored_parent(&Utf8TestParent::m_u8_desc) == u8"這是C++20原生UTF8描述");
     assert(restored_parent(&Utf8TestParent::m_str_title) == "傳奇之劍");
