@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "ourokore/base/DynamicLibrary.hpp"
 #include "ourokore/base/ThreadPool.hpp"
 #include "ourokore/c_api/core.h"
 #include "ourokore/c_api/host_api.h"
@@ -59,5 +60,15 @@ ORK_API std::shared_ptr<IAutoDehydrator> GetRuntimeAutoDehydrator();
  * @brief Get the process-wide core thread pool instance (Host-only access).
  */
 ORK_API std::shared_ptr<ork::base::FixedThreadPool> GetRuntimeThreadPool();
+
+/**
+ * @brief Bind a DynamicLibrary module loader to a target object's ControlBlock (Host-only).
+ */
+ORK_API bool SetRuntimeObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader);
+
+/**
+ * @brief Get the DynamicLibrary module loader from a target object's ControlBlock (Host-only).
+ */
+ORK_API ork::DynamicLibrary GetRuntimeObjectModuleLoader(HandleID id);
 
 }  // namespace ork::detail

@@ -10,9 +10,30 @@
 #include "ourokore/component/IStorageDriver.hpp"
 #include "ourokore/component/Types.hpp"
 #include "ourokore/host/HostRuntimeAPI.hpp"
+#include "ourokore/host/IObjectModuleBinder.hpp"
 
 namespace ork
 {
+
+namespace detail
+{
+class ObjectModuleBinderImpl : public IObjectModuleBinder
+{
+public:
+  void SetObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader) override
+  {
+    if (!detail::SetRuntimeObjectModuleLoader(id, loader))
+    {
+      throw std::runtime_error("OuroKore Host Error: Failed to bind DynamicLibrary loader to target object.");
+    }
+  }
+
+  ork::DynamicLibrary GetObjectModuleLoader(HandleID id) const override
+  {
+    return detail::GetRuntimeObjectModuleLoader(id);
+  }
+};
+}  // namespace detail
 
 /**
  * @brief OuroKore 宿主控制物件（HostContext）
@@ -27,7 +48,7 @@ namespace ork
  *
  * 本物件具備 Move-only 語意與 RAII 生命週期管理，解構時會自動安全執行優雅終止（Shutdown）。
  */
-class HostContext
+class HostContext : public IObjectModuleBinder
 {
 public:
   // 僅供 ork::Init() 內部建構，外部不可隨意自行偽造主控權限
@@ -255,6 +276,51 @@ public:
     int32_t has_more = 0;
     ork_trigger_dehydration_rescue(bytes_needed, &freed, &has_more);
     return freed;
+  }
+
+  /**
+   * @brief 綁定模組載入器（DynamicLibrary）至受管物件之控制區塊（宿主特權）
+   *
+   * 【生命週期反向錨定鐵律】
+   * 只要該物件之 ControlBlock 存活（即使處於脫水 Dehydrated 墓碑狀態），
+   * 該動態庫模組即保證不被卸載，確保未來透明復水時之 RehydrateCallback 與銷毀時之 DestroyFn 代碼段絕對有效。
+   * 當 ControlBlock 徹底銷毀時，自動隨物件解構釋放該 DynamicLibrary（若引用歸零則底層自動安全觸發 FreeLibrary/dlclose）。
+   *
+   * @param id 目標受管物件 HandleID
+   * @param loader 動態庫載入器實例
+   */
+  void SetObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader) override
+  {
+    CheckOwner();
+    if (!detail::SetRuntimeObjectModuleLoader(id, loader))
+    {
+      throw std::runtime_error("OuroKore Host Error: Failed to bind DynamicLibrary loader to target object.");
+    }
+  }
+
+  /**
+   * @brief 取得目標物件綁定之模組載入器（宿主特權）
+   * @param id 目標受管物件 HandleID
+   * @return 若有綁定傳回 DynamicLibrary 實例；若未綁定或物件不存在傳回空實例
+   */
+  ork::DynamicLibrary GetObjectModuleLoader(HandleID id) const override
+  {
+    CheckOwner();
+    return detail::GetRuntimeObjectModuleLoader(id);
+  }
+
+  /**
+   * @brief 取得專用模組綁定介面（最小特權原則，Interface Segregation Principle）
+   *
+   * 允許宿主將此專用介面安全轉交給負責動態庫載入的專職單元（如 PluginManager、ComponentFactory），
+   * 賦予其為受管物件綁定動態庫以錨定生命週期的能力，同時杜絕整個 HostContext 外洩所帶來的停機、GC 等破壞性特權風險。
+   *
+   * @return 具備模組載入器綁定能力之介面指標 std::shared_ptr<IObjectModuleBinder>
+   */
+  std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const
+  {
+    CheckOwner();
+    return std::make_shared<detail::ObjectModuleBinderImpl>();
   }
 
   // =========================================================================

@@ -5,6 +5,7 @@
 #include "ourokore/c_api/host_api.h"
 #include "internal_api.h"
 
+#include "ControlBlock.h"
 #include "CycleCollector.h"
 #include "DeferredDeleteQueue.h"
 #include "Registry.h"
@@ -1027,6 +1028,29 @@ void RollbackRuntimeObjectID(HandleID id)
 void MarkRuntimeObjectClean(HandleID id)
 {
   ork::internal::SetStorageState(id, 1);  // 1 = StorageState::Clean
+}
+
+bool SetRuntimeObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader)
+{
+  auto *cb = ork::Registry::GetInstance().GetControlBlock(id);
+  if (!cb)
+  {
+    return false;
+  }
+  std::unique_lock<std::shared_mutex> lock(cb->m_rw_lock);
+  cb->m_module_loader = loader;
+  return true;
+}
+
+ork::DynamicLibrary GetRuntimeObjectModuleLoader(HandleID id)
+{
+  auto *cb = ork::Registry::GetInstance().GetControlBlock(id);
+  if (!cb)
+  {
+    return {};
+  }
+  std::shared_lock<std::shared_mutex> lock(cb->m_rw_lock);
+  return cb->m_module_loader;
 }
 
 }  // namespace ork::detail

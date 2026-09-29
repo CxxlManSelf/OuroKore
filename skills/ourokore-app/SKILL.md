@@ -33,6 +33,10 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
    - 載入器不提供手動 `unload()` 介面，以防提早手動卸載引發 vtable/代碼段失效與 Crash。
    - 應用端應將動態庫「產生的物件」與動態庫建立生命週期綁定（透過 `bind_lifecycle()` 或 Deleter 閉包捕捉 `DynamicLibrary` 實例），當產生的物件全數解構後自動在底層卸載。
    - ⚠️ **關鍵約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若呼叫端不放棄此回傳值變數（如長存於成員/全域變數、或外層未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！呼叫端必須主動放棄該初始句柄，將存活權杖全權交給產生的物件。
+   - 🛡️ **脫水換頁安全保證（宿主錨定 Invariant）**：
+     若動態外掛生成的領域物件會參與自動脫水（Dehydration），宿主主程式應使用特權方法 `host.SetObjectModuleLoader(obj.GetTargetID(), plugin_dll)`，將動態庫直接錨定於受管物件的 ControlBlock 墓碑中。如此即便物件 Payload 脫水釋放，ControlBlock 墓碑依然長存持有動態庫引用，保證未來透明復水（`RehydrateCallback`）或銷毀時代碼段 100% 有效，絕不因提早卸載而崩潰！
+   - 🛡️ **專職單元權限委派（IObjectModuleBinder 介面隔離）**：
+     若動態庫載入與物件生成由專門的模組管理單元（如 `PluginManager`）負責，主程式切勿傳遞完整的 `HostContext`（避免外洩 `Shutdown`、`FlushStorage` 等全域特權）。應透過 `host.GetModuleBinder()` 取得輕量之 `std::shared_ptr<ork::IObjectModuleBinder>` 交給專職單元，貫徹最小特權原則（Least Privilege）。
 
 ---
 

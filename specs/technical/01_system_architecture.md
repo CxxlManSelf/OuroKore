@@ -88,6 +88,10 @@ OuroKore 系統嚴格劃分三大權限與職責邊界，貫徹「**C ABI 為底
 
 #### 物件銷毀與墓碑清理準則：
 * **進入墓碑態 (Tombstone)**：當 `strong_in_count == 0` 且 `root_count == 0` 時，若 `unbound_count > 0`，物件 Payload 立即銷毀，但保留 ControlBlock 墓碑，阻斷提升並觸發惰性修剪。
+* **脫水墓碑與外掛模組錨定 (Dehydrated Tombstone & Module Loader Retention)**：
+  在自動脫水換頁（Dehydration）機制下，物件 Payload 記憶體被釋放時，其 ControlBlock 墓碑依然長存於核心註冊表中。若該物件由動態外掛載入器建立，ControlBlock 內部之 `m_module_loader`（`DynamicLibrary`）將長存持有外掛動態庫的引用計數，確保脫水期間外掛 DLL 絕不被提前卸載，保證後續透明復水（`RehydrateCallback`）之代碼段始終安全有效。
+  * **最小特權介面隔離 (IObjectModuleBinder Delegate)**：
+    為遵循介面隔離原則，宿主可透過 `host.GetModuleBinder()` 產出純粹具備動態庫綁定能力之 `IObjectModuleBinder` 介面委派給專職外掛管理器（PluginManager），避免外洩進程級生命週期控制特權。
 * **徹底釋放 (Complete Free)**：當 `strong_in_count == 0`、`root_count == 0` 且 `unbound_count == 0` 時，ControlBlock 自全域註冊表徹底註銷並釋放記憶體。
 
 ---

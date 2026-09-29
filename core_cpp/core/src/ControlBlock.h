@@ -5,6 +5,7 @@
 #include <shared_mutex>
 #include <vector>
 
+#include "ourokore/base/DynamicLibrary.hpp"
 #include "ourokore/component/OuroObject.hpp"
 
 namespace ork
@@ -35,6 +36,9 @@ struct ControlBlock
 
   // In-place deleter callback function pointer (executes in creating module's CRT)
   DestroyFn m_destroy_fn{nullptr};
+
+  // 動態模組載入器（生命週期反向錨定：只要 ControlBlock 存活，即使脫水 DLL 亦保證不被卸載）
+  DynamicLibrary m_module_loader;
 
   // Owner ID Roster for Upstream Cycle Search
   std::vector<HandleID> m_owners;

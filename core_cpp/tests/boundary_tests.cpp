@@ -76,6 +76,10 @@ int main()
   test_unauthorized([&]() { plugin_host.SetStorageDriver(plugin_storage); }, "SetStorageDriver");
   test_unauthorized([&]() { plugin_host.GetStorageDriver(); }, "GetStorageDriver");
   test_unauthorized([&]() { plugin_host.GetThreadPool(); }, "GetThreadPool");
+  ork::DynamicLibrary dummy_loader;
+  test_unauthorized([&]() { plugin_host.SetObjectModuleLoader(1, dummy_loader); }, "SetObjectModuleLoader");
+  test_unauthorized([&]() { plugin_host.GetObjectModuleLoader(1); }, "GetObjectModuleLoader");
+  test_unauthorized([&]() { plugin_host.GetModuleBinder(); }, "GetModuleBinder");
 
   // 5. 驗證第三方外掛雖無特權，但正常業務功能（物件建立、CRUD、Save/Load）完全不受影響
   auto item = ork::CreateObject<PluginItem>();
@@ -91,9 +95,70 @@ int main()
 
   // 原物件已轉移，呼叫轉移後的舊物件亦會拋出例外
   test_unauthorized([&]() { host.FlushStorage(); }, "FlushStorage on Moved-from HostContext");
+  test_unauthorized([&]() { host.SetObjectModuleLoader(item.GetTargetID(), dummy_loader); }, "SetObjectModuleLoader on Moved-from HostContext");
+  test_unauthorized([&]() { host.GetModuleBinder(); }, "GetModuleBinder on Moved-from HostContext");
 
   // 新物件正常執行特權操作
   moved_host.FlushStorage();
+
+  // 6.1 驗證 HostContext::SetObjectModuleLoader 與脫水墓碑長存
+  {
+    ork::DynamicLibrary loader;
+    auto dll_path = ork::DynamicLibrary::format_filename("test_plugin_dll");
+    if (std::filesystem::exists(dll_path))
+    {
+      loader.load(dll_path);
+    }
+    moved_host.SetObjectModuleLoader(item.GetTargetID(), loader);
+    auto retrieved = moved_host.GetObjectModuleLoader(item.GetTargetID());
+    assert(retrieved.is_loaded() == loader.is_loaded());
+    if (loader.is_loaded())
+    {
+      assert(retrieved.use_count() >= 2);
+    }
+
+    // 脫水測試：驗證物件脫水 Payload 釋放後，墓碑依然持有 loader
+    assert(ork::Dehydrate(item) == true);
+    assert(ork::GetStorageState(item) == ork::StorageState::Dehydrated);
+    auto dehydrated_loader = moved_host.GetObjectModuleLoader(item.GetTargetID());
+    assert(dehydrated_loader.is_loaded() == loader.is_loaded());
+    if (loader.is_loaded())
+    {
+      assert(dehydrated_loader.use_count() >= 2);
+    }
+    std::cout << "  -> HostContext 模組載入器特權綁定與脫水墓碑長存驗證通過。" << std::endl;
+  }
+
+  // 6.2 驗證 IObjectModuleBinder 專職介面委派（最小特權原則）
+  {
+    // 取得受限之專用模組綁定介面
+    std::shared_ptr<ork::IObjectModuleBinder> binder = moved_host.GetModuleBinder();
+    assert(binder != nullptr);
+
+    // 模擬專職單元（如 PluginManager），只接收 IObjectModuleBinder
+    auto mock_plugin_worker = [](ork::IObjectModuleBinder &b, ork::HandleID target_id) {
+      ork::DynamicLibrary worker_loader;
+      auto dll_path = ork::DynamicLibrary::format_filename("test_plugin_dll");
+      if (std::filesystem::exists(dll_path))
+      {
+        worker_loader.load(dll_path);
+      }
+      b.SetObjectModuleLoader(target_id, worker_loader);
+      auto retrieved = b.GetObjectModuleLoader(target_id);
+      assert(retrieved.is_loaded() == worker_loader.is_loaded());
+    };
+
+    auto worker_item = ork::CreateObject<PluginItem>();
+    mock_plugin_worker(*binder, worker_item.GetTargetID());
+
+    // 脫水驗證：透過專職介面設定的模組載入器同樣長存於墓碑
+    assert(ork::Dehydrate(worker_item) == true);
+    auto after_dehydrate = binder->GetObjectModuleLoader(worker_item.GetTargetID());
+    auto orig_loader = moved_host.GetObjectModuleLoader(worker_item.GetTargetID());
+    assert(after_dehydrate.is_loaded() == orig_loader.is_loaded());
+
+    std::cout << "  -> IObjectModuleBinder 專職單元介面委派與特權收斂驗證通過。" << std::endl;
+  }
   std::cout << "  -> HostContext 移動語意與所有權轉移安全驗證通過。" << std::endl;
 
   // 7. 優雅終止

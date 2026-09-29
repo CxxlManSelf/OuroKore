@@ -18,6 +18,21 @@
   * `void SetStorageDriver(std::shared_ptr<IStorageDriver>)`：設定儲存驅動。
   * `std::shared_ptr<IStorageDriver> GetStorageDriver() const`：取得當前儲存驅動。
   * `size_t TriggerDehydrationRescue(size_t bytes_needed)`：緊急脫水指定位元組數。
+  * `void SetObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader)`：為特定受管物件綁定動態外掛載入器，錨定動態庫生命週期於 ControlBlock 墓碑中，杜絕脫水時動態庫提前卸載引發復水崩潰。
+  * `ork::DynamicLibrary GetObjectModuleLoader(HandleID id) const`：取得目標受管物件當前綁定之動態外掛載入器。
+  * `std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const`：取得專用模組綁定介面，實現最小特權原則委派。
+  * `void Reset()`：復位核心初始化狀態（支援軟重啟與測試套件切換）。
+  * `void SetObjectDestroyedCallback(void (*callback)(HandleID id))`：設定全域物件銷毀監聽回呼。
+  * `uint64_t GetDeferredDeletePendingCount() const`：取得當前排隊等待物理銷毀之任務數量。
+
+---
+
+## 🧩 1.1 專用模組綁定介面：`ork::IObjectModuleBinder`
+* **標頭檔**：`ourokore/host/IObjectModuleBinder.hpp`
+* **說明**：專為專職外掛管理單元（如 PluginManager）設計之輕量權限介面，遵循介面隔離原則（ISP）與最小特權原則。
+* **方法**：
+  * `virtual void SetObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader) = 0`：為目標物件錨定動態庫生命週期。
+  * `virtual ork::DynamicLibrary GetObjectModuleLoader(HandleID id) const = 0`：取得目標物件當前綁定之動態庫載入器。
 
 ---
 
