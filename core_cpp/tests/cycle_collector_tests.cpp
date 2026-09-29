@@ -5,7 +5,7 @@
 
 static std::atomic<int> g_cycle_node_dtor{0};
 
-class CycleNode : public ork::OuroObject
+class CycleNode : public ork::Subclass<CycleNode, ork::OuroObject>
 {
 public:
   CycleNode() = default;

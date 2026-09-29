@@ -1,4 +1,4 @@
----
+﻿---
 name: ourokore-app
 description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔助開發技能。提供自訂 OuroObject 物件設計、Handle 拓撲管理、OuroPtr 安全運算子轉發調用 (operator())、執行緒安全讀寫鎖（OuroReadLock/OuroWriteLock）、藍圖打包序列化、LRU 自動換頁脫水配置，以及避坑最佳實踐與實戰程式碼範本。"
 ---
@@ -38,15 +38,23 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
 
 ## 📝 2. 自訂領域物件開發範本 (Standard Component Template)
 
-所有領域物件必須繼承自 `ork::OuroObject`，並推薦使用 **Setter + OuroWriteLock** 確保多執行緒安全：
+> ⚠️ **全面嚴格強制宣告鐵律 (Strict Subclass Invariant)**：
+> 凡是交由 OuroKore 託管的領域物件（透過 `ork::CreateObject<T>()` 建立者），**一律強制繼承自 `ork::Subclass<T, Base = ork::OuroObject>`**。
+> **嚴格禁止直接裸繼承 `OuroObject`**（如 `class Foo : public OuroObject`）；若直接繼承，`CreateObject<Foo>()` 將於編譯期觸發 `static_assert` 攔截阻斷。
+> 
+> - **零巨集干擾**：類別體內部無需撰寫任何巨集，單一真實來源。
+> - **編譯期型別名稱萃取**：C++20 自動從編譯器符號解析短名稱（如 `"Monster"`），永不產生 mangled 雜亂字串。
+> - **支援多層繼承與建構子轉發**：子類別可直接以 `Subclass(...)` 將參數完美轉發給父類別與祖父類別。
 
 ```cpp
 #include <ourokore/component/OuroCore.hpp>
 #include <string>
 
-class Monster : public ork::OuroObject {
-    ORK_OBJECT(Monster, ork::OuroObject)
+// 1. 基底受管物件（預設 Base 為 ork::OuroObject）
+class Monster : public ork::Subclass<Monster, ork::OuroObject> {
 public:
+    Monster() = default;
+    explicit Monster(int32_t hp) : m_hp(hp) {}
     // 拓撲槽位：持有單一寵物子物件擁有權
     ork::OwningHandle<Monster> m_pet{"PetSlot"};
 
@@ -293,7 +301,7 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
    * 所有動態插件（透過 `DynamicLibrary` 動態載入之模組）在 CMake 中**必須使用 `add_library(<name> MODULE ...)`**，嚴格禁止宣告為 `SHARED`！
    * 宣告為 `SHARED` 會生成導入庫，極易被其他模組在編譯期誤鏈結（Mislink），徹底破壞插件的熱卸載與生命週期隔離。
 7. **全域 TypeID 雜湊標準統一 (Fnv1a64 Invariant)**：
-   * 領域物件型別定義一律使用 `ORK_OBJECT` 巨集；若需自訂常數識別碼，一律統一使用 `ork::base::Fnv1a64` 或字面量 `_fnv64`，嚴禁自寫重複雜湊邏輯。
+   * 領域物件型別定義一律繼承自 `ork::Subclass<Derived, Base>` 樣板基底；若需自訂常數識別碼，一律統一使用 `ork::base::Fnv1a64` 或字面量 `_fnv64`，嚴禁自寫重複雜湊邏輯。
 8. **動態庫載入器生命週期反向錨定與自動卸載鐵律 (DynamicLibrary Invariant)**：
    * `DynamicLibrary` 禁絕提供手動 `unload()` 方法，以防虛擬函式表與代碼段提前失效引發崩潰。
    * 正確用法是透過 `lib.bind_lifecycle(raw, deleter)` 或 Deleter 閉包將產生的物件與動態庫綁定，待物件全數銷毀後由底層自動卸載。

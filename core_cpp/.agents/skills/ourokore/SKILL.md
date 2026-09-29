@@ -81,17 +81,26 @@ assert(host.IsValid());
 // host 遵循 RAII 自動生命週期管理，離開作用域時解構式會自動觸發優雅關閉（Shutdown），無需且不建議手動呼叫。
 ```
 
-### 2.2 定義受管物件與型別宣告 (Inherit OuroObject & ORK_OBJECT)
-所有受管物件必須繼承自 `ork::OuroObject`，並推薦使用 `ORK_OBJECT(ClassName, ParentClassName)` 巨集自動註冊型別階層：
+### 2.2 定義受管物件與型別宣告 (Strict Subclass Invariant)
+> ⚠️ **全面嚴格強制宣告鐵律**：
+> 凡是交由 OuroKore 託管的物件（需透過 `ork::CreateObject<T>()` 建立者），**一律強制繼承自 `ork::Subclass<T, Base = ork::OuroObject>`**。
+> **嚴格禁止直接裸繼承 `OuroObject`**（如 `class Foo : public OuroObject`）；若直接繼承，`CreateObject<Foo>()` 將於編譯期觸發 `static_assert` 攔截阻斷。
+> 
+> - **零巨集干擾**：類別體內部無需撰寫任何巨集，單一真實來源（Single Source of Truth）。
+> - **編譯期型別名稱萃取**：C++20 自動從符號解析短名稱（如 `"Monster"`），永不產生 mangled 雜亂字串。
+> - **支援多層繼承與建構子轉發**：子類別可直接以 `Subclass(...)` 將參數完美轉發給父類別與祖父類別。
 
 ```cpp
 #include <ourokore/component/OuroCore.hpp>
 
-class Monster : public ork::OuroObject {
-    ORK_OBJECT(Monster, ork::OuroObject)
+// 1. 基底受管物件（預設 Base 為 ork::OuroObject）
+class Monster : public ork::Subclass<Monster, ork::OuroObject> {
 public:
     ork::OwningHandle<Monster>          m_minion{"MinionSlot"};
     ork::UnboundHandle<ork::OuroObject> m_plugin_module; // 無繫結引用，防止釘死動態 DLL 模組非同步卸載
+
+    Monster() = default;
+    explicit Monster(int32_t hp) : m_hp(hp) {}
 
     int32_t GetHp() const { ork::OuroReadLock lock(*this); return m_hp; }
     void SetHp(int32_t hp) { ork::OuroWriteLock lock(*this); m_hp = hp; }
@@ -106,6 +115,16 @@ public:
 
 private:
     int32_t m_hp{100};
+};
+
+// 2. 衍生孫類別（多層繼承時將 Base 指定為 Monster，支援帶參建構子轉發）
+class BossMonster : public ork::Subclass<BossMonster, Monster> {
+public:
+    BossMonster() = default;
+    BossMonster(int32_t hp, std::string skill) 
+        : Subclass(hp), m_special_skill(std::move(skill)) {}
+
+    std::string m_special_skill{"Meteor"};
 };
 ```
 
@@ -183,7 +202,7 @@ ork::base::HashCombine(combined, obj_id, slot_name, timestamp);
 5. **外掛模組建置規範 (Plugin MODULE Target Invariant)**：
    - 任何專案內部的測試動態外掛（如 `test_plugin_dll`）或第三方 Component 範例，在 CMake 中必須統一使用 `add_library(<name> MODULE ...)` 並清除前綴（`PREFIX ""`），嚴禁編譯為可被靜態鏈結的 `SHARED` 導入庫，以維持執行期動態加載的純淨隔離性。
 6. **全域 TypeID 雜湊標準統一 (Fnv1a64 Invariant)**：
-   - 核心所有型別唯一碼（`ork_type_id_t`）、編譯期 `ORK_OBJECT` 巨集、執行期字串型別註冊與查詢，**一律統一採用 `ork::base::Fnv1a64` 計算**。嚴禁在核心不同模組或外掛中各搞一套手寫雜湊邏輯，確保跨模組與脫水反序列化識別碼 100% 絕對一致。
+   - 核心所有型別唯一碼（`ork_type_id_t`）、編譯期 `ork::Subclass` 樣板基底、執行期字串型別註冊與查詢，**一律統一採用 `ork::base::Fnv1a64` 計算**。嚴禁在核心不同模組或外掛中各搞一套手寫雜湊邏輯，確保跨模組與脫水反序列化識別碼 100% 絕對一致。
 
 ---
 

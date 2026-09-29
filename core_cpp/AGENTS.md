@@ -104,7 +104,7 @@
    - `ourokore_base` 僅提供零依賴、高效能且相容 C++20 `constexpr` 之現代系統基礎設施（執行緒池、同步原語、動態庫載入器、標準雜湊演算法 `Hash.hpp`）。
    - 基礎層嚴格禁止逆向依賴 `ourokore_core`，確保通用工具庫可獨立被任何宿主或外掛共用。
 2. **全域唯一 TypeID 雜湊標準**：
-   - 核心所有型別識別碼（`ork_type_id_t`）無論於編譯期巨集（`ORK_OBJECT`）或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，嚴禁各模組自定義重複邏輯。
+   - 核心所有型別識別碼（`ork_type_id_t`）無論於編譯期 `ork::Subclass` 樣板基底或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，嚴禁各模組自定義重複邏輯。
 3. **脫水墓碑型別查詢零 I/O 保證 (Zero-I/O Dehydration Invariant)**：
    - 控制區塊（ControlBlock）必須長存 `TypeID`，即使記憶體實體脫水落盤釋放，呼叫 `IsAlive()`、`Is<T>()`、`GetTypeID()` 或 C ABI `ork_is_instance_of` 必須保證純記憶體命中，絕不觸發復水與磁碟 I/O。
 

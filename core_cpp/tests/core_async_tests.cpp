@@ -9,7 +9,7 @@
 
 using namespace ork;
 
-class AsyncTestEntity : public ork::OuroObject
+class AsyncTestEntity : public ork::Subclass<AsyncTestEntity, ork::OuroObject>
 {
 public:
   int m_id_val{0};
@@ -35,7 +35,7 @@ public:
   }
 };
 
-class AsyncEntityContainer : public ork::OuroObject
+class AsyncEntityContainer : public ork::Subclass<AsyncEntityContainer, ork::OuroObject>
 {
 public:
   ork::OwningHandle<AsyncTestEntity> m_child{"child"};
@@ -46,12 +46,12 @@ public:
   void DeserializePayload(OuroStream &) override {}
 };
 
-class AsyncDerivedEntity : public AsyncTestEntity
+class AsyncDerivedEntity : public ork::Subclass<AsyncDerivedEntity, AsyncTestEntity>
 {
 public:
   AsyncDerivedEntity() = default;
   AsyncDerivedEntity(int id_val, std::string tag, double extra) :
-      AsyncTestEntity(id_val, std::move(tag)),
+      Subclass(id_val, std::move(tag)),
       m_extra(extra)
   {
   }

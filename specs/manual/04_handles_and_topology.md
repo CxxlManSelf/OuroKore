@@ -20,7 +20,7 @@ OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜�
 `OwningHandle` 代表父物件對子物件的擁有權。宣告時**必須傳入唯一的插槽名稱（Slot Name）**，物件建構時會自動向底層名冊登記：
 
 ```cpp
-class Boss : public ork::OuroObject {
+class Boss : public ork::Subclass<Boss, ork::OuroObject> {
 public:
     // 自動向 Boss 註冊名為 "MinionSlot" 的邊緣，支援 C++20 UTF-8 字面量與中文槽位
     ork::OwningHandle<Monster> m_minion{u8"隨從槽位_左"};
@@ -82,7 +82,7 @@ public:
 因為對方隨時可能離開，你不能直接拿它來操作。每次要用的時候，只要做一件事：
 
 ```cpp
-class CombatSystem : public ork::OuroObject {
+class CombatSystem : public ork::Subclass<CombatSystem, ork::OuroObject> {
 public:
     // 旁觀者句柄：只記住模組號碼，不干涉其生死
     ork::UnboundHandle<ork::OuroObject> m_ai_module;

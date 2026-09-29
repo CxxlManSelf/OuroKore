@@ -59,6 +59,75 @@ set_target_properties(MyPlugin PROPERTIES
 
 ---
 
+## 🚀 應用端受管物件開發規範 (Managed Object Definition)
+
+> ⚠️ **全面嚴格強制宣告鐵律 (Strict Subclass Invariant)**：
+> 凡是交由 OuroKore 託管的物件（需透過 `ork::CreateObject<T>()` 建立者），**一律強制繼承自 `ork::Subclass<T, Base = ork::OuroObject>`**。
+> **嚴格禁止直接裸繼承 `OuroObject`**（如 `class Foo : public OuroObject`）；若直接繼承，`CreateObject<Foo>()` 將於編譯期觸發 `static_assert` 攔截阻斷。
+
+### 1. 基礎宣告與多層繼承範例（零巨集、單一真實來源）
+```cpp
+#include <ourokore/component/OuroCore.hpp>
+
+// 1. 基底受管物件（預設 Base 為 ork::OuroObject）
+class Creature : public ork::Subclass<Creature, ork::OuroObject>
+{
+public:
+  int m_hp{100};
+
+  Creature() = default;
+  explicit Creature(int hp) : m_hp(hp) {}
+
+  void SerializePayload(ork::OuroStream &stream) const override {
+    stream.WriteProperty("hp", m_hp);
+  }
+  void DeserializePayload(ork::OuroStream &stream) override {
+    stream.ReadProperty("hp", m_hp);
+  }
+};
+
+// 2. 衍生子類別（將 Base 指定為 Creature，支援建構子完美轉發）
+class Monster : public ork::Subclass<Monster, Creature>
+{
+public:
+  int m_rage{50};
+
+  Monster() = default;
+  Monster(int hp, int rage) : Subclass(hp), m_rage(rage) {}
+};
+
+// 3. 衍生孫類別（曾孫類別多層繼承無縫串接）
+class BossMonster : public ork::Subclass<BossMonster, Monster>
+{
+public:
+  std::string m_special{"Meteor"};
+
+  BossMonster() = default;
+  BossMonster(int hp, int rage, std::string special)
+      : Subclass(hp, rage), m_special(std::move(special)) {}
+};
+```
+
+### 2. 多型型別檢查與安全轉型
+```cpp
+auto boss = ork::CreateObject<BossMonster>(5000, 200, "Supernova");
+
+// 1. 多型繼承判定（零 I/O、純 ControlBlock 墓碑命中）
+assert(boss.Is<BossMonster>());
+assert(boss.Is<Monster>());
+assert(boss.Is<Creature>());
+assert(boss.Is<ork::OuroObject>());
+
+// 2. 向上轉型（Upcasting 到祖父 OuroPtr）
+ork::OuroPtr<Creature> creature_ptr = boss.As<Creature>();
+
+// 3. 向下轉型（Downcasting 回 BossMonster）
+ork::OuroPtr<BossMonster> restored = creature_ptr.As<BossMonster>();
+assert(restored);
+```
+
+---
+
 ## 🧭 核心架構特色
 
 1. **控制區塊與 Handle 代數系統 (ControlBlock & Handle System)**：

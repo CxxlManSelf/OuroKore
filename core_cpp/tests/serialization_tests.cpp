@@ -13,7 +13,7 @@
 static int g_deconstruct_count = 0;
 
 // Simple test component
-class PlayerObject : public ork::OuroObject
+class PlayerObject : public ork::Subclass<PlayerObject, ork::OuroObject>
 {
 public:
   PlayerObject() = default;
@@ -69,7 +69,7 @@ private:
   std::string m_name = "DefaultHero";
 };
 
-class WeaponObject : public ork::OuroObject
+class WeaponObject : public ork::Subclass<WeaponObject, ork::OuroObject>
 {
 public:
   WeaponObject() = default;
@@ -110,7 +110,7 @@ private:
   int32_t m_damage = 50;
 };
 
-class ParentCharacter : public ork::OuroObject
+class ParentCharacter : public ork::Subclass<ParentCharacter, ork::OuroObject>
 {
 public:
   ParentCharacter()
@@ -151,7 +151,7 @@ private:
   int32_t m_level = 10;
 };
 
-class WorldObject : public ork::OuroObject
+class WorldObject : public ork::Subclass<WorldObject, ork::OuroObject>
 {
 public:
   WorldObject()
@@ -174,7 +174,7 @@ public:
 };
 
 // Duplicate property key object for Fail-Fast test
-class DupKeyObject : public ork::OuroObject
+class DupKeyObject : public ork::Subclass<DupKeyObject, ork::OuroObject>
 {
 public:
   void SerializePayload(ork::OuroStream &stream) const override
@@ -1167,7 +1167,7 @@ void Test11_AutoDehydrator_Plugin_And_Core_Communication(ork::HostContext &host)
   std::cout.flush();
 }
 
-class FaultyObject : public ork::OuroObject
+class FaultyObject : public ork::Subclass<FaultyObject, ork::OuroObject>
 {
 public:
   bool should_throw = false;
@@ -1314,7 +1314,7 @@ void Test13_Object_Deletion_Notification_Under_Unbound_References(ork::HostConte
   std::cout << "  -> 無繫結句柄存活情境下之邏輯銷毀通知（Dehydrator 與 Storage 清理）驗證成功！\n" << std::endl;
 }
 
-class Utf8TestChild : public ork::OuroObject
+class Utf8TestChild : public ork::Subclass<Utf8TestChild, ork::OuroObject>
 {
 public:
   std::string m_tag{"ChildTag"};
@@ -1328,7 +1328,7 @@ public:
   }
 };
 
-class Utf8TestParent : public ork::OuroObject
+class Utf8TestParent : public ork::Subclass<Utf8TestParent, ork::OuroObject>
 {
 public:
   ork::OwningHandle<Utf8TestChild> m_slot_utf8{u8"裝備槽_右手"};

@@ -8,7 +8,7 @@
 
 static int g_deconstruct_count = 0;
 
-class SimpleObject : public ork::OuroObject
+class SimpleObject : public ork::Subclass<SimpleObject, ork::OuroObject>
 {
 public:
   SimpleObject() = default;
@@ -34,7 +34,7 @@ private:
 };
 
 // Classes for Test 2 (Parent-Child topology)
-class ChildObject : public ork::OuroObject
+class ChildObject : public ork::Subclass<ChildObject, ork::OuroObject>
 {
 public:
   ChildObject() = default;
@@ -44,7 +44,7 @@ public:
   }
 };
 
-class ParentObject : public ork::OuroObject
+class ParentObject : public ork::Subclass<ParentObject, ork::OuroObject>
 {
 public:
   ParentObject()
@@ -60,7 +60,7 @@ public:
   ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
 
-class ParentWithTwoChildren : public ork::OuroObject
+class ParentWithTwoChildren : public ork::Subclass<ParentWithTwoChildren, ork::OuroObject>
 {
 public:
   ParentWithTwoChildren() = default;
@@ -74,12 +74,12 @@ public:
 };
 
 // Compile-time validation for Test 4 (Diamond inheritance prevention)
-class DiamondLeft : public ork::OuroObject
+class DiamondLeft : public ork::Subclass<DiamondLeft, ork::OuroObject>
 {
 public:
 };
 
-class DiamondRight : public ork::OuroObject
+class DiamondRight : public ork::Subclass<DiamondRight, ork::OuroObject>
 {
 public:
 };
@@ -114,7 +114,7 @@ static_assert(!std::is_copy_assignable_v<ork::OuroObject>, "OuroObject must NOT 
 static_assert(!std::is_move_constructible_v<ork::OuroObject>, "OuroObject must NOT be move-constructible.");
 static_assert(!std::is_move_assignable_v<ork::OuroObject>, "OuroObject must NOT be move-assignable.");
 
-class ParentDrivenObject : public ork::OuroObject
+class ParentDrivenObject : public ork::Subclass<ParentDrivenObject, ork::OuroObject>
 {
 public:
   ParentDrivenObject() = default;
@@ -131,7 +131,7 @@ public:
   ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
 
-class ParentDrivenCtorObject : public ork::OuroObject
+class ParentDrivenCtorObject : public ork::Subclass<ParentDrivenCtorObject, ork::OuroObject>
 {
 public:
   ParentDrivenCtorObject()
@@ -146,7 +146,7 @@ public:
   ork::OwningHandle<ChildObject> m_child{"m_child"};
 };
 
-class ParentDrivenAdoptObject : public ork::OuroObject
+class ParentDrivenAdoptObject : public ork::Subclass<ParentDrivenAdoptObject, ork::OuroObject>
 {
 public:
   ParentDrivenAdoptObject() = default;
@@ -158,7 +158,7 @@ public:
   ork::OwningHandle<SimpleObject> m_child{"m_child"};
 };
 
-class ParentWithContainer : public ork::OuroObject
+class ParentWithContainer : public ork::Subclass<ParentWithContainer, ork::OuroObject>
 {
 public:
   ParentWithContainer() = default;
@@ -197,7 +197,7 @@ private:
   ork::OwningContainerHandle m_children{"children_slot"};
 };
 
-class ParentMoveConstructible : public ork::OuroObject
+class ParentMoveConstructible : public ork::Subclass<ParentMoveConstructible, ork::OuroObject>
 {
 public:
   ParentMoveConstructible() = default;
@@ -211,14 +211,14 @@ public:
   ork::OwningContainerHandle m_container{"container_slot"};
 };
 
-class DerivedSimpleObject : public SimpleObject
+class DerivedSimpleObject : public ork::Subclass<DerivedSimpleObject, SimpleObject>
 {
 public:
   DerivedSimpleObject() = default;
   int m_extra{123};
 };
 
-class ParentWithPolymorphicChild : public ork::OuroObject
+class ParentWithPolymorphicChild : public ork::Subclass<ParentWithPolymorphicChild, ork::OuroObject>
 {
 public:
   ParentWithPolymorphicChild() = default;

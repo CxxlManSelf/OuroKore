@@ -21,7 +21,7 @@
 #include "ourokore/component/OuroCore.hpp"
 
 // 插件自訂資料物件
-class ThirdPartyPluginEntity : public ork::OuroObject
+class ThirdPartyPluginEntity : public ork::Subclass<ThirdPartyPluginEntity, ork::OuroObject>
 {
 public:
   int score{123};

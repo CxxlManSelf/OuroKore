@@ -7,7 +7,7 @@
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
 #include "ourokore/component/builtin/NoOpAutoDehydrator.hpp"
 
-class PluginItem : public ork::OuroObject
+class PluginItem : public ork::Subclass<PluginItem, ork::OuroObject>
 {
 public:
   int value{100};

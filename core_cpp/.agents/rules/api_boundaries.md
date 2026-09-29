@@ -32,6 +32,6 @@
 - **OS 邊界隔離**：Windows 下涉及路徑或系統呼叫必須在底層顯式轉換為 `std::wstring` 呼叫 `W` 版 API，對外介面與儲存一律回歸 UTF-8，嚴禁混用 ANSI 本地編碼。
 
 ## 6. 全域 TypeID 雜湊標準與脫水零 I/O 規範 (TypeID & Zero-I/O Invariant)
-- **統一雜湊標準**：核心所有型別識別碼（`ork_type_id_t`）無論在編譯期（`ORK_OBJECT`）或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，杜絕各自為政。
+- **統一雜湊標準**：核心所有型別識別碼（`ork_type_id_t`）無論在編譯期（`ork::Subclass`）或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，杜絕各自為政。
 - **脫水墓碑查詢零 I/O**：ControlBlock 必須長存 TypeID，脫水物件在磁碟未載入時進行 `Is<T>()`、`IsAlive()` 或 `ork_is_instance_of` 查詢**保證純記憶體完成，嚴禁誘發穿透性復水**。
 

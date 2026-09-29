@@ -361,6 +361,15 @@ HandleID CreateObjectInternal(Args &&...args)
   static_assert(
       std::is_convertible_v<T *, OuroObject *>, "T* must be convertible to OuroObject* (Diamond Inheritance forbidden)"
   );
+  static_assert(
+      requires { typename T::ThisClass; } && std::is_same_v<typename T::ThisClass, T>,
+      "\n=================================================================================\n"
+      " OuroKore Architecture Invariant Violation:\n"
+      " All managed classes MUST inherit from ork::Subclass<T, Base>!\n"
+      " Direct inheritance from OuroObject (e.g., 'class Foo : public OuroObject') is strictly forbidden.\n"
+      " Correct usage: 'class Foo : public ork::Subclass<Foo, ork::OuroObject>'\n"
+      "================================================================================="
+  );
 
   TypeID type_id = detail::TypeTraits<T>::GetTypeID();
   HandleID reserved_id = detail::ReserveRuntimeObjectID(type_id);

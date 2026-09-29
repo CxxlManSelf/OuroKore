@@ -1,8 +1,10 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <typeinfo>
 #include <unordered_map>
 
@@ -30,6 +32,96 @@ namespace detail
 {
 template <typename T>
 class Rehydrator;
+
+template <typename T>
+constexpr std::string_view ExtractRawSignature() noexcept
+{
+#if defined(_MSC_VER)
+  return __FUNCSIG__;
+#elif defined(__clang__) || defined(__GNUC__)
+  return __PRETTY_FUNCTION__;
+#else
+  return "UnknownType";
+#endif
+}
+
+template <typename T>
+constexpr std::string_view ExtractCleanTypeName() noexcept
+{
+  std::string_view sig = ExtractRawSignature<T>();
+#if defined(_MSC_VER)
+  // Format: ...ExtractRawSignature<class Foo>(void) or ...<struct Foo>(void)
+  std::string_view pattern = "ExtractRawSignature<";
+  size_t start = sig.find(pattern);
+  if (start == std::string_view::npos) return sig;
+  start += pattern.size();
+  size_t end = sig.rfind('>');
+  if (end == std::string_view::npos || end <= start) return sig;
+  std::string_view inner = sig.substr(start, end - start);
+  if (inner.starts_with("class ")) inner.remove_prefix(6);
+  else if (inner.starts_with("struct ")) inner.remove_prefix(7);
+  size_t last_colons = inner.rfind("::");
+  if (last_colons != std::string_view::npos)
+  {
+    inner.remove_prefix(last_colons + 2);
+  }
+  return inner;
+#elif defined(__clang__)
+  // Format: ... [T = Foo]
+  std::string_view pattern = "[T = ";
+  size_t start = sig.find(pattern);
+  if (start == std::string_view::npos) return sig;
+  start += pattern.size();
+  size_t end = sig.find(']', start);
+  if (end == std::string_view::npos || end <= start) return sig;
+  std::string_view inner = sig.substr(start, end - start);
+  if (inner.starts_with("class ")) inner.remove_prefix(6);
+  else if (inner.starts_with("struct ")) inner.remove_prefix(7);
+  size_t last_colons = inner.rfind("::");
+  if (last_colons != std::string_view::npos)
+  {
+    inner.remove_prefix(last_colons + 2);
+  }
+  return inner;
+#elif defined(__GNUC__)
+  // Format: ... [with T = Foo; ...]
+  std::string_view pattern = "[with T = ";
+  size_t start = sig.find(pattern);
+  if (start == std::string_view::npos) return sig;
+  start += pattern.size();
+  size_t end = sig.find_first_of(";]", start);
+  if (end == std::string_view::npos || end <= start) return sig;
+  std::string_view inner = sig.substr(start, end - start);
+  if (inner.starts_with("class ")) inner.remove_prefix(6);
+  else if (inner.starts_with("struct ")) inner.remove_prefix(7);
+  size_t last_colons = inner.rfind("::");
+  if (last_colons != std::string_view::npos)
+  {
+    inner.remove_prefix(last_colons + 2);
+  }
+  return inner;
+#else
+  return "UnknownType";
+#endif
+}
+
+template <typename T>
+struct TypeNameStorage
+{
+  static constexpr auto MakeStorage()
+  {
+    constexpr std::string_view sv = ExtractCleanTypeName<T>();
+    std::array<char, sv.size() + 1> arr{};
+    for (size_t i = 0; i < sv.size(); ++i)
+    {
+      arr[i] = sv[i];
+    }
+    arr[sv.size()] = '\0';
+    return arr;
+  }
+  static constexpr auto s_storage = MakeStorage();
+  static constexpr const char *value = s_storage.data();
+};
 
 inline TypeID RegisterTypeHelper(TypeID type_id, const char *name_utf8, TypeID parent_type_id)
 {
@@ -247,24 +339,64 @@ private:
   HandleID m_target_id = 0;
 };
 
+/**
+ * @brief CRTP 受管衍生類別基底（方案 A：免巨集自動型別系統）
+ * 
+ * 透過 CRTP 自動繼承 Base 類別，在編譯期自動萃取型別名稱並向核心型別登錄系統註冊繼承關係。
+ * 使用者類別體內完全無需撰寫任何巨集即可具備完整 RTTI、多型轉型（Is<T> / As<T>）以及安全序列化支援。
+ * 
+ * 支援多層繼承（如孫類別、曾孫類別），並支援帶參數建構子之完美轉發。
+ * 
+ * 範例：
+ *   class Creature : public ork::Subclass<Creature, ork::OuroObject> { ... };
+ *   class Monster : public ork::Subclass<Monster, Creature> { ... };
+ *   class BossMonster : public ork::Subclass<BossMonster, Monster> { ... };
+ */
+template <typename Derived, typename Base = OuroObject>
+class Subclass : public Base
+{
+public:
+  using ThisClass = Derived;
+  using SuperClass = Base;
+
+  static_assert(std::is_base_of_v<OuroObject, Base>, "Base must inherit from ork::OuroObject");
+
+  Subclass() = default;
+
+  template <typename... Args>
+    requires(sizeof...(Args) > 0 && std::is_constructible_v<Base, Args...>)
+  explicit Subclass(Args &&...args)
+      : Base(std::forward<Args>(args)...)
+  {
+  }
+
+  static constexpr const char *StaticTypeName() noexcept
+  {
+    if constexpr (requires { Derived::CustomTypeName(); })
+    {
+      return Derived::CustomTypeName();
+    }
+    else
+    {
+      return detail::TypeNameStorage<Derived>::value;
+    }
+  }
+
+  static TypeID StaticTypeID()
+  {
+    static_assert(std::is_base_of_v<Subclass<Derived, Base>, Derived>,
+                  "Derived class must inherit from Subclass<Derived, Base>");
+    static const TypeID s_type_id = detail::RegisterTypeHelper(
+        base::Fnv1a64(StaticTypeName()), StaticTypeName(), detail::TypeTraits<Base>::GetTypeID());
+    return s_type_id;
+  }
+
+  TypeID GetTypeID() const override
+  {
+    return StaticTypeID();
+  }
+};
+
 }  // namespace ork
 
-/**
- * @brief OuroKore 元件類別宣告巨集
- * 自動生成型別名稱、父類別別名、編譯期靜態 TypeID，並於靜態初始化時自動向 Core 註冊繼承關係。
- */
-#define ORK_OBJECT(ClassName, ParentClassName) \
-public: \
-  using ThisClass = ClassName; \
-  using SuperClass = ParentClassName; \
-  static constexpr const char *StaticTypeName() noexcept { return #ClassName; } \
-  static ::ork::TypeID StaticTypeID() \
-  { \
-    static const ::ork::TypeID s_type_id = ::ork::detail::RegisterTypeHelper( \
-        ::ork::base::Fnv1a64(#ClassName), #ClassName, ParentClassName::StaticTypeID()); \
-    return s_type_id; \
-  } \
-  ::ork::TypeID GetTypeID() const override \
-  { \
-    return StaticTypeID(); \
-  }
+

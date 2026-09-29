@@ -21,16 +21,17 @@
 
 ---
 
-## 📦 2. 領域物件基底：`ork::OuroObject`
+## 📦 2. 領域物件基底與樣板：`ork::OuroObject` 與 `ork::Subclass`
 * **標頭檔**：`ourokore/component/OuroObject.hpp`
-* **方法**：
+* **`ork::OuroObject` 基底方法**：
   * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
   * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
   * `ork_type_id_t GetTypeID() const`：取得物件之靜態型別 64 位元 TypeID（支援多型與繼承查詢）。
   * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
   * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
-* **巨集**：
-  * `ORK_OBJECT(Derived, Base)`：宣告類別之動態與靜態 TypeID，自動登記至全域繼承樹。
+* **`ork::Subclass<Derived, Base = ork::OuroObject>` 樣板基底**：
+  * **強制約束**：所有交由 `CreateObject<T>()` 建立的受管領域物件**一律必須繼承此樣板**，嚴格禁止直接裸繼承 `OuroObject`。
+  * **編譯期功能**：自動萃取短類別名稱（支援 MSVC/Clang/GCC）、自動計算與註冊 TypeID、覆寫 `GetTypeID()` 多型虛擬函式、提供完美轉發建構子。
 
 ---
 

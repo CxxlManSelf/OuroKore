@@ -9,15 +9,17 @@
 #include "ourokore/component/builtin/InMemoryStorage.hpp"
 #include "ourokore/host/HostContext.hpp"
 
-// 定義測試用繼承階層：
-// OuroObject -> Creature -> Monster -> BossMonster
-//              Creature -> Human
+// 定義測試用繼承階層（全面採用 ork::Subclass 免巨集 CRTP 樣板）：
+// OuroObject -> Creature (子類別) -> Monster (孫類別) -> BossMonster (曾孫類別)
+//              Creature (子類別) -> Human (孫類別)
 
-class Creature : public ork::OuroObject
+class Creature : public ork::Subclass<Creature, ork::OuroObject>
 {
-  ORK_OBJECT(Creature, ork::OuroObject)
 public:
   int m_hp{100};
+
+  Creature() = default;
+  explicit Creature(int hp) : m_hp(hp) {}
 
   void SerializePayload(ork::OuroStream &stream) const override
   {
@@ -29,37 +31,46 @@ public:
   }
 };
 
-class Monster : public Creature
+class Monster : public ork::Subclass<Monster, Creature>
 {
-  ORK_OBJECT(Monster, Creature)
 public:
   int m_rage{50};
+
+  Monster() = default;
+  Monster(int hp, int rage) : Subclass(hp), m_rage(rage) {}
 };
 
-class BossMonster : public Monster
+class BossMonster : public ork::Subclass<BossMonster, Monster>
 {
-  ORK_OBJECT(BossMonster, Monster)
 public:
   std::string m_special_skill{"Meteor"};
+
+  BossMonster() = default;
+  BossMonster(int hp, int rage, std::string skill)
+      : Subclass(hp, rage), m_special_skill(std::move(skill))
+  {
+  }
 };
 
-class Human : public Creature
+class Human : public ork::Subclass<Human, Creature>
 {
-  ORK_OBJECT(Human, Creature)
 public:
   std::string m_job{"Warrior"};
+
+  Human() = default;
+  Human(int hp, std::string job) : Subclass(hp), m_job(std::move(job)) {}
 };
 
-// 未使用 ORK_OBJECT 巨集的純受管類別（測試 TypeTraits Fallback 相容性）
-class SimpleLegacyObject : public ork::OuroObject
+// 純受管類別
+class SimpleLegacyObject : public ork::Subclass<SimpleLegacyObject, ork::OuroObject>
 {
 public:
   int m_val{999};
 };
 
-void TestBasicTypeInfoAndMacro()
+void TestBasicTypeInfoAndSubclass()
 {
-  std::cout << "[測試 1] ORK_OBJECT 靜態與動態型別資訊測試..." << std::endl;
+  std::cout << "[測試 1] Subclass 靜態與動態型別資訊測試..." << std::endl;
 
   assert(Creature::StaticTypeName() == std::string("Creature"));
   assert(Monster::StaticTypeName() == std::string("Monster"));
@@ -167,9 +178,8 @@ void TestMoveCasting()
   std::cout << "  -> 右值轉型與根引用轉移驗證通過！" << std::endl;
 }
 
-class DungeonRoom : public ork::OuroObject
+class DungeonRoom : public ork::Subclass<DungeonRoom, ork::OuroObject>
 {
-  ORK_OBJECT(DungeonRoom, ork::OuroObject)
 public:
   ork::OwningHandle<Creature> m_occupant{"OccupantSlot"};
   ork::UnboundHandle<Creature> m_visitor;
@@ -293,9 +303,9 @@ void TestPureC_API()
   std::cout << "  -> 純 C ABI 介面運作正常，100% 滿足多語言 FFI 規範！" << std::endl;
 }
 
-void TestFallbackTypeTraitsWithoutMacro()
+void TestFallbackTypeTraitsWithoutSubclass()
 {
-  std::cout << "[測試 7] 未使用 ORK_OBJECT 巨集之類別相容性測試..." << std::endl;
+  std::cout << "[測試 7] 未使用 Subclass 樣板之類別相容性測試..." << std::endl;
 
   auto legacy = ork::CreateObject<SimpleLegacyObject>();
   assert(legacy);
@@ -307,20 +317,84 @@ void TestFallbackTypeTraitsWithoutMacro()
   assert(legacy.Is<ork::OuroObject>());
   assert(!legacy.Is<Creature>());
 
-  std::cout << "  -> Fallback 機制運作完美，未寫巨集依然安全託管！" << std::endl;
+  std::cout << "  -> Fallback 機制運作完美，未寫 Subclass 依然安全託管！" << std::endl;
+}
+
+void TestSubclassCrtpMultiLevelForwarding()
+{
+  std::cout << "[測試 8] ork::Subclass CRTP 帶參建構子跨多層完美轉發測試..." << std::endl;
+
+  // 曾孫類別 BossMonster (hp, rage, skill) -> 轉發至 Monster (hp, rage) -> 轉發至 Creature (hp)
+  auto boss = ork::CreateObject<BossMonster>(8888, 250, "DoomsdayStrike");
+  assert(boss);
+  assert(boss.GetTypeID() == BossMonster::StaticTypeID());
+  assert(boss(&BossMonster::m_hp) == 8888);
+  assert(boss(&BossMonster::m_rage) == 250);
+  assert(boss(&BossMonster::m_special_skill) == "DoomsdayStrike");
+
+  // 多層繼承判定（曾孫 -> 孫 -> 子 -> 根）
+  assert(boss.Is<BossMonster>());
+  assert(boss.Is<Monster>());
+  assert(boss.Is<Creature>());
+  assert(boss.Is<ork::OuroObject>());
+  assert(!boss.Is<Human>());
+
+  std::cout << "  -> ork::Subclass CRTP 帶參建構子跨層完美轉發驗證通過！" << std::endl;
+}
+
+// 多層繼承情境測試類別：
+// 1. 父類別
+class HybridLegacyBase : public ork::Subclass<HybridLegacyBase, ork::OuroObject>
+{
+public:
+  int m_base_data{111};
+};
+
+// 2. 子類別使用 Subclass 繼承自 HybridLegacyBase
+class HybridModernChild : public ork::Subclass<HybridModernChild, HybridLegacyBase>
+{
+public:
+  int m_child_data{222};
+};
+
+void TestHybridSubclassAndPlainInheritance()
+{
+  std::cout << "[測試 9] Subclass 與純 OuroObject 混用 (Hybrid) 相容性測試..." << std::endl;
+
+  auto child = ork::CreateObject<HybridModernChild>();
+  assert(child);
+  assert(child(&HybridModernChild::m_base_data) == 111);
+  assert(child(&HybridModernChild::m_child_data) == 222);
+
+  // 即使父類別 HybridLegacyBase 未使用 Subclass，透過 TypeTraits 自動橋接：
+  // 1. 本身判定
+  assert(child.Is<HybridModernChild>());
+  // 2. 父類別判定（跨未包 Subclass 的父類別）
+  assert(child.Is<HybridLegacyBase>());
+  // 3. 根類別判定
+  assert(child.Is<ork::OuroObject>());
+  // 4. 向上轉型至未包 Subclass 的父類別
+  ork::OuroPtr<HybridLegacyBase> base_ptr = child.As<HybridLegacyBase>();
+  assert(base_ptr);
+  assert(base_ptr.GetTargetID() == child.GetTargetID());
+  assert(base_ptr(&HybridLegacyBase::m_base_data) == 111);
+
+  std::cout << "  -> Subclass 與純 OuroObject 混用相容性 100% 成功，無衝突無縫支援！" << std::endl;
 }
 
 int main()
 {
   std::cout << "=== 開始執行 OuroKore 型別系統與安全轉型 (Type System & Casting) 單元測試 ===" << std::endl;
 
-  TestBasicTypeInfoAndMacro();
+  TestBasicTypeInfoAndSubclass();
   TestInheritanceAndCasting();
   TestMoveCasting();
   TestDehydratedTypeCheckingWithoutRehydration();
   TestHandleLockAndAcquireTypeSafety();
   TestPureC_API();
-  TestFallbackTypeTraitsWithoutMacro();
+  TestFallbackTypeTraitsWithoutSubclass();
+  TestSubclassCrtpMultiLevelForwarding();
+  TestHybridSubclassAndPlainInheritance();
 
   std::cout << "\n=== 所有型別系統與安全轉型單元測試 100% 通過！ ===" << std::endl;
   return 0;

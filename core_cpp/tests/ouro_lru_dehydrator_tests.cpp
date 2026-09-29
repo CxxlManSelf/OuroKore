@@ -10,7 +10,7 @@
 
 using namespace ork;
 
-class TestItem : public ork::OuroObject
+class TestItem : public ork::Subclass<TestItem, ork::OuroObject>
 {
 public:
   TestItem() = default;
@@ -32,7 +32,7 @@ public:
   }
 };
 
-class TestContainer : public ork::OuroObject
+class TestContainer : public ork::Subclass<TestContainer, ork::OuroObject>
 {
 public:
   TestContainer() = default;
