@@ -502,6 +502,13 @@ ai_instance->ExecuteAI();
 ai_instance.reset(); // 底層自動安全執行 FreeLibrary / dlclose
 ```
 
+#### 🛡️ 受管物件與 DynamicLibrary 之「即時解錨」保證：
+在 OuroKore 託管體系中，若透過 `HostContext::SetObjectModuleLoader` 或專職介面 `IObjectModuleBinder` 將動態庫綁定至受管物件：
+* **脫水長存**：物件脫水（Dehydrated）落盤期間，DLL 絕對保留不被卸載，確保透明復水時程式碼段 100% 有效。
+* **Payload 銷毀即刻解錨**：當物件最後一個強引用歸零並由 `DeferredDeleteQueue` 物理銷毀其 Payload 後，**核心會立即在核心空間主動釋放對 DynamicLibrary 的引用**。
+* **弱引用/墓碑零阻礙**：即使該物件仍被 `UnboundHandle`（弱引用）指向使其 ControlBlock 墓碑長存於記憶體，動態模組也絕不會被鎖死，得以在所有實體銷毀後第一時間安全卸載！
+
+
 ---
 
 ## 4. `OuroPtr<T>`：棧上生命週期守衛
@@ -635,6 +642,9 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
   * `void SetStorageDriver(std::shared_ptr<IStorageDriver>)`：設定儲存驅動。
   * `std::shared_ptr<IStorageDriver> GetStorageDriver() const`：取得當前儲存驅動。
   * `size_t TriggerDehydrationRescue(size_t bytes_needed)`：緊急脫水指定位元組數。
+  * `void SetObjectModuleLoader(HandleID id, const DynamicLibrary &loader)`：綁定動態庫載入器至受管物件控制區塊（脫水長存，Payload 銷毀即刻解錨）。
+  * `DynamicLibrary GetObjectModuleLoader(HandleID id) const`：取得物件綁定之動態庫載入器。
+  * `std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const`：取得專職模組綁定介面（最小特權原則，委派給外掛工廠）。
 
 ---
 

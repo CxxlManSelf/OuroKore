@@ -33,17 +33,15 @@ int main() {
 
 ---
 
-## 📦 第二步：定義自訂領域物件 (Define Managed Object)
+## 📦 第二步：定義自訂領域物件 (Define OuroObject)
 
-> ⚠️ **全面嚴格強制宣告鐵律 (Strict Subclass Invariant)**：
-> 凡是交由 OuroKore 託管的領域物件，**一律強制繼承自 `ork::Subclass<T, Base = ork::OuroObject>`**。
-> 嚴禁直接裸繼承 `OuroObject`；若直接繼承，`CreateObject<Foo>()` 將於編譯期觸發 `static_assert` 阻斷。
+所有託管物件必須繼承自 `ork::OuroObject`，禁止外部直接 `new`：
 
 ```cpp
 #include <ourokore/component/OuroCore.hpp>
 #include <string>
 
-class Player : public ork::Subclass<Player, ork::OuroObject> {
+class Player : public ork::OuroObject {
 public:
     Player() = default;
 

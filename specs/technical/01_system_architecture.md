@@ -1,4 +1,4 @@
-﻿# 01. OuroKore 系統架構設計規範 (System Architecture RFC)
+# 01. OuroKore 系統架構設計規範 (System Architecture RFC)
 
 本文件定義 OuroKore 核心系統的領域無關架構規範，任何語言（C++、Rust、C#、Go 等）在實作 OuroKore 相容核心時，必須嚴格遵守以下心智模型、狀態轉換與演算法語意。
 手冊中所有流程與演算法均以**中性偽代碼（Language-Agnostic Pseudocode）**表達。
@@ -23,7 +23,7 @@ OuroKore 系統嚴格劃分三大權限與職責邊界，貫徹「**C ABI 為底
 |                  第三方插件層 (Plugin / Component)                   |
 |  - 領域物件繼承受管基底 (OuroObject)，嚴禁存取底層控制區塊裸指標       |
 |  - 拓撲邊緣透過 OwningHandle、UnboundHandle、OwningContainerHandle 表達 |
-|  - 棧上受管指標 OuroPtr（成員指標約束阻斷裸指標逃逸），讀寫鎖 OuroLock  |
+|  - 棧上受管指標 OuroPtr，執行緒安全讀寫鎖 OuroReadLock / OuroWriteLock |
 |  - 零特權防線：物理隔絕所有進程級控制 API 與破壞性測試介面             |
 +----------------------------------------------------------------------+
                                    │
@@ -88,10 +88,6 @@ OuroKore 系統嚴格劃分三大權限與職責邊界，貫徹「**C ABI 為底
 
 #### 物件銷毀與墓碑清理準則：
 * **進入墓碑態 (Tombstone)**：當 `strong_in_count == 0` 且 `root_count == 0` 時，若 `unbound_count > 0`，物件 Payload 立即銷毀，但保留 ControlBlock 墓碑，阻斷提升並觸發惰性修剪。
-* **脫水墓碑與外掛模組錨定 (Dehydrated Tombstone & Module Loader Retention)**：
-  在自動脫水換頁（Dehydration）機制下，物件 Payload 記憶體被釋放時，其 ControlBlock 墓碑依然長存於核心註冊表中。若該物件由動態外掛載入器建立，ControlBlock 內部之 `m_module_loader`（`DynamicLibrary`）將長存持有外掛動態庫的引用計數，確保脫水期間外掛 DLL 絕不被提前卸載，保證後續透明復水（`RehydrateCallback`）之代碼段始終安全有效。
-  * **最小特權介面隔離 (IObjectModuleBinder Delegate)**：
-    為遵循介面隔離原則，宿主可透過 `host.GetModuleBinder()` 產出純粹具備動態庫綁定能力之 `IObjectModuleBinder` 介面委派給專職外掛管理器（PluginManager），避免外洩進程級生命週期控制特權。
 * **徹底釋放 (Complete Free)**：當 `strong_in_count == 0`、`root_count == 0` 且 `unbound_count == 0` 時，ControlBlock 自全域註冊表徹底註銷並釋放記憶體。
 
 ---
@@ -191,15 +187,3 @@ End Procedure
 2. **雙重防護原則**：
    - **編譯期權杖防禦 (Passkey Pattern)**：底層救援函式強制要求合法構造樣板專屬權杖，外部任何外掛業務程式碼無法直接實例化，杜絕第三方插件主動發起全域記憶體調度。
    - **執行期情境驗證**：核心在觸發脫水自救前，校驗當前 HandleID 是否正處於合法預留或脫水重建狀態，非合法情境之調用一律拒絕。
-
----
-
-## 🔒 5. 受管物件防逃逸呼叫架構 (Zero Raw Pointer & Member Pointer Invariant)
-
-為徹底杜絕組件或外掛呼叫端私自持有受管物件之記憶體裸指標，破壞自動脫水換頁機制或誘發懸垂指標（UAF）：
-1. **呼叫語意概念約束 (Concept Guard on operator() / Invoke)**：
-   - 高階包裝指標 `OuroPtr<T>` 徹底拔除 `get()` 與 `operator->` 裸指標解引用介面。
-   - `operator()(Fn&&, Args&&...)` 與 `Invoke(...)` 在編譯期以 ISO C++20 `std::is_member_pointer_v` 與 `std::invocable` 進行嚴格概念約束。
-   - 調用端僅能傳入目標型別之成員函式指標（`&T::Method`）或成員欄位指標（`&T::m_field`），在編譯期全面阻絕 Lambda / Functor 閉包私自捕捉 `T&` 裸指標外洩。
-2. **專用受信任閉包通道 (Explicit WithObject Channel)**：
-   - 跨步驟複合運算或藍圖序列化串流等高階操作，必須顯式透過 `ptr.WithObject(...)` 呼叫，使裸指標暫時暴露的範疇完全可追蹤且具備語意隔離。

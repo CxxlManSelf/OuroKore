@@ -66,6 +66,18 @@ struct ControlBlock
   {}
 
   /**
+   * @brief 釋放動態模組載入器引用（解除對 DLL 之反向錨定）
+   *
+   * 當物件實體 (Payload) 銷毀完畢後，即可安全釋放 DLL 載入器引用。
+   * 即使 ControlBlock 仍作為墓碑長存於記憶體供弱引用查詢，DLL 亦可在所有實體解構後正常觸發卸載。
+   */
+  void ReleaseModuleLoader()
+  {
+    std::unique_lock<std::shared_mutex> lock(m_rw_lock);
+    m_module_loader.reset();
+  }
+
+  /**
    * @brief 安全釋放 Payload 記憶體，必定回到物件所屬模組的 CRT 堆疊釋放
    */
   void DeletePayload()
@@ -89,6 +101,7 @@ struct ControlBlock
   ~ControlBlock()
   {
     DeletePayload();
+    ReleaseModuleLoader();
   }
 };
 

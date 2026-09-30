@@ -282,9 +282,11 @@ public:
    * @brief 綁定模組載入器（DynamicLibrary）至受管物件之控制區塊（宿主特權）
    *
    * 【生命週期反向錨定鐵律】
-   * 只要該物件之 ControlBlock 存活（即使處於脫水 Dehydrated 墓碑狀態），
-   * 該動態庫模組即保證不被卸載，確保未來透明復水時之 RehydrateCallback 與銷毀時之 DestroyFn 代碼段絕對有效。
-   * 當 ControlBlock 徹底銷毀時，自動隨物件解構釋放該 DynamicLibrary（若引用歸零則底層自動安全觸發 FreeLibrary/dlclose）。
+   * 只要該物件之實體存活或處於脫水 Dehydrated 狀態，該動態庫模組即保證不被卸載，
+   * 確保未來透明復水時之 RehydrateCallback 與銷毀時之 DestroyFn 代碼段絕對有效。
+   * 當物件實體 (Payload) 於 DeferredDeleteQueue 完成物理銷毀後，核心會立即釋放該 DynamicLibrary 引用
+   * （若引用歸零則底層自動安全觸發 FreeLibrary/dlclose），即使 ControlBlock 作為墓碑長存（供弱引用查詢），
+   * 亦絕不阻礙動態模組的正常卸載。
    *
    * @param id 目標受管物件 HandleID
    * @param loader 動態庫載入器實例

@@ -1,4 +1,4 @@
-﻿# 04. Handle 拓撲管理系統 (Handles & Topology)
+# 04. Handle 拓撲管理系統 (Handles & Topology)
 
 OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜的持有、引用與生命週期關係。
 
@@ -20,7 +20,7 @@ OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜�
 `OwningHandle` 代表父物件對子物件的擁有權。宣告時**必須傳入唯一的插槽名稱（Slot Name）**，物件建構時會自動向底層名冊登記：
 
 ```cpp
-class Boss : public ork::Subclass<Boss, ork::OuroObject> {
+class Boss : public ork::OuroObject {
 public:
     // 自動向 Boss 註冊名為 "MinionSlot" 的邊緣，支援 C++20 UTF-8 字面量與中文槽位
     ork::OwningHandle<Monster> m_minion{u8"隨從槽位_左"};
@@ -82,7 +82,7 @@ public:
 因為對方隨時可能離開，你不能直接拿它來操作。每次要用的時候，只要做一件事：
 
 ```cpp
-class CombatSystem : public ork::Subclass<CombatSystem, ork::OuroObject> {
+class CombatSystem : public ork::OuroObject {
 public:
     // 旁觀者句柄：只記住模組號碼，不干涉其生死
     ork::UnboundHandle<ork::OuroObject> m_ai_module;
@@ -141,11 +141,18 @@ ai_instance->ExecuteAI();
 ai_instance.reset(); // 底層自動安全執行 FreeLibrary / dlclose
 ```
 
+#### 🛡️ 受管物件與 DynamicLibrary 之「即時解錨」保證：
+在 OuroKore 託管體系中，若透過 `HostContext::SetObjectModuleLoader` 或專職介面 `IObjectModuleBinder` 將動態庫綁定至受管物件：
+* **脫水長存**：物件脫水（Dehydrated）落盤期間，DLL 絕對保留不被卸載，確保透明復水時程式碼段 100% 有效。
+* **Payload 銷毀即刻解錨**：當物件最後一個強引用歸零並由 `DeferredDeleteQueue` 物理銷毀其 Payload 後，**核心會立即在核心空間主動釋放對 DynamicLibrary 的引用**。
+* **弱引用/墓碑零阻礙**：即使該物件仍被 `UnboundHandle`（弱引用）指向使其 ControlBlock 墓碑長存於記憶體，動態模組也絕不會被鎖死，得以在所有實體銷毀後第一時間安全卸載！
+
+
 ---
 
 ## 4. `OuroPtr<T>`：棧上生命週期守衛
 
 `OuroPtr` 代表活躍的「根引用（Root Edge）」。只要有任何執行緒在棧上持有某物件的 `OuroPtr`：
 * 核心 100% 保證：**該物件絕不會被自動脫水或銷毀！**
-* **安全轉發執行 (Zero Raw Pointer Guarantee)**：徹底拔除 get()、operator-> 與 operator*，透過 operator()(Fn&&, Args&&...) 或 Invoke(...) 調用成員函式或成員欄位（受 C++20 std::is_member_pointer_v 編譯期約束，徹底阻絕 Lambda 閉包外洩受管物件裸指標）；若有進階受信任閉包操作，由 WithObject 顯式提供，杜絕裸指標逃逸與 UAF 漏洞。
+* **安全轉發執行 (Zero Raw Pointer Guarantee)**：徹底拔除 `get()`、`operator->` 與 `operator*`，透過 `operator()(Fn&&, Args&&...)` 或 `Invoke(...)` 調用成員函式、成員欄位或 Lambda 閉包，徹底杜絕裸指標逃逸與 UAF 漏洞。
 * **原生極速延遲快取**：首次呼叫時透明復水並快取記憶體指標，後續呼叫直接以 $O(1)$ 純暫存器/記憶體原生速度執行。

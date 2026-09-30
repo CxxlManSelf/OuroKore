@@ -123,6 +123,10 @@ void DeferredDeleteQueue::ProcessItem(HandleID id)
       {
         to_delete->DestroySelf();
       }
+
+      // Payload 物理銷毀完畢，程式已安全回到 ourokore_core 空間。
+      // 立即釋放動態庫引用：即使後續 ControlBlock 仍作為墓碑長存（WeakCount > 0），DLL 亦可安全卸載！
+      cb->ReleaseModuleLoader();
     }
 
     // 邏輯銷毀通知：在無任何核心/讀寫鎖保護下觸發全域銷毀回呼（通知 IAutoDehydrator 與 IStorageDriver）

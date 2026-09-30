@@ -9,7 +9,7 @@
 在多執行緒併發環境下，手動維護「物件是否被修改（Dirty 狀態）」非常容易遺漏或產生 Data Race。OuroKore 採用 **RAII 獨占寫鎖與原子標髒** 的一體化設計：
 
 ```cpp
-class Character : public ork::Subclass<Character, ork::OuroObject> {
+class Character : public ork::OuroObject {
 public:
     // 讀取：使用 OuroReadLock（多個讀取者可同時併發）
     int32_t GetHp() const {
@@ -76,47 +76,34 @@ void DeserializePayload(ork::OuroStream &stream) override {
 
 ## 🏷️ 4. 型別系統宣告與安全多型轉型 (Type System & Safe Casting)
 
-> ⚠️ **全面嚴格強制宣告鐵律 (Strict Subclass Invariant)**：
-> 凡是交由 OuroKore 託管的領域物件，**一律強制繼承自 `ork::Subclass<Derived, Base = ork::OuroObject>`**。
-> 類別體內完全無需撰寫任何巨集，單一真實來源；編譯期自動萃取短名稱並向核心型別登錄系統註冊繼承關係。
+所有領域物件強烈建議在類別定義內使用 `ORK_OBJECT(Derived, Base)` 巨集宣告靜態與動態型別資訊：
 
 ```cpp
-// 1. 基底受管類別（預設 Base 為 ork::OuroObject）
-class Creature : public ork::Subclass<Creature, ork::OuroObject> {
+class Creature : public ork::OuroObject {
+    ORK_OBJECT(Creature, ork::OuroObject)
 public:
-    Creature() = default;
-    explicit Creature(int32_t hp) : m_hp(hp) {}
-
     int32_t GetHp() const { ork::OuroReadLock lock(*this); return m_hp; }
     void SetHp(int32_t hp) { ork::OuroWriteLock lock(*this); m_hp = hp; }
 private:
     int32_t m_hp{100};
 };
 
-// 2. 衍生子類別（將 Base 設為 Creature，支援帶參建構子完美轉發）
-class Monster : public ork::Subclass<Monster, Creature> {
+// 繼承時，第二個參數必須準確指定「直接父類別」，核心自動構建繼承鏈
+class Monster : public Creature {
+    ORK_OBJECT(Monster, Creature)
 public:
-    Monster() = default;
-    Monster(int32_t hp, int32_t rage) : Subclass(hp), m_rage(rage) {}
-
     int32_t GetRage() const { ork::OuroReadLock lock(*this); return m_rage; }
 private:
     int32_t m_rage{50};
 };
 
-// 3. 曾孫類別（多層無縫繼承串聯）
-class BossMonster : public ork::Subclass<BossMonster, Monster> {
+class BossMonster : public Monster {
+    ORK_OBJECT(BossMonster, Monster)
 public:
-    BossMonster() = default;
-    BossMonster(int32_t hp, int32_t rage, std::string skill)
-        : Subclass(hp, rage), m_special_skill(std::move(skill)) {}
-
     void CastUltimateSkill() {
         ork::OuroWriteLock lock(*this);
         // 施放絕招...
     }
-private:
-    std::string m_special_skill{"Meteor"};
 };
 ```
 

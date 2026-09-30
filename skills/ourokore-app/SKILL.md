@@ -33,8 +33,9 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
    - 載入器不提供手動 `unload()` 介面，以防提早手動卸載引發 vtable/代碼段失效與 Crash。
    - 應用端應將動態庫「產生的物件」與動態庫建立生命週期綁定（透過 `bind_lifecycle()` 或 Deleter 閉包捕捉 `DynamicLibrary` 實例），當產生的物件全數解構後自動在底層卸載。
    - ⚠️ **關鍵約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若呼叫端不放棄此回傳值變數（如長存於成員/全域變數、或外層未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！呼叫端必須主動放棄該初始句柄，將存活權杖全權交給產生的物件。
-   - 🛡️ **脫水換頁安全保證（宿主錨定 Invariant）**：
-     若動態外掛生成的領域物件會參與自動脫水（Dehydration），宿主主程式應使用特權方法 `host.SetObjectModuleLoader(obj.GetTargetID(), plugin_dll)`，將動態庫直接錨定於受管物件的 ControlBlock 墓碑中。如此即便物件 Payload 脫水釋放，ControlBlock 墓碑依然長存持有動態庫引用，保證未來透明復水（`RehydrateCallback`）或銷毀時代碼段 100% 有效，絕不因提早卸載而崩潰！
+   - 🛡️ **脫水換頁安全保證與即時解錨（宿主錨定與墓碑零阻礙 Invariant）**：
+     若動態外掛生成的領域物件會參與自動脫水（Dehydration），宿主主程式應使用特權方法 host.SetObjectModuleLoader(obj.GetTargetID(), plugin_dll) 或專職介面 IObjectModuleBinder，將動態庫直接錨定於受管物件中。物件脫水期間 DLL 保持長存，確保未來透明復水（RehydrateCallback）有效。
+     **更關鍵的是「即時解錨」**：當該物件強引用歸零並在 DeferredDeleteQueue 完成 Payload 物理銷毀後，核心會**立即主動釋放該 DynamicLibrary 引用**！即使外部仍有 UnboundHandle 弱引用維持 ControlBlock 墓碑，動態庫也不會被鎖死，得以在所有實體銷毀後第一時間安全卸載！
    - 🛡️ **專職單元權限委派（IObjectModuleBinder 介面隔離）**：
      若動態庫載入與物件生成由專門的模組管理單元（如 `PluginManager`）負責，主程式切勿傳遞完整的 `HostContext`（避免外洩 `Shutdown`、`FlushStorage` 等全域特權）。應透過 `host.GetModuleBinder()` 取得輕量之 `std::shared_ptr<ork::IObjectModuleBinder>` 交給專職單元，貫徹最小特權原則（Least Privilege）。
 
@@ -310,6 +311,7 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
    * `DynamicLibrary` 禁絕提供手動 `unload()` 方法，以防虛擬函式表與代碼段提前失效引發崩潰。
    * 正確用法是透過 `lib.bind_lifecycle(raw, deleter)` 或 Deleter 閉包將產生的物件與動態庫綁定，待物件全數銷毀後由底層自動卸載。
    * ⚠️ **高壓約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若應用端一直保留該回傳值（如存為長存成員或未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！必須主動放棄該初始句柄（如 `lib.reset()`），才能實現產生物件全數銷毀後 DLL 自動卸載。
+   * 🛡️ **受管物件 Payload 銷毀即刻解錨（墓碑零阻礙）**：綁定至受管物件的動態庫會在物件 Payload 實體物理解構完成時立即由核心釋放引用，弱引用句柄（UnboundHandle）的長存墓碑絕不阻礙動態庫及時卸載。
 
 ---
 

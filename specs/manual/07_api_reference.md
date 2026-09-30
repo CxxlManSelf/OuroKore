@@ -1,4 +1,4 @@
-﻿# 07. 公開 C++ API 參照手冊 (API Reference)
+# 07. 公開 C++ API 參照手冊 (API Reference)
 
 本手冊彙整 OuroKore 面向應用開發者與宿主主程式之所有公開核心類別與全域介面。
 
@@ -18,35 +18,22 @@
   * `void SetStorageDriver(std::shared_ptr<IStorageDriver>)`：設定儲存驅動。
   * `std::shared_ptr<IStorageDriver> GetStorageDriver() const`：取得當前儲存驅動。
   * `size_t TriggerDehydrationRescue(size_t bytes_needed)`：緊急脫水指定位元組數。
-  * `void SetObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader)`：為特定受管物件綁定動態外掛載入器，錨定動態庫生命週期於 ControlBlock 墓碑中，杜絕脫水時動態庫提前卸載引發復水崩潰。
-  * `ork::DynamicLibrary GetObjectModuleLoader(HandleID id) const`：取得目標受管物件當前綁定之動態外掛載入器。
-  * `std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const`：取得專用模組綁定介面，實現最小特權原則委派。
-  * `void Reset()`：復位核心初始化狀態（支援軟重啟與測試套件切換）。
-  * `void SetObjectDestroyedCallback(void (*callback)(HandleID id))`：設定全域物件銷毀監聽回呼。
-  * `uint64_t GetDeferredDeletePendingCount() const`：取得當前排隊等待物理銷毀之任務數量。
+  * `void SetObjectModuleLoader(HandleID id, const DynamicLibrary &loader)`：綁定動態庫載入器至受管物件控制區塊（脫水長存，Payload 銷毀即刻解錨）。
+  * `DynamicLibrary GetObjectModuleLoader(HandleID id) const`：取得物件綁定之動態庫載入器。
+  * `std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const`：取得專職模組綁定介面（最小特權原則，委派給外掛工廠）。
 
 ---
 
-## 🧩 1.1 專用模組綁定介面：`ork::IObjectModuleBinder`
-* **標頭檔**：`ourokore/host/IObjectModuleBinder.hpp`
-* **說明**：專為專職外掛管理單元（如 PluginManager）設計之輕量權限介面，遵循介面隔離原則（ISP）與最小特權原則。
-* **方法**：
-  * `virtual void SetObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader) = 0`：為目標物件錨定動態庫生命週期。
-  * `virtual ork::DynamicLibrary GetObjectModuleLoader(HandleID id) const = 0`：取得目標物件當前綁定之動態庫載入器。
-
----
-
-## 📦 2. 領域物件基底與樣板：`ork::OuroObject` 與 `ork::Subclass`
+## 📦 2. 領域物件基底：`ork::OuroObject`
 * **標頭檔**：`ourokore/component/OuroObject.hpp`
-* **`ork::OuroObject` 基底方法**：
+* **方法**：
   * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
   * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
   * `ork_type_id_t GetTypeID() const`：取得物件之靜態型別 64 位元 TypeID（支援多型與繼承查詢）。
   * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
   * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
-* **`ork::Subclass<Derived, Base = ork::OuroObject>` 樣板基底**：
-  * **強制約束**：所有交由 `CreateObject<T>()` 建立的受管領域物件**一律必須繼承此樣板**，嚴格禁止直接裸繼承 `OuroObject`。
-  * **編譯期功能**：自動萃取短類別名稱（支援 MSVC/Clang/GCC）、自動計算與註冊 TypeID、覆寫 `GetTypeID()` 多型虛擬函式、提供完美轉發建構子。
+* **巨集**：
+  * `ORK_OBJECT(Derived, Base)`：宣告類別之動態與靜態 TypeID，自動登記至全域繼承樹。
 
 ---
 
@@ -56,7 +43,7 @@
   * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
   * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
   * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
-  * OuroPtr<T>：棧上活躍根指標守衛，支援 operator()(Fn&&, Args&&...)、Invoke(...)（受 C++20 std::is_member_pointer_v 約束，僅接受成員函式或欄位指標）、WithObject(Fn&&, Args&&...)（受信任進階閉包通道）、operator bool()、IsAlive()、GetTargetID()、Release()。
+  * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator()(Fn&&, Args&&...)`, `Invoke(...)`, `operator bool()`, `IsAlive()`, `GetTargetID()`, `Release()`。
     * `template <typename U> bool Is() const`：判定物件是否屬於或繼承自型別 `U`（純記憶體查詢，脫水狀態零 I/O 保證）。
     * `template <typename U> OuroPtr<U> As() const &`：向下/向上安全轉型（左值增持根引用）。
     * `template <typename U> OuroPtr<U> As() &&`：右值移動轉型（**零引用計數開銷**轉移所有權）。

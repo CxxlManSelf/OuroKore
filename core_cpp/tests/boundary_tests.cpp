@@ -163,14 +163,35 @@ int main()
     worker_container(&PluginContainer::m_item) = worker_item;
     mock_plugin_worker(*binder, worker_item.GetTargetID());
 
-    // 脫水驗證：透過專職介面設定的模組載入器同樣長存於墓碑
+    // 脫水驗證：透過專職介面設定的模組載入器在脫水期間依然長存於墓碑（以備透明復水）
     ork::HandleID worker_item_id = worker_item.GetTargetID();
     assert(ork::Dehydrate(std::move(worker_item)) == true);
     auto after_dehydrate = binder->GetObjectModuleLoader(worker_item_id);
     auto orig_loader = moved_host.GetObjectModuleLoader(worker_item_id);
     assert(after_dehydrate.is_loaded() == orig_loader.is_loaded());
 
-    std::cout << "  -> IObjectModuleBinder 專職單元介面委派與特權收斂驗證通過。" << std::endl;
+    // 弱引用與 DLL 自動解錨驗證：
+    // 保留一個 UnboundHandle 指向 worker_item，使其墓碑持續存活（WeakCount > 0）
+    ork::UnboundHandle<PluginItem> weak_item_handle;
+    {
+      auto reloaded = ork::Rehydrate<PluginItem>(worker_item_id);
+      assert(bool(reloaded) == true);
+      weak_item_handle = ork::UnboundHandle<PluginItem>(reloaded);
+      // 離開此作用域，reloaded 銷毀；但 worker_container 仍持有強引用
+    }
+    assert(weak_item_handle.IsAlive());
+
+    // 銷毀 worker_container，切斷最後的強引用，觸發 worker_item 實體進入 DeferredDeleteQueue
+    worker_container.Release();
+    moved_host.FlushDeferredDeletions();
+
+    // 此時 worker_item 的 Payload 已物理銷毀，但 weak_item_handle 依然存在使 ControlBlock 留在 Registry 作為墓碑
+    assert(!weak_item_handle.IsAlive());
+    auto loader_after_delete = moved_host.GetObjectModuleLoader(worker_item_id);
+    // 關鍵驗證：Payload 銷毀後，即使 ControlBlock 墓碑仍在，DynamicLibrary 亦已被及時釋放（不再鎖死 DLL）！
+    assert(!loader_after_delete.is_loaded());
+
+    std::cout << "  -> IObjectModuleBinder 專職單元介面委派與動態庫及時解錨驗證通過。" << std::endl;
   }
   std::cout << "  -> HostContext 移動語意與所有權轉移安全驗證通過。" << std::endl;
 

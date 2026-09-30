@@ -1,4 +1,4 @@
-﻿# 03. 純 C ABI 規格與記憶體佈局規範 (C ABI & Memory RFC)
+# 03. 純 C ABI 規格與記憶體佈局規範 (C ABI & Memory RFC)
 
 本文件定義 OuroKore 動態程式庫核心層（`core.dll` / `libourokore_core.so`）的純 C ABI 規格。
 跨語言使用介面（C# P/Invoke、Rust FFI、Python ctypes/cffi、Go cgo）均以此標準符號規格為底座。
@@ -19,11 +19,6 @@
    - `7`: `ORK_STATUS_ERROR_UNKNOWN`（未知異常）
 3. **零例外逃逸保證 (No Exception Leaks)**：所有導出函式保證攔截所有語言層例外，嚴禁任何例外跨越動態庫邊界引發進程崩潰。
 4. **記憶體釋放隔離原則 (Allocator Isolation)**：跨動態模組建立的物件記憶體，必須由註冊的析構回呼在其原始分配器的堆疊中釋放，禁止在核心內部跨模組直接釋放。
-5. **各語言高階包裝層的防逃逸職責 (Language Wrapper Anti-Escape Invariants)**：
-   - 底層純 C ABI（如 `ork_acquire_object_pointer`）僅供核心內部與高階 Wrapper（如 C++ `OuroPtr`、未來 C# / Rust 綁定）內部安全轉發使用，絕不可直接暴露給終端業務代碼。
-   - 任何語言的高階 Wrapper 必須遵循「**Zero Raw Pointer Guarantee**」：
-     - C++ Wrapper 透過 ISO C++20 Concepts（`std::is_member_pointer_v` 與 `std::invocable`）約束 `operator()` 與 `Invoke()` 僅接受成員指標，杜絕呼叫端透過閉包外洩受管實體指標；高階操作顯式收斂至受信任之 `WithObject` 通道。
-     - 未來 C#（P/Invoke）或 Rust 綁定亦需透過安全成員委託（Delegates）或受限借用代理（Borrowing Proxies）封閉實體指標，確保跨語言介面均具備同等之記憶體防逃逸防禦能力。
 
 ---
 
