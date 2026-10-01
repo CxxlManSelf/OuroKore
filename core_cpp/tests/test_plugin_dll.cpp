@@ -62,4 +62,28 @@ extern "C"
   {
     return g_instance_count.load(std::memory_order_relaxed);
   }
+
+  static std::atomic<int> g_init_count{0};
+  static std::atomic<int> g_shutdown_count{0};
+
+  PLUGIN_EXPORT int PluginInit()
+  {
+    g_init_count.fetch_add(1, std::memory_order_relaxed);
+    return 0; // 0 代表成功
+  }
+
+  PLUGIN_EXPORT void PluginShutdown()
+  {
+    g_shutdown_count.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  PLUGIN_EXPORT int GetInitCallCount()
+  {
+    return g_init_count.load(std::memory_order_relaxed);
+  }
+
+  PLUGIN_EXPORT int GetShutdownCallCount()
+  {
+    return g_shutdown_count.load(std::memory_order_relaxed);
+  }
 }

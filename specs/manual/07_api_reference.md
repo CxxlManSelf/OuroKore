@@ -89,6 +89,10 @@
   * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析動態庫導出符號並智慧推導函式指標型別。
   * `template <typename T, typename DeleterT> std::shared_ptr<T> bind_lifecycle(T *raw_ptr, DeleterT deleter)`：將自訂裸指標與動態庫存活權杖綁定，確保指標銷毀前動態庫永不卸載。
   * `static std::filesystem::path format_filename(std::string_view base_name)`：依作業系統格式化動態庫檔名（Windows `.dll`、Linux `.so`、macOS `.dylib`）。
+  * `bool is_first_loaded() const noexcept`：查詢本次 `load()` 取得的實例是否為動態庫於進程中的首次載入（0 -> 1）。若為 false 代表先前已由其他模組載入並存活中。
+  * `void add_cleanup_hook(std::function<void()> hook)`：註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的收尾回呼（Pre-Unload Hook）。保證在代碼段解除映射前依反向順序 (LIFO) 執行。
+  * `bool register_shutdown_symbol(std::string_view symbol_name)`：依據符號名稱自動解析無參數收尾函式（`void()`）並註冊為卸載前回呼。
+  * `template <typename FuncT, typename... Args> bool initialize_once(std::string_view symbol_name, Args &&...args)`：僅在首次載入（0 -> 1）時執行指定的符號初始化函式，重複載入時自動安全略過。
   * `WeakDynamicLibrary to_weak() const noexcept`：建立並取得該動態庫之弱引用觀察者（不增加強引用計數，不阻止自動卸載）。
 
 ---

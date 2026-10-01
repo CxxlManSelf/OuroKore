@@ -1,5 +1,9 @@
 #include "ourokore/base/DynamicLibrary.hpp"
 
+#include <mutex>
+#include <unordered_map>
+#include <vector>
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -115,22 +119,89 @@ static std::string PathToUtf8(const std::filesystem::path &path)
 }
 #endif
 
+class LibraryControlBlock;
+
 /**
- * @brief 內部控制區塊：管理作業系統層級之原生動態庫句柄
+ * @brief 全域動態函式庫弱引用登錄表 (Library Registry)
+ * 透過弱引用快取已載入之動態函式庫控制區塊，精準分辨 0->1 首次載入與 N->N+1 重複載入，
+ * 且不干預產生物件全數銷毀後的 1->0 自動安全卸載。
+ */
+struct LibraryRegistry
+{
+  std::mutex mutex;
+  std::unordered_map<std::filesystem::path, std::weak_ptr<LibraryControlBlock>> table;
+};
+
+static LibraryRegistry &GetLibraryRegistry()
+{
+  static LibraryRegistry s_registry;
+  return s_registry;
+}
+
+static void UnregisterControlBlock(const std::filesystem::path &path)
+{
+  auto &reg = GetLibraryRegistry();
+  std::lock_guard<std::mutex> lock(reg.mutex);
+  auto it = reg.table.find(path);
+  if (it != reg.table.end())
+  {
+    if (it->second.expired())
+    {
+      reg.table.erase(it);
+    }
+  }
+}
+
+/**
+ * @brief 內部控制區塊：管理作業系統層級之原生動態庫句柄與收尾掛鉤
  */
 class LibraryControlBlock
 {
 public:
   void *m_native_handle{nullptr};
   std::filesystem::path m_path;
+  std::vector<std::function<void()>> m_cleanup_hooks;
+  std::mutex m_hooks_mutex;
 
   LibraryControlBlock(void *handle, std::filesystem::path path)
       : m_native_handle(handle), m_path(std::move(path))
   {
   }
 
+  void add_cleanup_hook(std::function<void()> hook)
+  {
+    if (!hook) return;
+    std::lock_guard<std::mutex> lock(m_hooks_mutex);
+    m_cleanup_hooks.push_back(std::move(hook));
+  }
+
   ~LibraryControlBlock()
   {
+    // 1. 嚴格在 FreeLibrary / dlclose 前執行所有註冊之收尾回呼（以先進後出 LIFO 順序執行）
+    // 此刻動態庫實體代碼段與 vtable 依然完整駐留於進程記憶體中
+    {
+      std::lock_guard<std::mutex> lock(m_hooks_mutex);
+      for (auto it = m_cleanup_hooks.rbegin(); it != m_cleanup_hooks.rend(); ++it)
+      {
+        if (*it)
+        {
+          try
+          {
+            (*it)();
+          }
+          catch (...)
+          {
+            // 防禦性攔截所有異常，杜絕解構子拋出例外引發 std::terminate
+          }
+        }
+      }
+      m_cleanup_hooks.clear();
+    }
+
+    // 2. 自全域快取表中除名
+    UnregisterControlBlock(m_path);
+
+    // 3. 作業系統級動態庫卸載
     if (m_native_handle)
     {
 #if defined(_WIN32)
@@ -150,7 +221,7 @@ DynamicLibrary DynamicLibrary::load(const std::filesystem::path &path, LibraryLo
 {
   if (path.empty())
   {
-    return DynamicLibrary(nullptr, "Empty library path provided.");
+    return DynamicLibrary(nullptr, "Empty library path provided.", false);
   }
 
   // 跨平台安全路徑標準化：若目標檔案存在於檔案系統，自動解析為絕對規範化路徑（消除 .、.. 與符號連結）
@@ -173,7 +244,33 @@ DynamicLibrary DynamicLibrary::load(const std::filesystem::path &path, LibraryLo
       }
     }
   }
+  else
+  {
+    ec.clear();
+    auto abs_path = std::filesystem::absolute(path, ec);
+    if (!ec)
+    {
+      resolved_path = std::move(abs_path);
+    }
+  }
 
+  // 💡【關鍵分辨點】：檢查快取中是否已有存活的控制區塊（進程中已載入此模組）
+  auto &reg = GetLibraryRegistry();
+  {
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    auto it = reg.table.find(resolved_path);
+    if (it != reg.table.end())
+    {
+      if (auto existing_cb = it->second.lock())
+      {
+        // ⏩ 分辨結果：重複載入 (N -> N+1)
+        // 共享既有控制區塊，is_first_loaded 標記為 false，避免重複觸發全域初始化
+        return DynamicLibrary(std::move(existing_cb), "", false);
+      }
+    }
+  }
+
+  // 🚀 分辨結果：首次載入 (0 -> 1)
   void *native_handle = nullptr;
   std::string error_msg;
 
@@ -229,11 +326,19 @@ DynamicLibrary DynamicLibrary::load(const std::filesystem::path &path, LibraryLo
 
   if (!native_handle)
   {
-    return DynamicLibrary(nullptr, std::move(error_msg));
+    return DynamicLibrary(nullptr, std::move(error_msg), false);
   }
 
-  auto control_block = std::make_shared<LibraryControlBlock>(native_handle, std::move(resolved_path));
-  return DynamicLibrary(std::move(control_block), "");
+  auto control_block = std::make_shared<LibraryControlBlock>(native_handle, resolved_path);
+
+  // 將新實例登記至全域快取表
+  {
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    reg.table[resolved_path] = control_block;
+  }
+
+  // 回傳首次載入實例 (is_first_loaded = true)
+  return DynamicLibrary(std::move(control_block), "", true);
 }
 
 DynamicLibrary DynamicLibrary::load(std::string_view utf8_path, LibraryLoadFlags flags)
@@ -245,6 +350,36 @@ void DynamicLibrary::reset() noexcept
 {
   m_control_block.reset();
   m_last_error.clear();
+  m_is_first_loaded = false;
+}
+
+bool DynamicLibrary::is_first_loaded() const noexcept
+{
+  return m_is_first_loaded;
+}
+
+void DynamicLibrary::add_cleanup_hook(std::function<void()> hook)
+{
+  if (m_control_block && hook)
+  {
+    m_control_block->add_cleanup_hook(std::move(hook));
+  }
+}
+
+bool DynamicLibrary::register_shutdown_symbol(std::string_view symbol_name)
+{
+  if (!is_loaded() || symbol_name.empty())
+  {
+    return false;
+  }
+  using ShutdownFn = void (*)();
+  auto fn = get_symbol<ShutdownFn>(symbol_name);
+  if (!fn)
+  {
+    return false;
+  }
+  add_cleanup_hook([fn]() { fn(); });
+  return true;
 }
 
 bool DynamicLibrary::is_loaded() const noexcept

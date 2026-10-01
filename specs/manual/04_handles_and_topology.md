@@ -111,6 +111,10 @@ public:
 3. **⚠️ 關鍵約束（load 回傳值之生命週期約束）**：
    `ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。**若呼叫端不放棄此回傳值變數（如長存於成員/全域變數、或外層未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！**
    呼叫端必須在完成物件綁定後，主動呼叫 `lib.reset()` 或讓其隨工廠作用域自然解構，將唯一的存活權杖全權移交給產生的物件持有。
+4. **模組全域啟始與收尾保證（Lifecycle Hooks & Startup/Shutdown Protocol）**：
+   - **首次載入精準辨識**：多個模組重複呼叫 `load()` 請求載入相同動態庫時，載入器透過全域規範路徑弱引用快取共享控制區塊。只有第一次進入進程（0 -> 1）時 `lib.is_first_loaded()` 會傳回 `true`；後續重複載入（N -> N+1）傳回 `false`。
+   - **全域啟始單次保證**：呼叫 `lib.initialize_once<InitFn>("ork_plugin_init", args...)`，僅在首次載入時執行初始化（避免型別重複註冊或資源衝突），重複載入時自動安全略過。
+   - **卸載前收尾保證 (Pre-Unload Hook)**：透過 `lib.register_shutdown_symbol("ork_plugin_shutdown")` 或 `lib.add_cleanup_hook(...)` 註冊收尾邏輯。保證嚴格在所有物件銷毀、引用計數歸零（1 -> 0）、且在 `FreeLibrary` / `dlclose` 解除映射前的一瞬間安全觸發！
 
 #### 實戰範例：
 ```cpp
@@ -123,23 +127,31 @@ if (!lib) {
     return;
 }
 
-// 2. 獲取工廠函式符號
+// 2. 模組全域啟始與收尾協定（首次載入時執行初始化，並註冊卸載前收尾）
+// 💡 若先前其他模組已載入過此 DLL，initialize_once 會自動安全略過，避免二次初始化！
+using PluginInitFn = int32_t (*)(void* host_context);
+lib.initialize_once<PluginInitFn>("ork_plugin_init", host_context_ptr);
+
+// 註冊卸載前收尾回呼：保證在所有持有者與物件解構、DLL 真正被卸載前一刻調用
+lib.register_shutdown_symbol("ork_plugin_shutdown");
+
+// 3. 獲取工廠函式符號
 auto create_fn = lib.get_symbol<CreatePluginFn>("CreateAIPlugin");
 auto destroy_fn = lib.get_symbol<DestroyPluginFn>("DestroyAIPlugin");
 
-// 3. 建立實體並透過 bind_lifecycle 綁定生命週期（此時引用計數為 2）
+// 4. 建立實體並透過 bind_lifecycle 綁定生命週期（此時引用計數累加）
 auto ai_raw = create_fn();
 std::shared_ptr<IAIPlugin> ai_instance = lib.bind_lifecycle(ai_raw, destroy_fn);
 
-// 4. ⚠️ 關鍵：呼叫端主動放棄 load() 回傳的初始句柄！
+// 5. ⚠️ 關鍵：呼叫端主動放棄 load() 回傳的初始句柄！
 // 若呼叫端未來仍可能需要使用該動態庫，可在 reset() 之前保留一份弱引用觀察者：
 ork::WeakDynamicLibrary weak_lib = lib.to_weak();
-lib.reset(); // 放棄持有權，引用計數降為 1，此時 DLL 存活權杖全權移交給 ai_instance
+lib.reset(); // 放棄持有權，引用計數扣減，存活權杖全權移交給 ai_instance
 
-// 5. 業務安全使用：ai_instance 存活期間 DLL 代碼段絕不被卸載
+// 6. 業務安全使用：ai_instance 存活期間 DLL 代碼段絕不被卸載
 ai_instance->ExecuteAI();
 
-// 5.1 再次使用需求（弱引用晉升重獲）：
+// 6.1 再次使用需求（弱引用晉升重獲）：
 // 主程式若日後需要再次建立新物件或呼叫函式，可透過 weak_lib.lock() 嘗試晉升為強引用：
 if (auto locked_lib = weak_lib.lock()) {
     // 晉升成功！先前產生的物件仍存活，DLL 仍在記憶體中，無須重新走 OS LoadLibrary
@@ -147,8 +159,10 @@ if (auto locked_lib = weak_lib.lock()) {
     // 使用完畢後 locked_lib 隨作用域解構，不影響自動卸載邏輯
 }
 
-// 6. 當外掛生命週期結束、所有持有 ai_instance 的物件全部解構歸零後，DLL 自動在底層卸載！
-ai_instance.reset(); // 底層自動安全執行 FreeLibrary / dlclose
+// 7. 當外掛生命週期結束、所有持有 ai_instance 的物件全部解構歸零後：
+// -> 自動觸發已註冊的 ork_plugin_shutdown() 收尾
+// -> 底層自動安全執行 FreeLibrary / dlclose 卸載！
+ai_instance.reset(); 
 // 此時 weak_lib.expired() == true，weak_lib.lock() 安全傳回無效實例
 ```
 

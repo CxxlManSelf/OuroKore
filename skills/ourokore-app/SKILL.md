@@ -257,7 +257,7 @@ if (monster.Is<BossMonster>()) { /* 型別相符 */ }
 monster(&Monster::Attack);
 ```
 
-### 模式 G：動態外掛載入、物件反向錨定與自動卸載 (DynamicLibrary Lifecycle & Auto-Unload)
+### 模式 G：動態外掛載入、生命週期啟始/收尾與自動卸載 (DynamicLibrary Lifecycle & Auto-Unload)
 ```cpp
 #include <ourokore/base/DynamicLibrary.hpp>
 
@@ -268,7 +268,15 @@ if (!lib) {
     return;
 }
 
-// 2. 獲取工廠函式符號
+// 2. 外掛全域啟始與收尾協定（首次載入時初始化，註冊卸載前收尾）
+// 💡 若先前其他模組已載入過此 DLL，initialize_once 會自動安全略過，避免二次初始化！
+using PluginInitFn = int32_t (*)(void* host_context);
+lib.initialize_once<PluginInitFn>("ork_plugin_init", host_context_ptr);
+
+// 註冊卸載前收尾回呼：保證在所有持有者與物件解構、DLL 真正被卸載前一刻調用 (LIFO)
+lib.register_shutdown_symbol("ork_plugin_shutdown");
+
+// 3. 獲取工廠函式符號
 auto create_fn = lib.get_symbol<CreatePluginFn>("CreateAIPlugin");
 auto destroy_fn = lib.get_symbol<DestroyPluginFn>("DestroyAIPlugin");
 
@@ -326,6 +334,10 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
    * ⚠️ **高壓約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若應用端一直保留該回傳值（如存為長存成員或未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！必須主動放棄該初始句柄（如 `lib.reset()`），才能實現產生物件全數銷毀後 DLL 自動卸載。
    * **弱引用重獲保證 (WeakDynamicLibrary)**：主程式在呼叫 `reset()` 放棄持有前，可透過 `lib.to_weak()` 保留弱引用觀察者。日後需要再次存取符號或建立物件時，呼叫 `lock()` 即可安全晉升重獲強引用；若所有物件已釋放，DLL 自動卸載，弱引用安全過期（`expired() == true`）。
    * 🛡️ **受管物件 Payload 銷毀即刻解錨（墓碑零阻礙）**：綁定至受管物件的動態庫會在物件 Payload 實體物理解構完成時立即由核心釋放引用，弱引用句柄（UnboundHandle）的長存墓碑絕不阻礙動態庫及時卸載。
+   * 🔄 **多重載入快取分辨與單次啟始/收尾保證 (Single-Execution Lifecycle Invariant)**：
+     - 當進程內不同子系統多次請求載入同一動態庫時，`DynamicLibrary` 內部透過規範化路徑快取共享控制區塊。
+     - 僅在首次載入（0 -> 1）時 `lib.is_first_loaded()` 為 true，可透過 `initialize_once` 執行全域初始化（重複載入時自動安全略過）。
+     - 透過 `register_shutdown_symbol` 或 `add_cleanup_hook` 註冊的收尾函式，嚴格保證在最後一個使用者與物件全數釋放（1 -> 0）、DLL 卸載前夕剛好觸發一次。
 
 ---
 

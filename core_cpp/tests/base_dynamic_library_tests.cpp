@@ -50,7 +50,8 @@ int main(int argc, char *argv[])
     std::cout << "  ✅ 無效載入安全失敗，捕獲錯誤訊息: " << invalid_lib.get_last_error() << std::endl;
   }
 
-  // 尋找測試動態庫路徑
+  // 尋找測試動態庫路徑（優先搜尋 Debug 後綴 _d，確保加載最新編譯輸出）
+  std::filesystem::path plugin_filename_d = ork::DynamicLibrary::format_filename("test_plugin_dll_d");
   std::filesystem::path plugin_filename = ork::DynamicLibrary::format_filename("test_plugin_dll");
   std::filesystem::path exe_dir;
   if (argc > 0 && argv[0])
@@ -59,18 +60,21 @@ int main(int argc, char *argv[])
   }
 
   std::filesystem::path search_paths[] = {
+      exe_dir / plugin_filename_d,
       exe_dir / plugin_filename,
+      exe_dir / "../lib" / plugin_filename_d,
       exe_dir / "../lib" / plugin_filename,
+      std::filesystem::current_path() / "build" / "bin" / plugin_filename_d,
       std::filesystem::current_path() / "build" / "bin" / plugin_filename,
+      std::filesystem::current_path() / "build" / "lib" / plugin_filename_d,
       std::filesystem::current_path() / "build" / "lib" / plugin_filename,
+      std::filesystem::current_path() / "bin" / plugin_filename_d,
       std::filesystem::current_path() / "bin" / plugin_filename,
+      std::filesystem::current_path() / "lib" / plugin_filename_d,
       std::filesystem::current_path() / "lib" / plugin_filename,
+      std::filesystem::path("build") / "bin" / plugin_filename_d,
       std::filesystem::path("build") / "bin" / plugin_filename,
-      std::filesystem::path("build") / "lib" / plugin_filename,
-      std::filesystem::path("bin") / plugin_filename,
-      std::filesystem::path("lib") / plugin_filename,
-      std::filesystem::path("../bin") / plugin_filename,
-      std::filesystem::path("../lib") / plugin_filename,
+      plugin_filename_d,
       plugin_filename};
 
   std::filesystem::path plugin_path;
@@ -326,6 +330,68 @@ int main(int argc, char *argv[])
     std::cout << "  ✅ 驗證弱引用在 DLL 自動卸載後安全過期，lock() 傳回無效實例並包含錯誤訊息: "
               << failed_lock.get_last_error() << std::endl;
     std::cout << "  ✅ WeakDynamicLibrary 與 to_weak() / lock() 弱引用全流程測試通過！" << std::endl;
+  }
+
+  // 9. 測試：動態庫多重載入分辨（首次載入 vs 重複載入）與生命週期啟始/收尾
+  {
+    std::cout << "[Test 9] 驗證首次/重複載入分辨、initialize_once 單次初始化與 add_cleanup_hook 卸載收尾..." << std::endl;
+    int host_cleanup_counter = 0;
+
+    // 9.1 首次載入 (0 -> 1)
+    auto lib_first = ork::DynamicLibrary::load(plugin_path);
+    assert(lib_first.is_loaded());
+    assert(lib_first.is_first_loaded() == true); // 💡 精準識別為首次載入
+    assert(lib_first.use_count() == 1);
+
+    // 執行首次初始化
+    bool init_ok = lib_first.initialize_once<int()>("PluginInit");
+    assert(init_ok == true);
+
+    auto get_init_cnt = lib_first.get_symbol<int()>("GetInitCallCount");
+    assert(get_init_cnt != nullptr);
+    assert(get_init_cnt() == 1);
+
+    // 註冊 Host 端收尾閉包與外掛 DLL 內部收尾函式
+    lib_first.add_cleanup_hook([&host_cleanup_counter]() {
+      host_cleanup_counter++;
+    });
+    bool reg_shutdown_ok = lib_first.register_shutdown_symbol("PluginShutdown");
+    assert(reg_shutdown_ok == true);
+
+    // 9.2 重複請求載入 (1 -> 2)
+    auto lib_second = ork::DynamicLibrary::load(plugin_path);
+    assert(lib_second.is_loaded());
+    assert(lib_second.is_first_loaded() == false); // 💡 精準識別為重複載入，非首次載入！
+    assert(lib_first.use_count() == 2);
+    assert(lib_second.use_count() == 2);
+
+    // 嘗試對重複載入實例再次調用 initialize_once 應被自動安全略過
+    bool second_init_ok = lib_second.initialize_once<int()>("PluginInit");
+    assert(second_init_ok == false);
+    assert(get_init_cnt() == 1); // 💡 計數依然為 1，保證不被多次呼叫！
+
+    // 9.3 釋放第一個句柄 (2 -> 1)
+    std::cout << "  -> 放棄第一個句柄 lib_first，尚有 lib_second 存活..." << std::endl;
+    lib_first.reset();
+    assert(lib_second.use_count() == 1);
+    assert(host_cleanup_counter == 0); // 💡 尚未徹底卸載，收尾函式不可提前被執行
+
+    // 9.4 釋放第二個句柄 (1 -> 0)，觸發全域唯一收尾與底層卸載
+    std::cout << "  -> 放棄第二個句柄 lib_second，觸發底層動態庫安全卸載與收尾..." << std::endl;
+    lib_second.reset();
+
+    // 💡 驗證收尾回呼剛好被執行了 1 次！
+    assert(host_cleanup_counter == 1);
+    std::cout << "  ✅ host_cleanup_counter 成功觸發且僅執行 1 次 (計數: " << host_cleanup_counter << ")" << std::endl;
+
+    // 9.5 驗證完全卸載後再次載入 (0 -> 1) 能再次被識別為首次載入
+    std::cout << "  -> 驗證卸載後再次載入新輪迴..." << std::endl;
+    auto lib_third = ork::DynamicLibrary::load(plugin_path);
+    assert(lib_third.is_loaded());
+    assert(lib_third.is_first_loaded() == true); // 💡 新生命週期再次被正確識別為首次載入！
+    lib_third.reset();
+
+    std::cout << "  ✅ 模組首次/重複載入分辨與收尾回呼全流程驗證通過！" << std::endl;
   }
 
   std::cout << "============================================================" << std::endl;

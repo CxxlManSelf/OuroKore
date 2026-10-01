@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -209,6 +210,62 @@ public:
   }
 
   /**
+   * @brief 查詢本次 load() 取得的實例是否為動態庫於進程中的首次載入 (0 -> 1)
+   *
+   * 若傳回 true，代表動態庫為首次載入進程，呼叫端應在此時執行模組級全域啟始工作（Init）；
+   * 若傳回 false，代表此動態庫在當前進程先前已由其他模組載入並存活中（共用相同控制區塊），
+   * 應避免重複執行全域初始化以防止狀態衝突。
+   */
+  [[nodiscard]] bool is_first_loaded() const noexcept;
+
+  /**
+   * @brief 註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的收尾回呼 (Pre-Unload Hook)
+   *
+   * 所有透過此函式註冊的收尾回呼，將嚴格保證在動態庫引用計數徹底歸零（1 -> 0）、
+   * 且在動態庫代碼段解除映射之前，依反向順序 (LIFO) 執行。
+   *
+   * @param hook 收尾回呼閉包
+   */
+  void add_cleanup_hook(std::function<void()> hook);
+
+  /**
+   * @brief 依據符號名稱自動註冊無參數收尾函式（void()）為卸載前回呼
+   *
+   * @param symbol_name 收尾函式符號名稱（例如 "ork_plugin_shutdown"）
+   * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
+   */
+  bool register_shutdown_symbol(std::string_view symbol_name);
+
+  /**
+   * @brief 僅在首次載入（0 -> 1）時執行指定的符號初始化函式
+   *
+   * 若動態庫先前已被其他呼叫者載入（is_first_loaded() == false），則本函式會自動安全略過。
+   *
+   * @tparam FuncT 函式指標型別或函式簽章
+   * @tparam Args 傳入初始化函式之參數型別
+   * @param symbol_name 初始化符號名稱（例如 "ork_plugin_init"）
+   * @param args 轉發給初始化函式的引數
+   * @return 若成功觸發初始化傳回 true；若非首次載入或找不到符號傳回 false
+   */
+  template <typename FuncT, typename... Args>
+  bool initialize_once(std::string_view symbol_name, Args &&...args)
+  {
+    if (!is_first_loaded())
+    {
+      return false;
+    }
+
+    auto fn = get_symbol<FuncT>(symbol_name);
+    if (!fn)
+    {
+      return false;
+    }
+
+    fn(std::forward<Args>(args)...);
+    return true;
+  }
+
+  /**
    * @brief 依據當前平台自動格式化動態庫檔名
    * @param base_name 基礎模組名稱（如 "my_plugin"）
    * @return Windows: "my_plugin.dll", Linux: "libmy_plugin.so", macOS: "libmy_plugin.dylib"
@@ -231,13 +288,14 @@ public:
 private:
   friend class WeakDynamicLibrary;
 
-  explicit DynamicLibrary(std::shared_ptr<LibraryControlBlock> control_block, std::string last_error = "") noexcept
-      : m_control_block(std::move(control_block)), m_last_error(std::move(last_error))
+  explicit DynamicLibrary(std::shared_ptr<LibraryControlBlock> control_block, std::string last_error = "", bool is_first_loaded = false) noexcept
+      : m_control_block(std::move(control_block)), m_last_error(std::move(last_error)), m_is_first_loaded(is_first_loaded)
   {
   }
 
   std::shared_ptr<LibraryControlBlock> m_control_block;
   mutable std::string m_last_error;
+  bool m_is_first_loaded{false};
 };
 
 /**
