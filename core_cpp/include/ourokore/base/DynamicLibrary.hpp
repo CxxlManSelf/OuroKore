@@ -35,8 +35,9 @@ inline bool operator&(LibraryLoadFlags a, LibraryLoadFlags b)
   return (static_cast<uint32_t>(a) & static_cast<uint32_t>(b)) != 0;
 }
 
-// 前置宣告內部控制區塊（用於管理作業系統層級的原生句柄與真正卸載）
+// 前置宣告內部控制區塊與弱引用觀察者
 class LibraryControlBlock;
+class WeakDynamicLibrary;
 
 /**
  * @brief 跨平台通用動態函式庫載入器 (Dynamic Library Loader)
@@ -214,7 +215,22 @@ public:
    */
   static std::filesystem::path format_filename(std::string_view base_name);
 
+  using Weak = WeakDynamicLibrary;
+  using weak_type = WeakDynamicLibrary;
+
+  /**
+   * @brief 取得對應於本動態庫的弱引用觀察者 (Weak Dynamic Library)
+   *
+   * 類似 std::weak_ptr，不計入強引用計數，不會阻止動態庫在其產生的物件全數銷毀後自動卸載。
+   * 當主程式或外掛管理器為了達成自動卸載而透過 reset() 放棄 load() 回傳的初始強引用句柄後，
+   * 仍可持有此 WeakDynamicLibrary 觀察者。只要先前產生的物件仍有存活，隨時可透過 lock()
+   * 重新安全提升為有效的 DynamicLibrary 強引用（無需再次調用 OS LoadLibrary）以創建物件或解析符號。
+   */
+  [[nodiscard]] WeakDynamicLibrary to_weak() const noexcept;
+
 private:
+  friend class WeakDynamicLibrary;
+
   explicit DynamicLibrary(std::shared_ptr<LibraryControlBlock> control_block, std::string last_error = "") noexcept
       : m_control_block(std::move(control_block)), m_last_error(std::move(last_error))
   {
@@ -222,6 +238,73 @@ private:
 
   std::shared_ptr<LibraryControlBlock> m_control_block;
   mutable std::string m_last_error;
+};
+
+/**
+ * @brief 動態庫弱引用觀察者 (Weak Dynamic Library Handle)
+ *
+ * 【設計目的】
+ * 提供類似 std::weak_ptr 對應 std::shared_ptr 的無所有權觀察與晉升機制。
+ *
+ * 核心解決情境：
+ * 依照 OuroKore 生命週期反向錨定規範，主程式或工廠在建立物件並綁定動態庫後，
+ * 必須放棄 load() 回傳的初始強引用（如呼叫 DynamicLibrary::reset() 或讓變數離開局部作用域），
+ * 才能達成「當產生的所有物件全部解構時，底層動態庫安全自動卸載」。
+ *
+ * 然而一旦主程式呼叫 reset()，原本的 DynamicLibrary 變數即刻歸零失去關聯，日後若需再次使用便無法直接獲取。
+ * 透過事先建立 WeakDynamicLibrary，主程式可保有不干涉卸載的旁觀與晉升能力：
+ * 1. 狀態查詢：透過 expired() 查詢動態庫是否已被底層卸載，或透過 use_count() 查詢活體物件引用計數。
+ * 2. 安全重獲 (Lock & Acquire)：若先前產生的物件仍有存活（DLL 尚未卸載），呼叫 lock() 可再次
+ *    成功提升為有效的 DynamicLibrary 強引用，無須重新調用作業系統 LoadLibrary 即可再次取得符號或產生物件；
+ *    若所有物件已銷毀且 DLL 已在底層卸載，lock() 則安全傳回無效實例（expired() == true）。
+ */
+class ORK_BASE_API WeakDynamicLibrary
+{
+public:
+  WeakDynamicLibrary() noexcept;
+  ~WeakDynamicLibrary() noexcept;
+
+  WeakDynamicLibrary(const WeakDynamicLibrary &) noexcept;
+  WeakDynamicLibrary &operator=(const WeakDynamicLibrary &) noexcept;
+  WeakDynamicLibrary(WeakDynamicLibrary &&) noexcept;
+  WeakDynamicLibrary &operator=(WeakDynamicLibrary &&) noexcept;
+
+  /**
+   * @brief 從強引用 DynamicLibrary 構造弱引用觀察者
+   */
+  WeakDynamicLibrary(const DynamicLibrary &lib) noexcept;
+  WeakDynamicLibrary &operator=(const DynamicLibrary &lib) noexcept;
+
+  /**
+   * @brief 嘗試將弱引用提升為強引用 DynamicLibrary
+   * @return 若動態庫仍然存活且未卸載，傳回有效的 DynamicLibrary；若已卸載或未載入則傳回無效實例
+   */
+  [[nodiscard]] DynamicLibrary lock() const noexcept;
+
+  /**
+   * @brief 檢查動態庫是否已經卸載或過期
+   * @return 若動態庫已卸載或從未載入，傳回 true；若仍有活體物件或強引用持有中，傳回 false
+   */
+  [[nodiscard]] bool expired() const noexcept;
+
+  /**
+   * @brief 查詢當前動態庫的存活引用計數（所有持有該 DLL 之物件與 DynamicLibrary 強引用總數）
+   */
+  [[nodiscard]] size_t use_count() const noexcept;
+
+  /**
+   * @brief 重設弱引用為空狀態
+   */
+  void reset() noexcept;
+
+  /**
+   * @brief 布林運算子重載，等同於 !expired()
+   */
+  explicit operator bool() const noexcept { return !expired(); }
+
+private:
+  friend class DynamicLibrary;
+  std::weak_ptr<LibraryControlBlock> m_control_block;
 };
 
 }  // namespace ork

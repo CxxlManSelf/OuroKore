@@ -132,13 +132,24 @@ auto ai_raw = create_fn();
 std::shared_ptr<IAIPlugin> ai_instance = lib.bind_lifecycle(ai_raw, destroy_fn);
 
 // 4. ⚠️ 關鍵：呼叫端主動放棄 load() 回傳的初始句柄！
+// 若呼叫端未來仍可能需要使用該動態庫，可在 reset() 之前保留一份弱引用觀察者：
+ork::WeakDynamicLibrary weak_lib = lib.to_weak();
 lib.reset(); // 放棄持有權，引用計數降為 1，此時 DLL 存活權杖全權移交給 ai_instance
 
 // 5. 業務安全使用：ai_instance 存活期間 DLL 代碼段絕不被卸載
 ai_instance->ExecuteAI();
 
+// 5.1 再次使用需求（弱引用晉升重獲）：
+// 主程式若日後需要再次建立新物件或呼叫函式，可透過 weak_lib.lock() 嘗試晉升為強引用：
+if (auto locked_lib = weak_lib.lock()) {
+    // 晉升成功！先前產生的物件仍存活，DLL 仍在記憶體中，無須重新走 OS LoadLibrary
+    auto create_fn2 = locked_lib.get_symbol<CreatePluginFn>("CreateAIPlugin");
+    // 使用完畢後 locked_lib 隨作用域解構，不影響自動卸載邏輯
+}
+
 // 6. 當外掛生命週期結束、所有持有 ai_instance 的物件全部解構歸零後，DLL 自動在底層卸載！
 ai_instance.reset(); // 底層自動安全執行 FreeLibrary / dlclose
+// 此時 weak_lib.expired() == true，weak_lib.lock() 安全傳回無效實例
 ```
 
 #### 🛡️ 受管物件與 DynamicLibrary 之「即時解錨」保證：

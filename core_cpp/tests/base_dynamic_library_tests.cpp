@@ -233,6 +233,101 @@ int main(int argc, char *argv[])
     std::cout << "  ✅ UTF-8 介面載入與符號解析成功，UTF-8 路徑: " << loaded_utf8 << std::endl;
   }
 
+  // 8. 測試：WeakDynamicLibrary 弱引用、reset() 後晉升重獲 (lock()) 與自動卸載全流程驗證
+  {
+    std::cout << "[Test 8] 驗證 WeakDynamicLibrary 弱引用機制與 reset() 後重獲 (lock())..." << std::endl;
+
+    // 8.1 驗證空弱引用初始狀態
+    ork::WeakDynamicLibrary empty_weak;
+    assert(empty_weak.expired());
+    assert(!empty_weak);
+    assert(empty_weak.use_count() == 0);
+    assert(!empty_weak.lock().is_loaded());
+
+    // 8.2 載入動態庫並獲取弱引用觀察者
+    auto lib = ork::DynamicLibrary::load(plugin_path);
+    assert(lib.is_loaded());
+    assert(lib.use_count() == 1);
+
+    ork::WeakDynamicLibrary weak_lib = lib.to_weak();
+    assert(!weak_lib.expired());
+    assert(weak_lib);
+    assert(weak_lib.use_count() == 1);
+
+    // 8.3 透過 bind_lifecycle 建立第一個受管物件
+    auto create_fn = lib.get_symbol<CreatePluginFn>("CreateTestPlugin");
+    auto destroy_fn = lib.get_symbol<DestroyPluginFn>("DestroyTestPlugin");
+    assert(create_fn && destroy_fn);
+
+    std::shared_ptr<ITestPlugin> plugin1 = lib.bind_lifecycle(create_fn(), destroy_fn);
+    assert(plugin1 != nullptr);
+    assert(weak_lib.use_count() == 2); // lib (1) + plugin1 (1)
+
+    // 8.4 關鍵場景：主程式主動呼叫 reset() 放棄初始句柄以利後續自動卸載
+    std::cout << "  -> 主程式呼叫 lib.reset() 放棄初始強引用句柄..." << std::endl;
+    lib.reset();
+    assert(!lib.is_loaded());
+    assert(lib.use_count() == 0);
+
+    // 此時主程式的 lib 已為空，但因為 plugin1 仍存活，DLL 尚未卸載
+    assert(!weak_lib.expired());
+    assert(weak_lib);
+    assert(weak_lib.use_count() == 1); // 僅剩 plugin1 持有
+    assert(plugin1->Multiply(2, 3) == 6);
+
+    // 8.5 核心驗證：主程式日後再次需要使用該 DLL 時，透過 weak_lib.lock() 成功晉升重新獲取強引用！
+    std::cout << "  -> 核心驗證：透過 weak_lib.lock() 晉升重新獲取有效 DynamicLibrary..." << std::endl;
+    auto locked_lib = weak_lib.lock();
+    assert(locked_lib.is_loaded());
+    assert(locked_lib);
+    assert(locked_lib.use_count() == 2); // plugin1 (1) + locked_lib (1)
+
+    // 透過晉升重獲的 locked_lib 正常調用符號並建立第二個受管物件
+    auto add_fn = locked_lib.get_symbol<AddNumbersFn>("AddNumbers");
+    assert(add_fn != nullptr);
+    assert(add_fn(10, 32) == 42);
+
+    auto create_fn2 = locked_lib.get_symbol<CreatePluginFn>("CreateTestPlugin");
+    auto destroy_fn2 = locked_lib.get_symbol<DestroyPluginFn>("DestroyTestPlugin");
+    assert(create_fn2 && destroy_fn2);
+
+    std::shared_ptr<ITestPlugin> plugin2 = locked_lib.bind_lifecycle(create_fn2(), destroy_fn2);
+    assert(plugin2 != nullptr);
+    assert(plugin2->Multiply(7, 8) == 56);
+    assert(locked_lib.use_count() == 3); // plugin1 (1) + locked_lib (1) + plugin2 (1)
+
+    // 8.6 主程式用完後，再次放棄 locked_lib 句柄
+    locked_lib.reset();
+    assert(!locked_lib.is_loaded());
+    assert(weak_lib.use_count() == 2); // plugin1 (1) + plugin2 (1)
+
+    // 8.7 逐步釋放受管物件，驗證弱引用計數同步遞減與最終自動過期
+    std::cout << "  -> 銷毀第一個受管物件 plugin1..." << std::endl;
+    plugin1.reset();
+    assert(weak_lib.use_count() == 1);
+    assert(!weak_lib.expired());
+
+    // 仍能從 weak_lib.lock() 成功重獲
+    assert(weak_lib.lock().is_loaded());
+
+    std::cout << "  -> 銷毀最後一個受管物件 plugin2，觸發底層動態庫安全自動卸載..." << std::endl;
+    plugin2.reset();
+
+    // 此時所有活體物件與強引用全數歸零，底層 DLL 已自動卸載！
+    assert(weak_lib.use_count() == 0);
+    assert(weak_lib.expired());
+    assert(!weak_lib);
+
+    // 再次嘗試 lock() 應安全返回無效實例
+    auto failed_lock = weak_lib.lock();
+    assert(!failed_lock.is_loaded());
+    assert(!failed_lock);
+    assert(!failed_lock.get_last_error().empty());
+    std::cout << "  ✅ 驗證弱引用在 DLL 自動卸載後安全過期，lock() 傳回無效實例並包含錯誤訊息: "
+              << failed_lock.get_last_error() << std::endl;
+    std::cout << "  ✅ WeakDynamicLibrary 與 to_weak() / lock() 弱引用全流程測試通過！" << std::endl;
+  }
+
   std::cout << "============================================================" << std::endl;
   std::cout << "🎉 恭喜！DynamicLibrary 所有單元測試全部 PASS！" << std::endl;
   std::cout << "============================================================" << std::endl;

@@ -38,6 +38,9 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
      **更關鍵的是「即時解錨」**：當該物件強引用歸零並在 DeferredDeleteQueue 完成 Payload 物理銷毀後，核心會**立即主動釋放該 DynamicLibrary 引用**！即使外部仍有 UnboundHandle 弱引用維持 ControlBlock 墓碑，動態庫也不會被鎖死，得以在所有實體銷毀後第一時間安全卸載！
    - 🛡️ **專職單元權限委派（IObjectModuleBinder 介面隔離）**：
      若動態庫載入與物件生成由專門的模組管理單元（如 `PluginManager`）負責，主程式切勿傳遞完整的 `HostContext`（避免外洩 `Shutdown`、`FlushStorage` 等全域特權）。應透過 `host.GetModuleBinder()` 取得輕量之 `std::shared_ptr<ork::IObjectModuleBinder>` 交給專職單元，貫徹最小特權原則（Least Privilege）。
+   - 👁️ **弱引用觀察與 reset() 後重獲晉升 (WeakDynamicLibrary Invariant)**：
+     若主程式或外掛管理器為了配合自動卸載而呼叫了 `DynamicLibrary::reset()` 放棄初始強引用，但未來仍需要使用該動態庫（如再次獲取工廠符號產生物件），**應事先在呼叫 `reset()` 前透過 `auto weak_lib = lib.to_weak();` 保留一份弱引用**。
+     只要先前產生的物件仍有存活，隨時可透過 `if (auto locked = weak_lib.lock())` 零開銷重獲強引用（無須重新調用作業系統 LoadLibrary）；當所有物件解構後，DLL 自動安全卸載，弱引用安全過期（`weak_lib.expired() == true`，`lock()` 安全傳回無效實例）。
 
 ---
 
@@ -274,14 +277,24 @@ IAIPlugin *raw = create_fn();
 std::shared_ptr<IAIPlugin> plugin = lib.bind_lifecycle(raw, destroy_fn);
 
 // 4. ⚠️ 關鍵：呼叫端主動放棄 load() 回傳的初始句柄！
+// 若主程式日後仍可能需要使用該動態庫，可在 reset() 前保留一份弱引用觀察者：
+ork::WeakDynamicLibrary weak_lib = lib.to_weak();
 // 此時 lib.use_count() 由 2 降為 1（僅由 plugin 持有存活權杖）
 lib.reset();
 
 // 5. 業務安全使用：plugin 存活期間代碼段絕不被卸載
 plugin->ExecuteAI();
 
+// 5.1 再次使用需求（弱引用晉升重獲）：
+// 若日後需要再次建立新物件，透過 weak_lib.lock() 即可重獲強引用（無須重新 LoadLibrary）：
+if (auto locked_lib = weak_lib.lock()) {
+    auto p2 = locked_lib.bind_lifecycle(create_fn(), destroy_fn);
+    // 使用完畢後 locked_lib 隨作用域解構或 reset()，不影響自動卸載
+}
+
 // 6. 當所有持有 plugin 的變數全數銷毀歸零時，Deleter 執行且 DLL 自動在底層卸載！
 plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
+// 此時 weak_lib.expired() == true，weak_lib.lock() 安全傳回無效實例
 ```
 
 ---
@@ -311,6 +324,7 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
    * `DynamicLibrary` 禁絕提供手動 `unload()` 方法，以防虛擬函式表與代碼段提前失效引發崩潰。
    * 正確用法是透過 `lib.bind_lifecycle(raw, deleter)` 或 Deleter 閉包將產生的物件與動態庫綁定，待物件全數銷毀後由底層自動卸載。
    * ⚠️ **高壓約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若應用端一直保留該回傳值（如存為長存成員或未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！必須主動放棄該初始句柄（如 `lib.reset()`），才能實現產生物件全數銷毀後 DLL 自動卸載。
+   * **弱引用重獲保證 (WeakDynamicLibrary)**：主程式在呼叫 `reset()` 放棄持有前，可透過 `lib.to_weak()` 保留弱引用觀察者。日後需要再次存取符號或建立物件時，呼叫 `lock()` 即可安全晉升重獲強引用；若所有物件已釋放，DLL 自動卸載，弱引用安全過期（`expired() == true`）。
    * 🛡️ **受管物件 Payload 銷毀即刻解錨（墓碑零阻礙）**：綁定至受管物件的動態庫會在物件 Payload 實體物理解構完成時立即由核心釋放引用，弱引用句柄（UnboundHandle）的長存墓碑絕不阻礙動態庫及時卸載。
 
 ---

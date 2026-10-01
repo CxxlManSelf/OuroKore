@@ -71,6 +71,9 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 >    應用端必須在完成物件綁定後主動放棄該初始句柄（例如讓其隨工廠作用域結束自然解構，或主動呼叫 `lib.reset()`），將存活權杖全權移交給物件持有，才能確保「物件全數解構後 DLL 自動卸載」。
 > 4. **受管物件 Payload 銷毀即刻解錨（墓碑零阻礙鐵律）**：
 >    當受管物件透過 `SetObjectModuleLoader` / `IObjectModuleBinder` 綁定動態庫時，動態庫於物件脫水（Dehydrated）期間長存以備透明復水；**一旦最後一個強引用歸零並由 `DeferredDeleteQueue` 完成 Payload 物理銷毀，核心立即在核心空間主動釋放該 DynamicLibrary 引用**。即使外部仍有 `UnboundHandle` 弱引用維持 ControlBlock 墓碑，也絕不阻礙動態庫及時安全卸載。
+> 5. **主程式 reset() 後之弱引用晉升重獲（WeakDynamicLibrary 鐵律）**：
+>    當主程式為配合自動卸載而呼叫 `lib.reset()` 或讓強引用變數離開作用域時，若未來仍需要使用該動態庫（如再次解析符號、創建物件）或監控其存活，**應事先透過 `auto weak_lib = lib.to_weak();` 保留一份 `ork::WeakDynamicLibrary` 弱引用**。
+>    日後需要使用時，透過 `if (auto locked = weak_lib.lock())` 即可零開銷晉升為有效強引用（無須重新 LoadLibrary）；若所有物件已解構且 DLL 已卸載，`weak_lib.expired()` 為 `true`，`lock()` 安全傳回無效實例。
 
 ### 2.1 主程式 Entry Point (HostContext)
 ```cpp

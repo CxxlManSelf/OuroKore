@@ -493,13 +493,24 @@ auto ai_raw = create_fn();
 std::shared_ptr<IAIPlugin> ai_instance = lib.bind_lifecycle(ai_raw, destroy_fn);
 
 // 4. ⚠️ 關鍵：呼叫端主動放棄 load() 回傳的初始句柄！
+// 若呼叫端未來仍可能需要使用該動態庫，可在 reset() 之前保留一份弱引用觀察者：
+ork::WeakDynamicLibrary weak_lib = lib.to_weak();
 lib.reset(); // 放棄持有權，引用計數降為 1，此時 DLL 存活權杖全權移交給 ai_instance
 
 // 5. 業務安全使用：ai_instance 存活期間 DLL 代碼段絕不被卸載
 ai_instance->ExecuteAI();
 
+// 5.1 再次使用需求（弱引用晉升重獲）：
+// 主程式若日後需要再次建立新物件或呼叫函式，可透過 weak_lib.lock() 嘗試晉升為強引用：
+if (auto locked_lib = weak_lib.lock()) {
+    // 晉升成功！先前產生的物件仍存活，DLL 仍在記憶體中，無須重新走 OS LoadLibrary
+    auto create_fn2 = locked_lib.get_symbol<CreatePluginFn>("CreateAIPlugin");
+    // 使用完畢後 locked_lib 隨作用域解構，不影響自動卸載邏輯
+}
+
 // 6. 當外掛生命週期結束、所有持有 ai_instance 的物件全部解構歸零後，DLL 自動在底層卸載！
 ai_instance.reset(); // 底層自動安全執行 FreeLibrary / dlclose
+// 此時 weak_lib.expired() == true，weak_lib.lock() 安全傳回無效實例
 ```
 
 #### 🛡️ 受管物件與 DynamicLibrary 之「即時解錨」保證：
@@ -713,6 +724,20 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
   * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析動態庫導出符號並智慧推導函式指標型別。
   * `template <typename T, typename DeleterT> std::shared_ptr<T> bind_lifecycle(T *raw_ptr, DeleterT deleter)`：將自訂裸指標與動態庫存活權杖綁定，確保指標銷毀前動態庫永不卸載。
   * `static std::filesystem::path format_filename(std::string_view base_name)`：依作業系統格式化動態庫檔名（Windows `.dll`、Linux `.so`、macOS `.dylib`）。
+  * `WeakDynamicLibrary to_weak() const noexcept`：建立並取得該動態庫之弱引用觀察者（不增加強引用計數，不阻止自動卸載）。
+
+---
+
+## 👁️ 6.1 動態庫弱引用觀察者：`ork::WeakDynamicLibrary`
+* **標頭檔**：`ourokore/base/DynamicLibrary.hpp`
+* **設計目的**：提供類似 `std::weak_ptr` 的無所有權觀察與晉升機制。當主程式為配合自動卸載而呼叫 `DynamicLibrary::reset()` 放棄初始強引用後，若日後需要再次建立物件或監控模組狀態，可透過本類別之 `lock()` 安全晉升重獲強引用（無須重新 LoadLibrary）；若所有受管物件均已解構且 DLL 已卸載，`lock()` 則安全傳回無效實例。
+* **方法**：
+  * `WeakDynamicLibrary(const DynamicLibrary &lib) noexcept`：從強引用 DynamicLibrary 構造弱引用觀察者。
+  * `DynamicLibrary lock() const noexcept`：嘗試將弱引用晉升為強引用。若動態庫仍存活傳回有效實例；若已卸載則傳回無效實例。
+  * `bool expired() const noexcept`：查詢動態庫是否已經卸載或過期。
+  * `size_t use_count() const noexcept`：查詢當前存活之強引用計數（所有綁定活體物件與強引用總數）。
+  * `void reset() noexcept`：重設弱引用為空狀態。
+  * `explicit operator bool() const noexcept`：等同於 `!expired()`。
 
 ---
 

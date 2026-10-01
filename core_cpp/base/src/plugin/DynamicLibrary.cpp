@@ -300,4 +300,57 @@ std::filesystem::path DynamicLibrary::format_filename(std::string_view base_name
 #endif
 }
 
+WeakDynamicLibrary DynamicLibrary::to_weak() const noexcept
+{
+  return WeakDynamicLibrary(*this);
+}
+
+// ============================================================================
+// WeakDynamicLibrary 實作
+// ============================================================================
+
+WeakDynamicLibrary::WeakDynamicLibrary() noexcept = default;
+WeakDynamicLibrary::~WeakDynamicLibrary() noexcept = default;
+
+WeakDynamicLibrary::WeakDynamicLibrary(const WeakDynamicLibrary &) noexcept = default;
+WeakDynamicLibrary &WeakDynamicLibrary::operator=(const WeakDynamicLibrary &) noexcept = default;
+WeakDynamicLibrary::WeakDynamicLibrary(WeakDynamicLibrary &&) noexcept = default;
+WeakDynamicLibrary &WeakDynamicLibrary::operator=(WeakDynamicLibrary &&) noexcept = default;
+
+WeakDynamicLibrary::WeakDynamicLibrary(const DynamicLibrary &lib) noexcept
+    : m_control_block(lib.m_control_block)
+{
+}
+
+WeakDynamicLibrary &WeakDynamicLibrary::operator=(const DynamicLibrary &lib) noexcept
+{
+  m_control_block = lib.m_control_block;
+  return *this;
+}
+
+DynamicLibrary WeakDynamicLibrary::lock() const noexcept
+{
+  auto sp = m_control_block.lock();
+  if (!sp)
+  {
+    return DynamicLibrary(nullptr, "Dynamic library has expired or is unloaded.");
+  }
+  return DynamicLibrary(std::move(sp), "");
+}
+
+bool WeakDynamicLibrary::expired() const noexcept
+{
+  return m_control_block.expired();
+}
+
+size_t WeakDynamicLibrary::use_count() const noexcept
+{
+  return static_cast<size_t>(m_control_block.use_count());
+}
+
+void WeakDynamicLibrary::reset() noexcept
+{
+  m_control_block.reset();
+}
+
 }  // namespace ork
