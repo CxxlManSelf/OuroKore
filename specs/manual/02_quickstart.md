@@ -35,13 +35,14 @@ int main() {
 
 ## 📦 第二步：定義自訂領域物件 (Define OuroObject)
 
-所有託管物件必須繼承自 `ork::OuroObject`，禁止外部直接 `new`：
+凡是交由 OuroKore 託管的領域物件（透過 `ork::CreateObject<T>()` 建立者），**一律強制繼承自 `ork::Subclass<T, Base = ork::OuroObject>` 樣板基底**。
+**嚴格禁止直接裸繼承 `OuroObject`**（如 `class Player : public ork::OuroObject`），直接繼承將在編譯期被 `static_assert` 阻擋；亦禁止外部直接 `new`：
 
 ```cpp
 #include <ourokore/component/OuroCore.hpp>
 #include <string>
 
-class Player : public ork::OuroObject {
+class Player : public ork::Subclass<Player, ork::OuroObject> {
 public:
     Player() = default;
 

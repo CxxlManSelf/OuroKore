@@ -24,16 +24,20 @@
 
 ---
 
-## 📦 2. 領域物件基底：`ork::OuroObject`
+## 📦 2. 領域物件基底與 CRTP 樣板：`ork::OuroObject` / `ork::Subclass`
 * **標頭檔**：`ourokore/component/OuroObject.hpp`
-* **方法**：
+* **類別基底 `ork::OuroObject`**：
+  * 所有託管物件之抽象基類，嚴禁外部 `new` 或值拷貝。
   * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
   * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
-  * `ork_type_id_t GetTypeID() const`：取得物件之靜態型別 64 位元 TypeID（支援多型與繼承查詢）。
+  * `ork_type_id_t GetTypeID() const`：取得物件當前之 64 位元 TypeID（支援多型與繼承階層查詢）。
   * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
   * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
-* **巨集**：
-  * `ORK_OBJECT(Derived, Base)`：宣告類別之動態與靜態 TypeID，自動登記至全域繼承樹。
+* **樣板基底 `ork::Subclass<Derived, Base = ork::OuroObject>`**：
+  * **所有領域物件強制繼承之 CRTP 基底**（免巨集自動型別系統）。
+  * `static constexpr const char* StaticTypeName()`：自動在編譯期萃取類別名稱。
+  * `static TypeID StaticTypeID()`：自動以 FNV-1a 計算並向核心註冊繼承關係樹。
+  * 支援帶參數建構子完美轉發：`Subclass(args...)` 直接初始化父類別。
 
 ---
 
@@ -67,7 +71,14 @@
   * `CreatePermanentObject<T>(args...)`：建立永久常駐物件（不參與脫水換頁）。
   * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新。
   * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
-  * `Dehydrate(id)` / `Rehydrate<T>(id)`：手動脫水與復水。
+  * `Dehydrate(HandleID id)`：依 ID 脫水（若 root_count > 0 則安全略過傳回 false）。
+  * `Dehydrate(OuroPtr<T> &&ptr)`：右值移動消耗脫水（清空原指標，防止懸空）。
+  * `DehydrateAsync(HandleID id)` / `DehydrateAsync(OuroPtr<T> &&ptr)`：非同步背景脫水。
+  * `Rehydrate<T>(HandleID id)` / `Rehydrate<T>(const OuroPtr<T> &ptr)`：顯式手動復水，回傳全新 `OuroPtr<T>`。
+  * `RehydrateAsync<T>(HandleID id)` / `RehydrateAsync<T>(const OuroPtr<T> &ptr)`：非同步背景顯式復水。
+  * `IsAlive(HandleID id)`：查詢物件是否存活（純 ControlBlock 查詢，零 I/O 保證）。
+  * `GetStorageState(HandleID id)`：查詢物件當前 StorageState（純 ControlBlock 查詢，零 I/O 保證）。
+  * `GetRootEdgeCount(HandleID id)`：查詢目標當前活躍根邊緣數量。
   * `SaveBatch(...)` / `LoadBatch(...)`：多核心平行批次操作。
 
 ---

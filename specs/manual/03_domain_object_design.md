@@ -9,7 +9,7 @@
 在多執行緒併發環境下，手動維護「物件是否被修改（Dirty 狀態）」非常容易遺漏或產生 Data Race。OuroKore 採用 **RAII 獨占寫鎖與原子標髒** 的一體化設計：
 
 ```cpp
-class Character : public ork::OuroObject {
+class Character : public ork::Subclass<Character, ork::OuroObject> {
 public:
     // 讀取：使用 OuroReadLock（多個讀取者可同時併發）
     int32_t GetHp() const {
@@ -74,43 +74,61 @@ void DeserializePayload(ork::OuroStream &stream) override {
 
 ---
 
-## 🏷️ 4. 型別系統宣告與安全多型轉型 (Type System & Safe Casting)
+## 🏷️ 4. 型別系統宣告與安全多型轉型 (CRTP Subclass Type System)
 
-所有領域物件強烈建議在類別定義內使用 `ORK_OBJECT(Derived, Base)` 巨集宣告靜態與動態型別資訊：
+所有受管領域物件均採用 **CRTP 免巨集自動型別系統**，透過繼承 `ork::Subclass<Derived, Base>`，在編譯時期自動萃取類別名稱並向核心型別登錄系統登記繼承樹，**類別體內完全無需撰寫任何侵入性巨集**即可獲得完整的 RTTI 與多型轉型支援：
 
 ```cpp
-class Creature : public ork::OuroObject {
-    ORK_OBJECT(Creature, ork::OuroObject)
+// 1. 基底領域物件（繼承自 ork::Subclass<Creature, ork::OuroObject>，Base 預設為 OuroObject）
+class Creature : public ork::Subclass<Creature, ork::OuroObject> {
 public:
+    Creature() = default;
+    explicit Creature(int32_t hp) : m_hp(hp) {}
+
     int32_t GetHp() const { ork::OuroReadLock lock(*this); return m_hp; }
     void SetHp(int32_t hp) { ork::OuroWriteLock lock(*this); m_hp = hp; }
 private:
     int32_t m_hp{100};
 };
 
-// 繼承時，第二個參數必須準確指定「直接父類別」，核心自動構建繼承鏈
-class Monster : public Creature {
-    ORK_OBJECT(Monster, Creature)
+// 2. 子類別繼承：Base 參數指定直接父類別 Creature
+// 支援透過 Subclass(...) 完美轉發參數至父類別建構子！
+class Monster : public ork::Subclass<Monster, Creature> {
 public:
+    Monster() = default;
+    Monster(int32_t hp, int32_t rage) : Subclass(hp), m_rage(rage) {}
+
     int32_t GetRage() const { ork::OuroReadLock lock(*this); return m_rage; }
 private:
     int32_t m_rage{50};
 };
 
-class BossMonster : public Monster {
-    ORK_OBJECT(BossMonster, Monster)
+// 3. 孫類別／曾孫類別多層繼承
+class BossMonster : public ork::Subclass<BossMonster, Monster> {
 public:
+    BossMonster() = default;
+    BossMonster(int32_t hp, int32_t rage, std::string skill)
+        : Subclass(hp, rage), m_special_skill(std::move(skill)) {}
+
     void CastUltimateSkill() {
         ork::OuroWriteLock lock(*this);
         // 施放絕招...
     }
+private:
+    std::string m_special_skill{"Meteor"};
 };
 ```
 
-### 1. 成員呼叫鐵律：嚴禁使用 `operator->`
+> [!NOTE]
+> **免巨集優勢**：
+> - 完全拋棄舊式 `ORK_OBJECT` 巨集，語法更貼近現代標準 C++20。
+> - 支援帶參數建構子轉發（透過呼叫 `Subclass(...)`）。
+> - 型別識別碼在編譯期與載入時自動計算並註冊，完全杜絕手動漏寫巨集導致的繼承樹斷層。
+
+### 1. 成員呼叫鐵律：僅接受成員函式指標
 為徹底消除裸指標逃逸與懸垂指標（UAF）漏洞，`OuroPtr<T>` 徹底拔除了 `operator->`、`operator*` 與 `get()`：
-* **標準調用方式**：透過運算子轉發 `ptr(&ClassName::Method, args...)`。
-* **Lambda 批次操作**：`ptr([](ClassName &obj) { obj.DoSomething(); })`。
+* **標準調用方式**：透過成員指標運算子轉發 `ptr(&ClassName::Method, args...)` 或 `ptr.Invoke(&ClassName::Method, args...)`。
+* **嚴禁直接使用裸指標或 Lambda**：`OuroPtr` 的 `operator()` 嚴格限定僅接受成員函式指標，以防止 Lambda 閉包無意捕獲並外洩裸指標；若需在極端效能情境下執行自定義閉包操作，僅限在受控範圍內使用 `ork::WithObject(ptr, lambda)`。
 * **原生極速延遲快取**：首次呼叫時透明復水並快取指標，後續呼叫直接以 $O(1)$ 純暫存器原生速度執行。
 
 ```cpp

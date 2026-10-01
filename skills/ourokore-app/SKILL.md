@@ -174,21 +174,42 @@ boss([](Monster &b) {
 }); // 離開作用域時自動 atomic mark dirty 並解鎖
 ```
 
-### 模式 C：藍圖序列化、持久化與手動脫水
+### 模式 C：藍圖序列化、持久化與脫水/復水 (Dehydration & Rehydration)
 ```cpp
-// 1. 同步儲存至持久化驅動
-ork::Save(boss);
+ork::HandleID boss_id = boss.GetTargetID();
 
-// 2. 非同步背景儲存（不卡頓遊戲主迴圈）
-std::future<ork::AsyncResult<Monster>> future = ork::SaveAsync(boss);
+// 1. 同步與非同步存檔至儲存驅動
+ork::Save(boss);
+std::future<ork::AsyncResult<Monster>> save_future = ork::SaveAsync(boss);
 // ... 主迴圈繼續執行 ...
-auto result = future.get();
-if (result.success) {
-    std::cout << "背景存檔完成！ID: " << result.id << std::endl;
+if (save_future.get().success) {
+    std::cout << "背景存檔完成！ID: " << boss_id << std::endl;
 }
 
-// 3. 手動發起非同步脫水（右值移動所有權語意）
-ork::DehydrateAsync(std::move(boss));
+// 2. 手動脫水（右值消耗語意：傳入的原 boss 指標將被立即清空重置，杜絕懸空）
+bool dehydrated = ork::Dehydrate(std::move(boss));
+assert(!boss); // 原 boss 指標已安全清空
+
+// 亦支援非同步背景脫水：
+// ork::DehydrateAsync(boss_id);
+
+// 3. 儲存狀態查詢（純 ControlBlock 查詢，零 I/O 墓碑保證）
+if (ork::GetStorageState(boss_id) == ork::StorageState::Dehydrated) {
+    std::cout << "物件已脫水落盤，實體記憶體已釋放" << std::endl;
+}
+
+// 4. 物件復水 (Rehydration)：
+// 4.1 【推薦】透明延遲按需復水：若物件被 OwningHandle 或 UnboundHandle 持有，
+//      再次調用時由 ControlBlock 自動透明載入還原，業務端無需任何額外載入代碼！
+// 4.2 【顯式手動復水】：若需手動主動還原並取得全新活躍 OuroPtr：
+ork::OuroPtr<Monster> restored_boss = ork::Rehydrate<Monster>(boss_id);
+restored_boss(&Monster::Attack);
+
+// 4.3 【非同步背景復水】：預先在背景執行緒載入與反序列化
+std::future<ork::AsyncResult<Monster>> rehydrate_future = ork::RehydrateAsync<Monster>(boss_id);
+if (rehydrate_future.get().success) {
+    ork::OuroPtr<Monster> async_boss = std::move(rehydrate_future.get().ptr);
+}
 ```
 
 ### 模式 D：型別識別與安全多型轉型 (Type Casting & Inspection)

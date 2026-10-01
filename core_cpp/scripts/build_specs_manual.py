@@ -99,13 +99,14 @@ int main() {
 
 ## 📦 第二步：定義自訂領域物件 (Define OuroObject)
 
-所有託管物件必須繼承自 `ork::OuroObject`，禁止外部直接 `new`：
+凡是交由 OuroKore 託管的領域物件（透過 `ork::CreateObject<T>()` 建立者），**一律強制繼承自 `ork::Subclass<T, Base = ork::OuroObject>` 樣板基底**。
+**嚴格禁止直接裸繼承 `OuroObject`**（如 `class Player : public ork::OuroObject`），直接繼承將在編譯期被 `static_assert` 阻擋；亦禁止外部直接 `new`：
 
 ```cpp
 #include <ourokore/component/OuroCore.hpp>
 #include <string>
 
-class Player : public ork::OuroObject {
+class Player : public ork::Subclass<Player, ork::OuroObject> {
 public:
     Player() = default;
 
@@ -181,7 +182,7 @@ std::cout << "玩家建立成功，HandleID: " << pid << std::endl;
 在多執行緒併發環境下，手動維護「物件是否被修改（Dirty 狀態）」非常容易遺漏或產生 Data Race。OuroKore 採用 **RAII 獨占寫鎖與原子標髒** 的一體化設計：
 
 ```cpp
-class Character : public ork::OuroObject {
+class Character : public ork::Subclass<Character, ork::OuroObject> {
 public:
     // 讀取：使用 OuroReadLock（多個讀取者可同時併發）
     int32_t GetHp() const {
@@ -246,43 +247,61 @@ void DeserializePayload(ork::OuroStream &stream) override {
 
 ---
 
-## 🏷️ 4. 型別系統宣告與安全多型轉型 (Type System & Safe Casting)
+## 🏷️ 4. 型別系統宣告與安全多型轉型 (CRTP Subclass Type System)
 
-所有領域物件強烈建議在類別定義內使用 `ORK_OBJECT(Derived, Base)` 巨集宣告靜態與動態型別資訊：
+所有受管領域物件均採用 **CRTP 免巨集自動型別系統**，透過繼承 `ork::Subclass<Derived, Base>`，在編譯時期自動萃取類別名稱並向核心型別登錄系統登記繼承樹，**類別體內完全無需撰寫任何侵入性巨集**即可獲得完整的 RTTI 與多型轉型支援：
 
 ```cpp
-class Creature : public ork::OuroObject {
-    ORK_OBJECT(Creature, ork::OuroObject)
+// 1. 基底領域物件（繼承自 ork::Subclass<Creature, ork::OuroObject>，Base 預設為 OuroObject）
+class Creature : public ork::Subclass<Creature, ork::OuroObject> {
 public:
+    Creature() = default;
+    explicit Creature(int32_t hp) : m_hp(hp) {}
+
     int32_t GetHp() const { ork::OuroReadLock lock(*this); return m_hp; }
     void SetHp(int32_t hp) { ork::OuroWriteLock lock(*this); m_hp = hp; }
 private:
     int32_t m_hp{100};
 };
 
-// 繼承時，第二個參數必須準確指定「直接父類別」，核心自動構建繼承鏈
-class Monster : public Creature {
-    ORK_OBJECT(Monster, Creature)
+// 2. 子類別繼承：Base 參數指定直接父類別 Creature
+// 支援透過 Subclass(...) 完美轉發參數至父類別建構子！
+class Monster : public ork::Subclass<Monster, Creature> {
 public:
+    Monster() = default;
+    Monster(int32_t hp, int32_t rage) : Subclass(hp), m_rage(rage) {}
+
     int32_t GetRage() const { ork::OuroReadLock lock(*this); return m_rage; }
 private:
     int32_t m_rage{50};
 };
 
-class BossMonster : public Monster {
-    ORK_OBJECT(BossMonster, Monster)
+// 3. 孫類別／曾孫類別多層繼承
+class BossMonster : public ork::Subclass<BossMonster, Monster> {
 public:
+    BossMonster() = default;
+    BossMonster(int32_t hp, int32_t rage, std::string skill)
+        : Subclass(hp, rage), m_special_skill(std::move(skill)) {}
+
     void CastUltimateSkill() {
         ork::OuroWriteLock lock(*this);
         // 施放絕招...
     }
+private:
+    std::string m_special_skill{"Meteor"};
 };
 ```
 
-### 1. 成員呼叫鐵律：嚴禁使用 `operator->`
+> [!NOTE]
+> **免巨集優勢**：
+> - 完全拋棄舊式 `ORK_OBJECT` 巨集，語法更貼近現代標準 C++20。
+> - 支援帶參數建構子轉發（透過呼叫 `Subclass(...)`）。
+> - 型別識別碼在編譯期與載入時自動計算並註冊，完全杜絕手動漏寫巨集導致的繼承樹斷層。
+
+### 1. 成員呼叫鐵律：僅接受成員函式指標
 為徹底消除裸指標逃逸與懸垂指標（UAF）漏洞，`OuroPtr<T>` 徹底拔除了 `operator->`、`operator*` 與 `get()`：
-* **標準調用方式**：透過運算子轉發 `ptr(&ClassName::Method, args...)`。
-* **Lambda 批次操作**：`ptr([](ClassName &obj) { obj.DoSomething(); })`。
+* **標準調用方式**：透過成員指標運算子轉發 `ptr(&ClassName::Method, args...)` 或 `ptr.Invoke(&ClassName::Method, args...)`。
+* **嚴禁直接使用裸指標或 Lambda**：`OuroPtr` 的 `operator()` 嚴格限定僅接受成員函式指標，以防止 Lambda 閉包無意捕獲並外洩裸指標；若需在極端效能情境下執行自定義閉包操作，僅限在受控範圍內使用 `ork::WithObject(ptr, lambda)`。
 * **原生極速延遲快取**：首次呼叫時透明復水並快取指標，後續呼叫直接以 $O(1)$ 純暫存器原生速度執行。
 
 ```cpp
@@ -381,7 +400,7 @@ OuroKore 透過三種關鍵代數類別，精準表達物件圖中各種複雜�
 `OwningHandle` 代表父物件對子物件的擁有權。宣告時**必須傳入唯一的插槽名稱（Slot Name）**，物件建構時會自動向底層名冊登記：
 
 ```cpp
-class Boss : public ork::OuroObject {
+class Boss : public ork::Subclass<Boss, ork::OuroObject> {
 public:
     // 自動向 Boss 註冊名為 "MinionSlot" 的邊緣，支援 C++20 UTF-8 字面量與中文槽位
     ork::OwningHandle<Monster> m_minion{u8"隨從槽位_左"};
@@ -443,7 +462,7 @@ public:
 因為對方隨時可能離開，你不能直接拿它來操作。每次要用的時候，只要做一件事：
 
 ```cpp
-class CombatSystem : public ork::OuroObject {
+class CombatSystem : public ork::Subclass<CombatSystem, ork::OuroObject> {
 public:
     // 旁觀者句柄：只記住模組號碼，不干涉其生死
     ork::UnboundHandle<ork::OuroObject> m_ai_module;
@@ -571,7 +590,73 @@ OuroKore 具備針對超大型世界物件圖的記憶體自動分頁技術，�
 
 ---
 
-## ⚙️ 3. 配置儲存驅動與 LRU 自動脫水器
+## 📦 3. 手動脫水與右值消耗語意 (Manual Dehydration & Move Consume)
+
+除了由背景脫水器自動換頁外，應用端亦可依業務邏輯主動發起脫水：
+
+```cpp
+ork::OuroPtr<Monster> boss = ork::CreateObject<Monster>();
+ork::HandleID boss_id = boss.GetTargetID();
+ork::Save(boss); // 脫水前確保狀態落盤
+
+// 方式一：右值移動消耗脫水（強烈推薦）
+// ⚠️ 注意：傳入的原 boss 指標將被立即釋放並重置清空，杜絕懸空指針！
+bool dehydrated = ork::Dehydrate(std::move(boss));
+assert(!boss); // 原指標已安全清空
+
+// 方式二：非同步背景脫水（不卡頓主執行緒）
+// std::future<ork::AsyncResult<void>> future = ork::DehydrateAsync(boss_id);
+
+// 方式三：依 HandleID 脫水
+// bool ok = ork::Dehydrate(boss_id);
+// 若此時有其他執行緒持有 OuroPtr（root_count > 0），脫水將安全略過並回傳 false
+```
+
+---
+
+## 🔄 4. 手動顯式復水 (Explicit Rehydration)
+
+在絕大多數場景下，推薦依賴 **透明按需復水**（直接調用 `handle.Get()` 或 `OuroPtr` 方法）。若特定場景需要在背景預先載入，亦可主動顯式復水：
+
+```cpp
+// 1. 同步顯式復水：配置新空殼、載入藍圖並回傳全新活躍 OuroPtr
+ork::OuroPtr<Monster> restored_boss = ork::Rehydrate<Monster>(boss_id);
+restored_boss(&Monster::Attack);
+
+// 2. 非同步背景復水（預先熱身）：
+std::future<ork::AsyncResult<Monster>> future = ork::RehydrateAsync<Monster>(boss_id);
+// ... 主迴圈繼續執行其他任務 ...
+auto result = future.get();
+if (result.success) {
+    ork::OuroPtr<Monster> async_boss = std::move(result.ptr);
+    async_boss(&Monster::Attack);
+}
+```
+
+> [!NOTE]
+> **私有封閉防禦保證**：
+> 核心內部的復水底層回呼（`RehydrateCallback`）被嚴格收斂於私有實作中，回傳值為 `void` 且透過 ControlBlock 私有綁定，嚴格杜絕外洩物件原始裸指標。
+
+---
+
+## 🔍 5. 儲存狀態與零 I/O 墓碑查詢保證 (Zero-I/O StorageState)
+
+```cpp
+// 查詢物件儲存四態：UnsavedNew(0), Clean(1), Dirty(2), Dehydrated(3)
+ork::StorageState state = ork::GetStorageState(boss_id);
+if (state == ork::StorageState::Dehydrated) {
+    std::cout << "物件目前已脫水落盤，記憶體已釋放" << std::endl;
+}
+
+// 🛡️ 零 I/O 保證：
+// 以下查詢純比對記憶體中之 ControlBlock 墓碑，絕對不會誘發磁碟 I/O 復水：
+bool alive = ork::IsAlive(boss_id);
+uint32_t roots = ork::GetRootEdgeCount(boss_id);
+```
+
+---
+
+## ⚙️ 6. 配置儲存驅動與 LRU 自動脫水器
 
 ```cpp
 #include <ourokore/host/HostContext.hpp>
@@ -673,16 +758,20 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
 
 ---
 
-## 📦 2. 領域物件基底：`ork::OuroObject`
+## 📦 2. 領域物件基底與 CRTP 樣板：`ork::OuroObject` / `ork::Subclass`
 * **標頭檔**：`ourokore/component/OuroObject.hpp`
-* **方法**：
+* **類別基底 `ork::OuroObject`**：
+  * 所有託管物件之抽象基類，嚴禁外部 `new` 或值拷貝。
   * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
   * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
-  * `ork_type_id_t GetTypeID() const`：取得物件之靜態型別 64 位元 TypeID（支援多型與繼承查詢）。
+  * `ork_type_id_t GetTypeID() const`：取得物件當前之 64 位元 TypeID（支援多型與繼承階層查詢）。
   * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
   * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
-* **巨集**：
-  * `ORK_OBJECT(Derived, Base)`：宣告類別之動態與靜態 TypeID，自動登記至全域繼承樹。
+* **樣板基底 `ork::Subclass<Derived, Base = ork::OuroObject>`**：
+  * **所有領域物件強制繼承之 CRTP 基底**（免巨集自動型別系統）。
+  * `static constexpr const char* StaticTypeName()`：自動在編譯期萃取類別名稱。
+  * `static TypeID StaticTypeID()`：自動以 FNV-1a 計算並向核心註冊繼承關係樹。
+  * 支援帶參數建構子完美轉發：`Subclass(args...)` 直接初始化父類別。
 
 ---
 
@@ -716,7 +805,14 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
   * `CreatePermanentObject<T>(args...)`：建立永久常駐物件（不參與脫水換頁）。
   * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新。
   * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
-  * `Dehydrate(id)` / `Rehydrate<T>(id)`：手動脫水與復水。
+  * `Dehydrate(HandleID id)`：依 ID 脫水（若 root_count > 0 則安全略過傳回 false）。
+  * `Dehydrate(OuroPtr<T> &&ptr)`：右值移動消耗脫水（清空原指標，防止懸空）。
+  * `DehydrateAsync(HandleID id)` / `DehydrateAsync(OuroPtr<T> &&ptr)`：非同步背景脫水。
+  * `Rehydrate<T>(HandleID id)` / `Rehydrate<T>(const OuroPtr<T> &ptr)`：顯式手動復水，回傳全新 `OuroPtr<T>`。
+  * `RehydrateAsync<T>(HandleID id)` / `RehydrateAsync<T>(const OuroPtr<T> &ptr)`：非同步背景顯式復水。
+  * `IsAlive(HandleID id)`：查詢物件是否存活（純 ControlBlock 查詢，零 I/O 保證）。
+  * `GetStorageState(HandleID id)`：查詢物件當前 StorageState（純 ControlBlock 查詢，零 I/O 保證）。
+  * `GetRootEdgeCount(HandleID id)`：查詢目標當前活躍根邊緣數量。
   * `SaveBatch(...)` / `LoadBatch(...)`：多核心平行批次操作。
 
 ---
