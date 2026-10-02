@@ -279,6 +279,10 @@ OURO_REGISTER_PROXY(BossProxy, Boss)
    - 任何專案內部的測試動態外掛（如 `test_plugin_dll`）或第三方 Component 範例，在 CMake 中必須統一使用 `add_library(<name> MODULE ...)` 並清除前綴（`PREFIX ""`），嚴禁編譯為可被靜態鏈結的 `SHARED` 導入庫，以維持執行期動態加載的純淨隔離性。
 6. **全域 TypeID 雜湊標準統一 (Fnv1a64 Invariant)**：
    - 核心所有型別唯一碼（`ork_type_id_t`）、編譯期 `ork::Subclass` 樣板基底、執行期字串型別註冊與查詢，**一律統一採用 `ork::base::Fnv1a64` 計算**。嚴禁在核心不同模組或外掛中各搞一套手寫雜湊邏輯，確保跨模組與脫水反序列化識別碼 100% 絕對一致。
+7. **基礎工具層職責與樹狀結構容器規範 (Tree & TreeIO Invariant)**：
+   - 樹狀容器（`TreeNodeBase`、`TreeNode<T>`）與串流解析器（`TreeIO`）為基礎通用設施（`ourokore_base`），零依賴核心層。
+   - 遵循雙模態設計（Object 模式具名雙索引、Array 模式連續記憶體向量支援 $O(1)$ 隨機下標存取 `node[i]`）。
+   - 文字 DSL 嚴格遵守四大正交符號（`[名稱]`、`"資料"`、`{物件}`、`(陣列)`），狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
 
 ---
 

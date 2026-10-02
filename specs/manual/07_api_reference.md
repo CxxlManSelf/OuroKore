@@ -147,28 +147,31 @@
 
 ---
 
-## 🛡️ 9. 安全受管代理與 X-Macro 屬性生成系統：`OuroProxy`
-* **標頭檔**：`ourokore/component/OuroProxy.hpp`（或直接引入 `ourokore/component/OuroCore.hpp`）
-* **設計哲學**：在 100% 恪守 **Zero Raw Pointer** 與 **防脫水 UAF 逃逸** 核心不變量的前提下，提供流暢直觀的「原生點呼叫語法（`.`）」。內部僅持有 `OuroPtr<T>&`，方法轉發底層全數走 `OuroPtr::operator()`，完全相容透明復水。
-* **核心類別樣板**：
-  * `template <typename T> class ork::OuroProxyBase`：通用受管代理基底。
-    * `HandleID GetTargetID() const noexcept`：取得受託管物件之 64 位元 HandleID。
-    * `explicit operator bool() const noexcept`：純 ControlBlock 存活判定（零 I/O 查詢）。
-    * `bool IsAlive() const noexcept`：純 ControlBlock 活躍判定。
-    * `TypeID GetTypeID() const`：取得物件 TypeID。
-    * `template <typename TargetT> bool Is() const`：多型型別判定。
-    * `OuroPtr<T>& GetPtr() const noexcept`：取得底層 `OuroPtr<T>&`（絕不暴露裸指標 `T*`）。
-    * `template <typename Fn, typename... Args> decltype(auto) Invoke(Fn&&, Args&&...) const`：通用成員指標安全轉發。
-    * `template <typename Fn, typename... Args> decltype(auto) WithObject(Fn&&, Args&&...) const`：受信任閉包操作通道。
-  * `template <typename T> OuroProxyBase<T> AsProxy(OuroPtr<T>&)`：預設通用 Proxy 獲取函式。
-  * `template <typename T> void AsProxy(OuroPtr<T>&&) = delete`：**核心防線**，嚴格禁止從臨時右值建構 Proxy，防止懸垂引用。
-* **X-Macro 生成巨集**：
-  * `OURO_GEN_ENTITY_PROPERTY(type, name, default_val)`：生成 private 欄位與帶 `OuroReadLock`/`OuroWriteLock`（解構自動原子標記 Dirty）之 Getter/Setter。
-  * `OURO_GEN_ENTITY_PROPERTIES(PROPERTIES_LIST)`：一鍵展開實體類別所有屬性。
-  * `OURO_GEN_ENTITY_SERIALIZATION(PROPERTIES_LIST)`：一鍵展開 `SerializePayload` 與 `DeserializePayload`。
-  * `OURO_GEN_PROXY_PROPERTY(type, name, default_val)`：生成 Proxy 內部透過 `GetPtr()(&TargetType::...)` 之安全轉發方法。
-  * `OURO_GEN_PROXY_PROPERTY_EX(TargetClass, type, name, default_val)`：指定目標類別之轉發方法生成。
-  * `OURO_DEFINE_PROXY(ProxyClassName, TargetClass, PROPERTIES_LIST)`：一鍵宣告專屬安全 Proxy 類別並註冊 `AsProxy` 重載。
-  * `OURO_REGISTER_PROXY(ProxyClassName, TargetClass)`：為手動擴充的 Proxy 類別註冊 `AsProxy` 重載。
-  * `OURO_PROXY_METHOD(MethodName)`：在 Proxy 類別內一行式生成成員函數轉發方法（以完美轉發自動支援任意參數個數、參數型別與傳回值）。
-  * `OURO_PROXY_METHOD_EX(TargetClass, MethodName)`：顯式指定目標類別之成員函數轉發方法生成巨集。
+## 🌳 9. 樹狀結構容器與文字 DSL 串流：`ork::base::Tree` / `ork::base::TreeIO`
+* **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
+* **設計哲學**：
+  * **雙模態（Object / Array）支援**：物件模式具備循序列表與具名哈希雙索引；陣列模式具備連續記憶體向量，支援真正的 **$O(1)$ 隨機下標存取（`node[i]`）**。
+  * **極致執行緒安全**：內建 `std::shared_mutex` 讀寫鎖，支援多執行緒並發讀寫。
+  * **防遞迴析構爆棧**：整合 `AsyncNodeDeletor`，巨型深樹解構時由非同步隊列安全釋放，杜絕 Stack Overflow。
+  * **寬容型狀態機文字 DSL**：四大正交界定符 `[名稱]`、`"資料"`、`{物件}`、`(陣列)`，狀態機自動過濾並忽略所有非預期雜訊與無效符號，0~255 二進位位元組安全。
+* **核心類別與方法**：
+  * **樣板基底 `TreeNodeBase<Derived>`**：
+    * `CreateRoot(name, kind)`：建立樹之根節點。
+    * `NodeKind GetKind() / SetKind(kind)`：取得/設定節點形態（`NodeKind::Object` 或 `NodeKind::Array`）。
+    * `bool IsObject() / bool IsArray()`：判斷是否為物件或陣列節點。
+    * `NodePtr PushElement(kind)` / `bool PushElement(element)`：向陣列尾端追加元素（自動切換為陣列形態）。
+    * `size_t ElementCount()`：取得陣列元素個數（$O(1)$）。
+    * `NodePtr GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取陣列元素（$O(1)$）。
+    * `bool RemoveElementAt(index)` / `ClearElements()`：陣列元素移除與清空。
+    * `NodePtr AddBackChild(name, kind)` / `NodePtr AddFrontChild(name, kind)`：新增具名字節點（$O(1)$）。
+    * `NodePtr FindChildByName(name)` / `operator[](name)`：按名稱尋找子節點（$O(1)$）。
+    * `bool HasChild(name)` / `size_t ChildCount()`：查詢子節點存在性與數量。
+    * `bool RemoveChild(child)` / `bool RemoveChildByName(name)` / `ClearChildren()`：移除子節點。
+    * `void ForEachChild(...)` / `void ForEachElement(...)`：走訪子節點或陣列元素。
+    * `DetachFromParent()`：安全斷開與父節點之雙向弱關聯。
+  * **具體節點 `TreeNode<T>` / `Tree`（預設 `T = std::string`）**：
+    * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：安全存取節點資料（受資料讀寫鎖保護）。
+  * **文字 DSL 串流工具 `TreeIO`**：
+    * `static void Serialize(ostream, root, data_to_string, indent_width)`：顯式堆疊非遞迴寫出格式化文字 DSL。
+    * `static NodePtr Deserialize(istream, string_to_data)`：寬容型狀態機反序列化串流。
+    * `static NodePtr DeserializeFromString(string_view, string_to_data)`：自文字字串反序列化。

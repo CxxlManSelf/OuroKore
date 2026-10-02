@@ -878,6 +878,37 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
     * `""_fnv64`：編譯期直接計算為 64 位元常數整數。
     * `""_fnv32`：編譯期直接計算為 32 位元常數整數。
     * `""_crc32`：編譯期直接計算為 CRC32 常數校驗碼。
+
+---
+
+## 🌳 9. 樹狀結構容器與文字 DSL 串流：`ork::base::Tree` / `ork::base::TreeIO`
+* **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
+* **設計哲學**：
+  * **雙模態（Object / Array）支援**：物件模式具備循序列表與具名哈希雙索引；陣列模式具備連續記憶體向量，支援真正的 **$O(1)$ 隨機下標存取（`node[i]`）**。
+  * **極致執行緒安全**：內建 `std::shared_mutex` 讀寫鎖，支援多執行緒並發讀寫。
+  * **防遞迴析構爆棧**：整合 `AsyncNodeDeletor`，巨型深樹解構時由非同步隊列安全釋放，杜絕 Stack Overflow。
+  * **寬容型狀態機文字 DSL**：四大正交界定符 `[名稱]`、`"資料"`、`{物件}`、`(陣列)`，狀態機自動過濾並忽略所有非預期雜訊與無效符號，0~255 二進位位元組安全。
+* **核心類別與方法**：
+  * **樣板基底 `TreeNodeBase<Derived>`**：
+    * `CreateRoot(name, kind)`：建立樹之根節點。
+    * `NodeKind GetKind() / SetKind(kind)`：取得/設定節點形態（`NodeKind::Object` 或 `NodeKind::Array`）。
+    * `bool IsObject() / bool IsArray()`：判斷是否為物件或陣列節點。
+    * `NodePtr PushElement(kind)` / `bool PushElement(element)`：向陣列尾端追加元素（自動切換為陣列形態）。
+    * `size_t ElementCount()`：取得陣列元素個數（$O(1)$）。
+    * `NodePtr GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取陣列元素（$O(1)$）。
+    * `bool RemoveElementAt(index)` / `ClearElements()`：陣列元素移除與清空。
+    * `NodePtr AddBackChild(name, kind)` / `NodePtr AddFrontChild(name, kind)`：新增具名字節點（$O(1)$）。
+    * `NodePtr FindChildByName(name)` / `operator[](name)`：按名稱尋找子節點（$O(1)$）。
+    * `bool HasChild(name)` / `size_t ChildCount()`：查詢子節點存在性與數量。
+    * `bool RemoveChild(child)` / `bool RemoveChildByName(name)` / `ClearChildren()`：移除子節點。
+    * `void ForEachChild(...)` / `void ForEachElement(...)`：走訪子節點或陣列元素。
+    * `DetachFromParent()`：安全斷開與父節點之雙向弱關聯。
+  * **具體節點 `TreeNode<T>` / `Tree`（預設 `T = std::string`）**：
+    * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：安全存取節點資料（受資料讀寫鎖保護）。
+  * **文字 DSL 串流工具 `TreeIO`**：
+    * `static void Serialize(ostream, root, data_to_string, indent_width)`：顯式堆疊非遞迴寫出格式化文字 DSL。
+    * `static NodePtr Deserialize(istream, string_to_data)`：寬容型狀態機反序列化串流。
+    * `static NodePtr DeserializeFromString(string_view, string_to_data)`：自文字字串反序列化。
 ''', encoding="utf-8")
     print("✅ specs/manual/ 全套 7 份說明書手冊生成完畢！")
 

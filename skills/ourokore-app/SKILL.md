@@ -326,6 +326,60 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
 // 此時 weak_lib.expired() == true，weak_lib.lock() 安全傳回無效實例
 ```
 
+### 模式 H：現代樹狀結構容器與文字 DSL 狀態機實戰 (Tree & TreeIO Utilities)
+適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。
+
+```cpp
+#include <ourokore/base/Tree.hpp>
+#include <ourokore/base/TreeIO.hpp>
+
+using ork::base::Tree;
+using ork::base::TreeIO;
+using ork::base::NodeKind;
+
+// 1. 建立物件型根節點（Object Mode：具名前綴與哈希索引）
+auto player = Tree::CreateRoot(u8"Player");
+player->SetData("英雄角色");
+
+// 2. 建立具名子節點 (O(1))
+auto hp = player->AddBackChild(u8"HP");
+hp->SetData("100");
+
+// 3. 建立陣列型節點 (Array Mode) 並享受 O(1) 隨機下標存取！
+// 💡 徹底根除用無名節點模擬陣列的效能與語意缺陷
+auto inventory = player->AddBackChild(u8"Inventory", NodeKind::Array);
+inventory->PushElement()->SetData("草藥");
+inventory->PushElement()->SetData("黃金盔甲");
+inventory->PushElement()->SetData("雙手大劍");
+
+assert(inventory->ElementCount() == 3);
+assert((*inventory)[0]->GetData() == "草藥");     // O(1) 極速隨機下標存取
+assert((*inventory)[1]->GetData() == "黃金盔甲");
+
+// 4. 輸出為文字 DSL（非遞迴顯式堆疊走訪，防範爆棧）
+// 語法特色：[名稱]、"資料"、{物件}、(陣列) 四大正交界定符
+TreeIO::Serialize(std::cout, player);
+
+// 5. 寬容型狀態機反序列化（自動過濾並忽略所有非預期雜訊與說明文字）
+std::string config_dsl = R"(
+    這是一段任意說明文字，狀態機自動無視！
+    [Player] = [多餘無視標記] "英雄角色" "第二段引號視為多餘無視"
+    {
+        [HP] = "100"
+        [Inventory] = (
+            "草藥"
+            這段純文字說明被無視
+            "黃金盔甲"
+            "雙手大劍"
+        )
+    }
+)";
+auto restored = TreeIO::DeserializeFromString(config_dsl);
+assert((*restored)[u8"HP"]->GetData() == "100");
+auto restored_inv = (*restored)[u8"Inventory"];
+assert((*restored_inv)[0]->GetData() == "草藥");
+```
+
 ---
 
 ## ⚠️ 4. 應用開發高壓線條款 (Critical Invariants)
@@ -359,6 +413,10 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
      - 當進程內不同子系統多次請求載入同一動態庫時，`DynamicLibrary` 內部透過規範化路徑快取共享控制區塊。
      - 僅在首次載入（0 -> 1）時 `lib.is_first_loaded()` 為 true，可透過 `initialize_once` 執行全域初始化（重複載入時自動安全略過）。
      - 透過 `register_shutdown_symbol` 或 `add_cleanup_hook` 註冊的收尾函式，嚴格保證在最後一個使用者與物件全數釋放（1 -> 0）、DLL 卸載前夕剛好觸發一次。
+9. **樹狀容器物件與陣列模式分流鐵律 (Tree Array & FSM Invariant)**：
+   * 需表示清單、陣列、序列元素時，強制將節點標記為 `NodeKind::Array`（或調用 `PushElement`），嚴禁使用「多個無名節點」委屈模擬陣列！
+   * 陣列元素享有 `std::vector` 連續記憶體佈局與 `operator[](size_t)` $O(1)$ 隨機常數時間存取。
+   * 文字 DSL 嚴格遵守四大正交符號：`[名稱]`、`"資料"`、`{物件}`、`(陣列)`；狀態機具備狀態驅動寬容過濾能力，不在狀態內的文字與符號安全無視，支援 0~255 二進位位元組安全與脫字元（`\]`、`\"`、`\\`、`\xHH`）。
 
 ---
 
