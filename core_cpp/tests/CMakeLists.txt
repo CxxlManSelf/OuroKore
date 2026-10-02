@@ -46,3 +46,6 @@ target_link_libraries(type_system_tests ourokore_core ourokore_base)
 add_executable(base_hash_tests base_hash_tests.cpp)
 target_link_libraries(base_hash_tests ourokore_base)
 
+add_executable(test_proxy test_proxy.cpp)
+target_link_libraries(test_proxy ourokore_core ourokore_base)
+

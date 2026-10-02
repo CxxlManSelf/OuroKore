@@ -201,6 +201,63 @@ ork::base::HashCombine(combined, obj_id, slot_name, timestamp);
   });
   ```
 
+### 2.6 安全代理與 X-Macro 屬性生成系統 (OuroProxy & X-Macro System)
+> 💡 **核心優勢**：在保持 **Zero Raw Pointer** 與 **防脫水 UAF** 的最高安全標準下，提供流暢的「原生點呼叫語法（`.`）」！
+
+透過 X-Macro 單一真實來源（Single Source of Truth），同時產生**實體欄位、讀寫鎖防護、序列化與安全代理類別**：
+```cpp
+#include <ourokore/component/OuroCore.hpp>
+
+// 1. 定義屬性清單 (type, name, default_val)
+#define MONSTER_PROPERTIES(X) \
+    X(std::string, Name, "未知魔物") \
+    X(int32_t,     Hp,   100) \
+    X(int32_t,     Attack, 20)
+
+// 2. 宣告領域物件（一鍵展開屬性與序列化）
+class Monster : public ork::Subclass<Monster, ork::OuroObject> {
+public:
+    Monster() = default;
+    OURO_GEN_ENTITY_PROPERTIES(MONSTER_PROPERTIES)
+    OURO_GEN_ENTITY_SERIALIZATION(MONSTER_PROPERTIES)
+};
+
+// 3. 一鍵生成安全代理類別與 AsProxy 轉換重載
+OURO_DEFINE_PROXY(MonsterProxy, Monster, MONSTER_PROPERTIES)
+
+// 4. 業務調用端：享受極致流暢的原生點呼叫（.）！
+void BattleLoop() {
+    auto boss = ork::CreateObject<Monster>();
+    auto proxy = AsProxy(boss); // 🛡️ 內部僅持有 OuroPtr&，零裸指標暴露
+
+    proxy.SetName("深淵霸主");
+    proxy.SetHp(5000);
+    proxy.SetAttack(350);
+
+    std::cout << proxy.GetName() << " 參戰，目前生命值: " << proxy.GetHp() << std::endl;
+}
+
+// 5. 擴充自訂業務方法：透過 OURO_PROXY_METHOD 一行自動轉發！
+class Boss : public ork::Subclass<Boss, Monster> {
+public:
+    void Enrage() { ork::OuroWriteLock lock(*this); m_hp += 1000; }
+    int32_t MultiHit(int32_t hits) const { ork::OuroReadLock lock(*this); return GetAttack() * hits; }
+};
+
+class BossProxy : public ork::OuroProxyBase<Boss> {
+public:
+    using TargetType = Boss;
+    using ork::OuroProxyBase<Boss>::OuroProxyBase;
+    MONSTER_PROPERTIES(OURO_GEN_PROXY_PROPERTY)
+
+    // 一行式自動轉發任意參數與回傳值：
+    OURO_PROXY_METHOD(Enrage)
+    OURO_PROXY_METHOD(MultiHit)
+};
+OURO_REGISTER_PROXY(BossProxy, Boss)
+```
+* **防禦不變量**：Proxy 嚴格禁止從臨時右值（Rvalue Temporary）建構，杜絕懸垂引用；底層全走 `OuroPtr::operator()`，透明復水完全無縫支援。
+
 ---
 
 ## ⚖️ 3. 核心擴展鐵律 (Core Contributor Invariants)

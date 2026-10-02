@@ -13,6 +13,7 @@
 #include "ourokore/component/BlueprintPackaging.hpp"
 #include "ourokore/component/Handles.hpp"
 #include "ourokore/component/OuroObject.hpp"
+#include "ourokore/component/OuroProxy.hpp"  // IWYU pragma: export
 #include "ourokore/component/OuroStream.hpp"  // IWYU pragma: export
 #include "ourokore/component/RuntimeAPI.hpp"
 

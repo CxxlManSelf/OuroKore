@@ -144,3 +144,31 @@
     * `""_fnv64`：編譯期直接計算為 64 位元常數整數。
     * `""_fnv32`：編譯期直接計算為 32 位元常數整數。
     * `""_crc32`：編譯期直接計算為 CRC32 常數校驗碼。
+
+---
+
+## 🛡️ 9. 安全受管代理與 X-Macro 屬性生成系統：`OuroProxy`
+* **標頭檔**：`ourokore/component/OuroProxy.hpp`（或直接引入 `ourokore/component/OuroCore.hpp`）
+* **設計哲學**：在 100% 恪守 **Zero Raw Pointer** 與 **防脫水 UAF 逃逸** 核心不變量的前提下，提供流暢直觀的「原生點呼叫語法（`.`）」。內部僅持有 `OuroPtr<T>&`，方法轉發底層全數走 `OuroPtr::operator()`，完全相容透明復水。
+* **核心類別樣板**：
+  * `template <typename T> class ork::OuroProxyBase`：通用受管代理基底。
+    * `HandleID GetTargetID() const noexcept`：取得受託管物件之 64 位元 HandleID。
+    * `explicit operator bool() const noexcept`：純 ControlBlock 存活判定（零 I/O 查詢）。
+    * `bool IsAlive() const noexcept`：純 ControlBlock 活躍判定。
+    * `TypeID GetTypeID() const`：取得物件 TypeID。
+    * `template <typename TargetT> bool Is() const`：多型型別判定。
+    * `OuroPtr<T>& GetPtr() const noexcept`：取得底層 `OuroPtr<T>&`（絕不暴露裸指標 `T*`）。
+    * `template <typename Fn, typename... Args> decltype(auto) Invoke(Fn&&, Args&&...) const`：通用成員指標安全轉發。
+    * `template <typename Fn, typename... Args> decltype(auto) WithObject(Fn&&, Args&&...) const`：受信任閉包操作通道。
+  * `template <typename T> OuroProxyBase<T> AsProxy(OuroPtr<T>&)`：預設通用 Proxy 獲取函式。
+  * `template <typename T> void AsProxy(OuroPtr<T>&&) = delete`：**核心防線**，嚴格禁止從臨時右值建構 Proxy，防止懸垂引用。
+* **X-Macro 生成巨集**：
+  * `OURO_GEN_ENTITY_PROPERTY(type, name, default_val)`：生成 private 欄位與帶 `OuroReadLock`/`OuroWriteLock`（解構自動原子標記 Dirty）之 Getter/Setter。
+  * `OURO_GEN_ENTITY_PROPERTIES(PROPERTIES_LIST)`：一鍵展開實體類別所有屬性。
+  * `OURO_GEN_ENTITY_SERIALIZATION(PROPERTIES_LIST)`：一鍵展開 `SerializePayload` 與 `DeserializePayload`。
+  * `OURO_GEN_PROXY_PROPERTY(type, name, default_val)`：生成 Proxy 內部透過 `GetPtr()(&TargetType::...)` 之安全轉發方法。
+  * `OURO_GEN_PROXY_PROPERTY_EX(TargetClass, type, name, default_val)`：指定目標類別之轉發方法生成。
+  * `OURO_DEFINE_PROXY(ProxyClassName, TargetClass, PROPERTIES_LIST)`：一鍵宣告專屬安全 Proxy 類別並註冊 `AsProxy` 重載。
+  * `OURO_REGISTER_PROXY(ProxyClassName, TargetClass)`：為手動擴充的 Proxy 類別註冊 `AsProxy` 重載。
+  * `OURO_PROXY_METHOD(MethodName)`：在 Proxy 類別內一行式生成成員函數轉發方法（以完美轉發自動支援任意參數個數、參數型別與傳回值）。
+  * `OURO_PROXY_METHOD_EX(TargetClass, MethodName)`：顯式指定目標類別之成員函數轉發方法生成巨集。

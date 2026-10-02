@@ -390,3 +390,43 @@ set_target_properties(MyPlugin PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 )
 ```
+
+
+### 4.5 快速屬性宣告與安全代理 (OuroProxy & X-Macro)
+> 🌟 **若領域物件包含大量屬性欄位，推薦使用 X-Macro 一鍵生成實體與安全 Proxy**：
+
+```cpp
+#include <ourokore/component/OuroCore.hpp>
+
+#define PLAYER_PROPERTIES(X) \
+    X(std::string, Name, "冒險者") \
+    X(int32_t,     Level, 1) \
+    X(int32_t,     Exp,   0)
+
+class Player : public ork::Subclass<Player, ork::OuroObject> {
+public:
+    Player() = default;
+    OURO_GEN_ENTITY_PROPERTIES(PLAYER_PROPERTIES)
+    OURO_GEN_ENTITY_SERIALIZATION(PLAYER_PROPERTIES)
+};
+
+OURO_DEFINE_PROXY(PlayerProxy, Player, PLAYER_PROPERTIES)
+
+// 使用端享受原生點呼叫：
+void TestPlayer() {
+    auto p = ork::CreateObject<Player>();
+    auto proxy = AsProxy(p);
+    proxy.SetName("勇者欣梅爾");
+    proxy.SetLevel(99);
+}
+// 亦可搭配 OURO_PROXY_METHOD 一行擴充自訂業務方法轉發：
+class BossProxy : public ork::OuroProxyBase<Boss> {
+public:
+    using TargetType = Boss;
+    using ork::OuroProxyBase<Boss>::OuroProxyBase;
+    PLAYER_PROPERTIES(OURO_GEN_PROXY_PROPERTY)
+
+    OURO_PROXY_METHOD(CastSkill) // 自動完美轉發任意參數與回傳值
+};
+OURO_REGISTER_PROXY(BossProxy, Boss)
+```
