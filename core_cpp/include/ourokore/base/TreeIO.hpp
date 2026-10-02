@@ -2,18 +2,15 @@
 
 #include <cctype>
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <memory>
-#include <optional>
-#include <sstream>
-#include <string>
-#include <string_view>
-#include <vector>
-
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/utf8.hpp>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <vector>
 
 namespace ork::base
 {
@@ -42,12 +39,24 @@ public:
     {
       switch (c)
       {
-        case ']': out += "\\]"; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        default: out.push_back(c); break;
+        case ']':
+          out += "\\]";
+          break;
+        case '\\':
+          out += "\\\\";
+          break;
+        case '\n':
+          out += "\\n";
+          break;
+        case '\r':
+          out += "\\r";
+          break;
+        case '\t':
+          out += "\\t";
+          break;
+        default:
+          out.push_back(c);
+          break;
       }
     }
     return out;
@@ -62,11 +71,21 @@ public:
       unsigned char c = static_cast<unsigned char>(s[i]);
       switch (c)
       {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
+        case '"':
+          out += "\\\"";
+          break;
+        case '\\':
+          out += "\\\\";
+          break;
+        case '\n':
+          out += "\\n";
+          break;
+        case '\r':
+          out += "\\r";
+          break;
+        case '\t':
+          out += "\\t";
+          break;
         default:
           if (c < 32 || c == 127)
           {
@@ -94,29 +113,34 @@ public:
   // 序列化 (Serialize) - 顯式堆疊非遞迴
   // =========================================================================
 
-  template <typename T = std::string, typename Func = std::nullptr_t>
+  template <
+      typename T = std::string, typename Func = std::nullptr_t,
+      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool>>>
   static void Serialize(
-      std::ostream &os,
-      const std::shared_ptr<TreeNode<T>> &root,
-      Func &&data_to_string = nullptr,
-      size_t indent_width = 2)
+      std::ostream &os, const std::shared_ptr<TreeNode<T>> &root, Func &&data_to_string = nullptr,
+      size_t indent_width = 2, bool compact = false
+  )
   {
-    Serialize<T>(os, std::const_pointer_cast<const TreeNode<T>>(root), std::forward<Func>(data_to_string), indent_width);
+    Serialize<T>(
+        os, std::const_pointer_cast<const TreeNode<T>>(root), std::forward<Func>(data_to_string), indent_width, compact
+    );
   }
 
-  template <typename T = std::string, typename Func = std::nullptr_t>
+  template <
+      typename T = std::string, typename Func = std::nullptr_t,
+      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool>>>
   static void Serialize(
-      std::ostream &os,
-      const std::shared_ptr<const TreeNode<T>> &root,
-      Func &&data_to_string = nullptr,
-      size_t indent_width = 2)
+      std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, Func &&data_to_string = nullptr,
+      size_t indent_width = 2, bool compact = false
+  )
   {
     if (!root)
     {
       return;
     }
 
-    auto convert_data = [&](const T &d) -> std::string {
+    auto convert_data = [&](const T &d) -> std::string
+    {
       if constexpr (!std::is_same_v<std::decay_t<Func>, std::nullptr_t>)
       {
         return data_to_string(d);
@@ -155,14 +179,22 @@ public:
       {
         if (f.node)
         {
-          std::string indent = MakeIndent(f.depth, indent_width);
+          std::string indent = compact ? "" : MakeIndent(f.depth, indent_width);
           if (f.node->IsArray())
           {
-            os << indent << ')' << '\n';
+            os << indent << ')';
+            if (!compact)
+            {
+              os << '\n';
+            }
           }
           else
           {
-            os << indent << '}' << '\n';
+            os << indent << '}';
+            if (!compact)
+            {
+              os << '\n';
+            }
           }
         }
         continue;
@@ -173,7 +205,7 @@ public:
         continue;
       }
 
-      std::string indent = MakeIndent(f.depth, indent_width);
+      std::string indent = compact ? "" : MakeIndent(f.depth, indent_width);
       std::string name_s = ork::utf8::to_string(f.node->GetName());
       std::string escaped_name = EscapeName(name_s);
       std::string data_s = convert_data(f.node->GetData());
@@ -185,16 +217,30 @@ public:
         os << indent << '[' << escaped_name << ']';
         if (!escaped_data.empty())
         {
-          os << " = \"" << escaped_data << "\"";
+          if (compact)
+          {
+            os << "=\"" << escaped_data << "\"";
+          }
+          else
+          {
+            os << " = \"" << escaped_data << "\"";
+          }
         }
-        os << '\n';
+        if (!compact)
+        {
+          os << '\n';
+        }
       }
       else
       {
         // 純陣列元素且無名稱
         if (!escaped_data.empty())
         {
-          os << indent << "\"" << escaped_data << "\"" << '\n';
+          os << indent << "\"" << escaped_data << "\"";
+          if (!compact)
+          {
+            os << '\n';
+          }
         }
       }
 
@@ -205,7 +251,11 @@ public:
 
       if (is_array && elem_count > 0)
       {
-        os << indent << '(' << '\n';
+        os << indent << '(';
+        if (!compact)
+        {
+          os << '\n';
+        }
         stk.push_back({f.node, 1, f.depth, false});
 
         // 倒序壓棧確保循序輸出
@@ -220,17 +270,24 @@ public:
       }
       else if (!is_array && child_count > 0)
       {
-        os << indent << '{' << '\n';
+        os << indent << '{';
+        if (!compact)
+        {
+          os << '\n';
+        }
         stk.push_back({f.node, 1, f.depth, false});
 
         std::vector<std::shared_ptr<const TreeNode<T>>> children;
         children.reserve(child_count);
-        f.node->ForEachChild([&children](const auto &c) {
-          if (c)
-          {
-            children.push_back(std::const_pointer_cast<const TreeNode<T>>(c));
-          }
-        });
+        f.node->ForEachChild(
+            [&children](const auto &c)
+            {
+              if (c)
+              {
+                children.push_back(std::const_pointer_cast<const TreeNode<T>>(c));
+              }
+            }
+        );
 
         for (auto it = children.rbegin(); it != children.rend(); ++it)
         {
@@ -240,6 +297,35 @@ public:
     }
   }
 
+  // 緊湊模式 (Compact) 專用便捷多載
+  template <typename T = std::string>
+  static void Serialize(std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, bool compact)
+  {
+    Serialize<T>(os, root, nullptr, compact ? 0 : 2, compact);
+  }
+
+  template <typename T = std::string>
+  static void Serialize(std::ostream &os, const std::shared_ptr<TreeNode<T>> &root, bool compact)
+  {
+    Serialize<T>(os, std::const_pointer_cast<const TreeNode<T>>(root), compact);
+  }
+
+  template <typename T = std::string, typename Func = std::nullptr_t>
+  static void SerializeCompact(
+      std::ostream &os, const std::shared_ptr<TreeNode<T>> &root, Func &&data_to_string = nullptr
+  )
+  {
+    Serialize<T>(os, root, std::forward<Func>(data_to_string), 0, true);
+  }
+
+  template <typename T = std::string, typename Func = std::nullptr_t>
+  static void SerializeCompact(
+      std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, Func &&data_to_string = nullptr
+  )
+  {
+    Serialize<T>(os, root, std::forward<Func>(data_to_string), 0, true);
+  }
+
   // =========================================================================
   // 反序列化 (Deserialize) - 寬容型狀態機 (Fault-Tolerant FSM)
   // =========================================================================
@@ -247,7 +333,8 @@ public:
   template <typename T = std::string>
   static std::shared_ptr<TreeNode<T>> Deserialize(
       std::istream &is,
-      const std::function<T(const std::string &)> &string_to_data = [](const std::string &s) -> T {
+      const std::function<T(const std::string &)> &string_to_data = [](const std::string &s) -> T
+      {
         if constexpr (std::is_same_v<T, std::string>)
         {
           return s;
@@ -260,7 +347,8 @@ public:
         {
           return T(s);
         }
-      })
+      }
+  )
   {
     std::string text((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
     return DeserializeFromString<T>(text, string_to_data);
@@ -269,7 +357,8 @@ public:
   template <typename T = std::string>
   static std::shared_ptr<TreeNode<T>> DeserializeFromString(
       std::string_view text,
-      const std::function<T(const std::string &)> &string_to_data = [](const std::string &s) -> T {
+      const std::function<T(const std::string &)> &string_to_data = [](const std::string &s) -> T
+      {
         if constexpr (std::is_same_v<T, std::string>)
         {
           return s;
@@ -282,23 +371,21 @@ public:
         {
           return T(s);
         }
-      })
+      }
+  )
   {
     using NodePtr = std::shared_ptr<TreeNode<T>>;
 
     size_t pos = 0;
     const size_t len = text.size();
 
-    auto peek = [&]() -> int {
-      return (pos < len) ? static_cast<unsigned char>(text[pos]) : -1;
-    };
+    auto peek = [&]() -> int { return (pos < len) ? static_cast<unsigned char>(text[pos]) : -1; };
 
-    auto next = [&]() -> int {
-      return (pos < len) ? static_cast<unsigned char>(text[pos++]) : -1;
-    };
+    auto next = [&]() -> int { return (pos < len) ? static_cast<unsigned char>(text[pos++]) : -1; };
 
     // 讀取名稱至 ']'（支援 \] 與 \\ 轉義）
-    auto read_name = [&]() -> std::string {
+    auto read_name = [&]() -> std::string
+    {
       std::string name;
       while (pos < len)
       {
@@ -308,12 +395,24 @@ public:
           char esc = text[pos++];
           switch (esc)
           {
-            case ']': name.push_back(']'); break;
-            case '\\': name.push_back('\\'); break;
-            case 'n': name.push_back('\n'); break;
-            case 'r': name.push_back('\r'); break;
-            case 't': name.push_back('\t'); break;
-            default: name.push_back(esc); break;
+            case ']':
+              name.push_back(']');
+              break;
+            case '\\':
+              name.push_back('\\');
+              break;
+            case 'n':
+              name.push_back('\n');
+              break;
+            case 'r':
+              name.push_back('\r');
+              break;
+            case 't':
+              name.push_back('\t');
+              break;
+            default:
+              name.push_back(esc);
+              break;
           }
         }
         else if (c == ']')
@@ -329,7 +428,8 @@ public:
     };
 
     // 讀取字串內容至 '"'（支援 \"、\\、\n、\xHH 等 0~255 二進位位元組）
-    auto read_string = [&]() -> std::string {
+    auto read_string = [&]() -> std::string
+    {
       std::string content;
       while (pos < len)
       {
@@ -339,11 +439,21 @@ public:
           char esc = text[pos++];
           switch (esc)
           {
-            case '"': content.push_back('"'); break;
-            case '\\': content.push_back('\\'); break;
-            case 'n': content.push_back('\n'); break;
-            case 'r': content.push_back('\r'); break;
-            case 't': content.push_back('\t'); break;
+            case '"':
+              content.push_back('"');
+              break;
+            case '\\':
+              content.push_back('\\');
+              break;
+            case 'n':
+              content.push_back('\n');
+              break;
+            case 'r':
+              content.push_back('\r');
+              break;
+            case 't':
+              content.push_back('\t');
+              break;
             case 'x':
             case 'X':
               // 支援 \xHH 十六進位二進位轉義
@@ -354,7 +464,8 @@ public:
                 if (std::isxdigit(static_cast<unsigned char>(h1)) && std::isxdigit(static_cast<unsigned char>(h2)))
                 {
                   pos += 2;
-                  auto hex_val = [](char ch) -> int {
+                  auto hex_val = [](char ch) -> int
+                  {
                     if (ch >= '0' && ch <= '9') return ch - '0';
                     if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
                     if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
@@ -367,7 +478,9 @@ public:
               }
               content.push_back('x');
               break;
-            default: content.push_back(esc); break;
+            default:
+              content.push_back(esc);
+              break;
           }
         }
         else if (c == '"')
@@ -385,7 +498,8 @@ public:
     // 遞迴解析節點或元素群
     std::function<void(const NodePtr &, char)> parse_container;
 
-    parse_container = [&](const NodePtr &current_parent, char terminator) {
+    parse_container = [&](const NodePtr &current_parent, char terminator)
+    {
       bool is_array_mode = (terminator == ')');
       NodePtr active_child = nullptr;
       bool active_child_has_data = false;

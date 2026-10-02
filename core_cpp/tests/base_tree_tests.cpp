@@ -113,7 +113,7 @@ void TestTreeIOSerialization()
   auto item2 = inventory->PushElement();
   item2->SetData("黃金盔甲");
 
-  // 序列化成文字 DSL
+  // 序列化成文字 DSL (預設縮排格式)
   std::ostringstream oss;
   TreeIO::Serialize(oss, player, [](const std::string &s) { return s; }, 2);
   std::string dsl = oss.str();
@@ -136,6 +136,33 @@ void TestTreeIOSerialization()
   assert(restored_inv->ElementCount() == 2);
   assert((*restored_inv)[0]->GetData() == "草藥");
   assert((*restored_inv)[1]->GetData() == "黃金盔甲");
+
+  // --- 測試緊湊模式 (Compact Mode) ---
+  std::ostringstream oss_compact;
+  TreeIO::Serialize(oss_compact, player, true);
+  std::string dsl_compact = oss_compact.str();
+  std::cout << "Compact DSL 匯出結果：" << dsl_compact << std::endl;
+
+  // 驗證緊湊模式完全不含換行符
+  assert(dsl_compact.find('\n') == std::string::npos);
+  assert(dsl_compact.find('\r') == std::string::npos);
+  // 驗證格式為無多餘空白
+  assert(dsl_compact == "[Player]=\"英雄角色\"{[HP]=\"100\"[Inventory](\"草藥\"\"黃金盔甲\")}");
+
+  // 驗證緊湊字串可被成功反序列化還原
+  auto restored_compact = TreeIO::DeserializeFromString(dsl_compact);
+  assert(restored_compact != nullptr);
+  assert(restored_compact->GetName() == u8"Player");
+  assert(restored_compact->GetData() == "英雄角色");
+  assert((*restored_compact)[u8"HP"]->GetData() == "100");
+  assert((*restored_compact)[u8"Inventory"]->ElementCount() == 2);
+  assert((*(*restored_compact)[u8"Inventory"])[0]->GetData() == "草藥");
+  assert((*(*restored_compact)[u8"Inventory"])[1]->GetData() == "黃金盔甲");
+
+  // 測試 SerializeCompact 便捷函式
+  std::ostringstream oss_compact2;
+  TreeIO::SerializeCompact(oss_compact2, player);
+  assert(oss_compact2.str() == dsl_compact);
 
   std::cout << " -> 通過！" << std::endl;
 }
