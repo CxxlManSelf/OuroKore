@@ -137,32 +137,39 @@ void TestTreeIOSerialization()
   assert((*restored_inv)[0]->GetData() == "草藥");
   assert((*restored_inv)[1]->GetData() == "黃金盔甲");
 
-  // --- 測試緊湊模式 (Compact Mode) ---
-  std::ostringstream oss_compact;
-  TreeIO::Serialize(oss_compact, player, true);
-  std::string dsl_compact = oss_compact.str();
-  std::cout << "Compact DSL 匯出結果：" << dsl_compact << std::endl;
+  // --- 測試 3 種緊湊模式 (CompactMode) ---
+  // 1. 保留 = 的緊湊模式 (WithEqual)
+  std::ostringstream oss_with_eq;
+  TreeIO::Serialize(oss_with_eq, player, CompactMode::WithEqual);
+  std::string dsl_with_eq = oss_with_eq.str();
+  std::cout << "Compact (WithEqual) DSL: " << dsl_with_eq << std::endl;
+  assert(dsl_with_eq == "[Player]=\"英雄角色\"{[HP]=\"100\"[Inventory](\"草藥\"\"黃金盔甲\")}");
 
-  // 驗證緊湊模式完全不含換行符
-  assert(dsl_compact.find('\n') == std::string::npos);
-  assert(dsl_compact.find('\r') == std::string::npos);
-  // 驗證格式為無多餘空白
-  assert(dsl_compact == "[Player]=\"英雄角色\"{[HP]=\"100\"[Inventory](\"草藥\"\"黃金盔甲\")}");
+  // 2. 不保留 = 的極致緊湊模式 (WithoutEqual)
+  std::ostringstream oss_without_eq;
+  TreeIO::Serialize(oss_without_eq, player, CompactMode::WithoutEqual);
+  std::string dsl_without_eq = oss_without_eq.str();
+  std::cout << "Compact (WithoutEqual) DSL: " << dsl_without_eq << std::endl;
+  assert(dsl_without_eq == "[Player]\"英雄角色\"{[HP]\"100\"[Inventory](\"草藥\"\"黃金盔甲\")}");
 
-  // 驗證緊湊字串可被成功反序列化還原
-  auto restored_compact = TreeIO::DeserializeFromString(dsl_compact);
-  assert(restored_compact != nullptr);
-  assert(restored_compact->GetName() == u8"Player");
-  assert(restored_compact->GetData() == "英雄角色");
-  assert((*restored_compact)[u8"HP"]->GetData() == "100");
-  assert((*restored_compact)[u8"Inventory"]->ElementCount() == 2);
-  assert((*(*restored_compact)[u8"Inventory"])[0]->GetData() == "草藥");
-  assert((*(*restored_compact)[u8"Inventory"])[1]->GetData() == "黃金盔甲");
+  // 驗證不保留等號模式的字串完全能被成功反序列化還原！
+  auto restored_without_eq = TreeIO::DeserializeFromString(dsl_without_eq);
+  assert(restored_without_eq != nullptr);
+  assert(restored_without_eq->GetName() == u8"Player");
+  assert(restored_without_eq->GetData() == "英雄角色");
+  assert((*restored_without_eq)[u8"HP"]->GetData() == "100");
+  assert((*(*restored_without_eq)[u8"Inventory"])[0]->GetData() == "草藥");
+  assert((*(*restored_without_eq)[u8"Inventory"])[1]->GetData() == "黃金盔甲");
 
-  // 測試 SerializeCompact 便捷函式
+  // 測試 SerializeCompact 便捷函式 (預設為 WithEqual)
   std::ostringstream oss_compact2;
   TreeIO::SerializeCompact(oss_compact2, player);
-  assert(oss_compact2.str() == dsl_compact);
+  assert(oss_compact2.str() == dsl_with_eq);
+
+  // 測試 SerializeCompact 指定 WithoutEqual
+  std::ostringstream oss_compact3;
+  TreeIO::SerializeCompact(oss_compact3, player, CompactMode::WithoutEqual);
+  assert(oss_compact3.str() == dsl_without_eq);
 
   std::cout << " -> 通過！" << std::endl;
 }
@@ -310,6 +317,53 @@ void TestDeepTreeDestruction()
   std::cout << " -> 通過！" << std::endl;
 }
 
+void TestUnifiedDualMode()
+{
+  std::cout << "[測試 8] 單一容器雙模態統合、互通性與形態自動推導測試..." << std::endl;
+
+  auto hero = Tree::CreateRoot(u8"Hero");
+  assert(hero->IsObject());  // 空容器預設為 Object
+
+  // 1. 新增具名子節點
+  auto hp = hero->AddBackChild(u8"HP");
+  hp->SetData("100");
+  assert(hero->IsObject());  // 只有具名，維持 Object
+  assert(hero->ChildCount() == 1);
+  assert(hero->ElementCount() == 1);
+
+  // 2. 混入匿名元素
+  auto item0 = hero->PushElement();
+  item0->SetData("生鏽鐵劍");
+  // 混入匿名元素後，自動判定為陣列模式！(elements.size() > nameMap.size())
+  assert(hero->IsArray());
+  assert(!hero->IsObject());
+  assert(hero->Size() == 2);
+
+  // 3. 測試下標與名稱存取的互通自洽性
+  assert((*hero)[0] == hp);                     // 下標 0 拿到的就是 HP 節點！
+  assert((*hero)[u8"HP"] == hp);               // 名稱 HP 拿到的也是同一個 HP 節點！
+  assert((*hero)[1] == item0);                  // 下標 1 拿到匿名元素
+  assert((*hero)[0]->GetData() == "100");
+  assert((*hero)[1]->GetData() == "生鏽鐵劍");
+
+  // 4. 混合結構序列化（陣列小括號模式，具名與匿名共存）
+  std::ostringstream oss;
+  TreeIO::SerializeCompact(oss, hero);
+  std::string compact_dsl = oss.str();
+  std::cout << "  混合結構 Compact DSL: " << compact_dsl << std::endl;
+  assert(compact_dsl == "[Hero]{[HP]=\"100\"\"生鏽鐵劍\"}" || compact_dsl == "[Hero]([HP]=\"100\"\"生鏽鐵劍\")");
+
+  // 5. 反序列化驗證
+  auto restored = TreeIO::DeserializeFromString(compact_dsl);
+  assert(restored != nullptr);
+  assert(restored->Size() == 2);
+  assert((*restored)[0]->GetData() == "100");
+  assert((*restored)[u8"HP"]->GetData() == "100");
+  assert((*restored)[1]->GetData() == "生鏽鐵劍");
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
 int main()
 {
   std::cout << "========================================" << std::endl;
@@ -323,9 +377,10 @@ int main()
   TestBinaryAndEscapeHandling();
   TestConcurrencySafety();
   TestDeepTreeDestruction();
+  TestUnifiedDualMode();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 7 項單元測試 100% 成功通過！    " << std::endl;
+  std::cout << "  全數 8 項單元測試 100% 成功通過！    " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

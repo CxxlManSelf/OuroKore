@@ -258,6 +258,43 @@ OURO_REGISTER_PROXY(BossProxy, Boss)
 ```
 * **防禦不變量**：Proxy 嚴格禁止從臨時右值（Rvalue Temporary）建構，杜絕懸垂引用；底層全走 `OuroPtr::operator()`，透明復水完全無縫支援。
 
+### 2.7 現代樹狀結構容器與文字 DSL 串流 (Tree & TreeIO Utilities)
+適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。
+```cpp
+#include <ourokore/base/Tree.hpp>
+#include <ourokore/base/TreeIO.hpp>
+
+using ork::base::Tree;
+using ork::base::TreeIO;
+using ork::base::CompactMode;
+
+// 1. 建立根節點（單一容器統合架構，全體子項目存於連續記憶體 vector）
+auto player = Tree::CreateRoot(u8"Player");
+player->SetData("英雄角色");
+
+// 2. 建立具名子節點 (O(1) 雜湊尋址)
+auto hp = player->AddBackChild(u8"HP");
+hp->SetData("100");
+
+// 3. 建立陣列型節點並享受 O(1) 隨機下標存取！
+auto inventory = player->AddBackChild(u8"Inventory");
+inventory->PushElement()->SetData("草藥");
+inventory->PushElement()->SetData("黃金盔甲");
+
+// 4. 下標與名稱存取 100% 互通自洽
+assert((*inventory)[0]->GetData() == "草藥");
+assert((*player)[0] == hp);              // 下標 0 與名稱 "HP" 存取為同一節點！
+assert((*player)[u8"HP"] == hp);
+
+// 5. 輸出為文字 DSL（支援 3 種緊湊模式，非遞迴顯式堆疊走訪防爆棧）
+TreeIO::Serialize(std::cout, player, CompactMode::None);         // 標準美化縮排
+TreeIO::Serialize(std::cout, player, CompactMode::WithEqual);    // 保留等號緊湊 [Player]="英雄"{...}
+TreeIO::Serialize(std::cout, player, CompactMode::WithoutEqual); // 不保留等號極致緊湊 [Player]"英雄"{...}
+
+// 6. 寬容型狀態機反序列化（自動過濾並忽略雜訊）
+auto restored = TreeIO::DeserializeFromString(dsl_text);
+```
+
 ---
 
 ## ⚖️ 3. 核心擴展鐵律 (Core Contributor Invariants)
@@ -281,8 +318,9 @@ OURO_REGISTER_PROXY(BossProxy, Boss)
    - 核心所有型別唯一碼（`ork_type_id_t`）、編譯期 `ork::Subclass` 樣板基底、執行期字串型別註冊與查詢，**一律統一採用 `ork::base::Fnv1a64` 計算**。嚴禁在核心不同模組或外掛中各搞一套手寫雜湊邏輯，確保跨模組與脫水反序列化識別碼 100% 絕對一致。
 7. **基礎工具層職責與樹狀結構容器規範 (Tree & TreeIO Invariant)**：
    - 樹狀容器（`TreeNodeBase`、`TreeNode<T>`）與串流解析器（`TreeIO`）為基礎通用設施（`ourokore_base`），零依賴核心層。
-   - 遵循雙模態設計（Object 模式具名雙索引、Array 模式連續記憶體向量支援 $O(1)$ 隨機下標存取 `node[i]`）。
-   - 文字 DSL 嚴格遵守四大正交符號（`[名稱]`、`"資料"`、`{物件}`、`(陣列)`），狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
+   - 採用**單一容器雙模態統合架構**：所有子項目統一存於連續記憶體 `std::vector`，具名者由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址，下標與名稱存取 100% 互通。
+   - 形態由長度數學關係自動推導：全具名為 Object（`{}`），混入匿名為 Array（`()`）。
+   - 文字 DSL 支援 3 種緊湊模式（None、WithEqual、WithoutEqual），狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
 
 ---
 

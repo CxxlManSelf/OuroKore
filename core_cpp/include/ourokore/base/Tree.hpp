@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <list>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -132,21 +131,19 @@ public:
 
 protected:
   std::u8string m_name;                 ///< 節點名稱 (UTF-8)
-  NodeKind m_kind{NodeKind::Object};    ///< 節點型態 (Object 或 Array)
+  bool m_forceArrayHint{false};         ///< 空容器時顯式宣告為陣列之標記
 
-  // --- 具名字節點通道 (Object Mode) ---
-  std::list<NodePtr> m_children;                                                ///< 循序子節點列表
-  std::unordered_map<std::u8string, NodePtr> m_nameIndex;                       ///< 名稱索引 (O(1) 尋址)
-  std::unordered_map<D *, typename std::list<NodePtr>::iterator> m_childIndex;  ///< 反向指標索引 (O(1) 插入重排)
+  // --- 唯一真實子節點容器通道 (連續記憶體快取友善，支援 O(1) 循序/下標隨機存取) ---
+  std::vector<NodePtr> m_elements;
 
-  // --- 陣列元素通道 (Array Mode，連續記憶體極速隨機存取) ---
-  std::vector<NodePtr> m_elements;                                              ///< 循序陣列元素
+  // --- 具名索引字典 (O(1) 雜湊尋址) ---
+  std::unordered_map<std::u8string, NodePtr> m_nameMap;
 
   // 拓撲關聯
   std::weak_ptr<D> m_parent;  ///< 父節點弱引用
   std::weak_ptr<D> m_self;    ///< 自身弱引用
 
-  // 執行緒安全鎖
+  // 執行緒安全鎖 (讀寫鎖)
   mutable std::shared_mutex m_mutex;
 
   void SetParentAndSelf(const NodePtr &parent, const NodePtr &self)
@@ -180,9 +177,9 @@ public:
       }
     });
 
-    if (node)
+    if (node && kind == NodeKind::Array)
     {
-      node->m_kind = kind;
+      node->m_forceArrayHint = true;
     }
     return node;
   }
@@ -196,13 +193,6 @@ public:
   virtual ~TreeNodeBase()
   {
     // 解構前主動斷開子節點 parent 弱指針，防範循環懸空
-    for (auto &child : m_children)
-    {
-      if (child)
-      {
-        child->m_parent.reset();
-      }
-    }
     for (auto &elem : m_elements)
     {
       if (elem)
@@ -229,9 +219,16 @@ public:
     return root;
   }
 
-  // --- 基本屬性 ---
-  [[nodiscard]] const std::u8string &GetName() const noexcept
+  // 創建陣列根節點
+  static NodePtr CreateArray(const std::u8string &name = u8"")
   {
+    return CreateRoot(name, NodeKind::Array);
+  }
+
+  // --- 基本屬性 ---
+  [[nodiscard]] std::u8string GetName() const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
     return m_name;
   }
 
@@ -241,28 +238,31 @@ public:
     m_name = name;
   }
 
-  [[nodiscard]] NodeKind GetKind() const noexcept
+  // --- 形態判定 (資料驅動：m_elements.size() vs m_nameMap.size()) ---
+  [[nodiscard]] bool IsArray() const noexcept
   {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_kind;
+    if (m_forceArrayHint)
+    {
+      return true;
+    }
+    return m_elements.size() > m_nameMap.size();
+  }
+
+  [[nodiscard]] bool IsObject() const noexcept
+  {
+    return !IsArray();
+  }
+
+  [[nodiscard]] NodeKind GetKind() const noexcept
+  {
+    return IsArray() ? NodeKind::Array : NodeKind::Object;
   }
 
   void SetKind(NodeKind kind) noexcept
   {
     std::unique_lock<std::shared_mutex> lock(m_mutex);
-    m_kind = kind;
-  }
-
-  [[nodiscard]] bool IsArray() const noexcept
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_kind == NodeKind::Array;
-  }
-
-  [[nodiscard]] bool IsObject() const noexcept
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_kind == NodeKind::Object;
+    m_forceArrayHint = (kind == NodeKind::Array);
   }
 
   // 取得父節點與自身
@@ -291,21 +291,34 @@ public:
   }
 
   // =========================================================================
-  // 陣列元素操作通道 (Array Mode - O(1) 隨機下標存取)
+  // 子節點與陣列元素數量與存取通道 (統合單一容器)
   // =========================================================================
 
-  /**
-   * @brief 取得陣列元素個數 (O(1))
-   */
+  [[nodiscard]] size_t ChildCount() const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_elements.size();
+  }
+
   [[nodiscard]] size_t ElementCount() const
   {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
     return m_elements.size();
   }
 
-  /**
-   * @brief 陣列下標隨機存取 (O(1))
-   */
+  [[nodiscard]] size_t Size() const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_elements.size();
+  }
+
+  [[nodiscard]] bool Empty() const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_elements.empty();
+  }
+
+  // 下標隨機存取 (O(1))
   [[nodiscard]] NodePtr GetElementAt(size_t index)
   {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
@@ -326,9 +339,6 @@ public:
     return nullptr;
   }
 
-  /**
-   * @brief 運算子隨機存取陣列元素 (O(1))
-   */
   NodePtr operator[](size_t index)
   {
     return GetElementAt(index);
@@ -339,14 +349,199 @@ public:
     return GetElementAt(index);
   }
 
-  /**
-   * @brief 向陣列尾端追加元素 (O(1))
-   */
+  // 名稱尋址 (O(1))
+  [[nodiscard]] NodePtr FindChildByName(const std::u8string &name)
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    auto it = m_nameMap.find(name);
+    return (it != m_nameMap.end()) ? it->second : nullptr;
+  }
+
+  [[nodiscard]] ConstNodePtr FindChildByName(const std::u8string &name) const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    auto it = m_nameMap.find(name);
+    return (it != m_nameMap.end()) ? it->second : nullptr;
+  }
+
+  [[nodiscard]] bool HasChild(const std::u8string &name) const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_nameMap.find(name) != m_nameMap.end();
+  }
+
+  NodePtr operator[](const std::u8string &name)
+  {
+    return FindChildByName(name);
+  }
+
+  ConstNodePtr operator[](const std::u8string &name) const
+  {
+    return FindChildByName(name);
+  }
+
+  // 首尾存取 (O(1))
+  [[nodiscard]] NodePtr GetFirstChild()
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_elements.empty() ? nullptr : m_elements.front();
+  }
+
+  [[nodiscard]] ConstNodePtr GetFirstChild() const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_elements.empty() ? nullptr : m_elements.front();
+  }
+
+  [[nodiscard]] NodePtr GetLastChild()
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_elements.empty() ? nullptr : m_elements.back();
+  }
+
+  [[nodiscard]] ConstNodePtr GetLastChild() const
+  {
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    return m_elements.empty() ? nullptr : m_elements.back();
+  }
+
+  // =========================================================================
+  // 新增與插入方法
+  // =========================================================================
+
+  NodePtr AddBackChild(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  {
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
+    {
+      return nullptr;  // 具名不可重複
+    }
+
+    NodePtr new_child = MakeNode(name, kind);
+    if (!new_child)
+    {
+      return nullptr;
+    }
+
+    m_elements.push_back(new_child);
+    if (!name.empty())
+    {
+      m_nameMap[name] = new_child;
+    }
+
+    NodePtr self_ptr = m_self.lock();
+    lock.unlock();
+
+    new_child->SetParentAndSelf(self_ptr, new_child);
+    return new_child;
+  }
+
+  NodePtr AddFrontChild(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  {
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
+    {
+      return nullptr;
+    }
+
+    NodePtr new_child = MakeNode(name, kind);
+    if (!new_child)
+    {
+      return nullptr;
+    }
+
+    m_elements.insert(m_elements.begin(), new_child);
+    if (!name.empty())
+    {
+      m_nameMap[name] = new_child;
+    }
+
+    NodePtr self_ptr = m_self.lock();
+    lock.unlock();
+
+    new_child->SetParentAndSelf(self_ptr, new_child);
+    return new_child;
+  }
+
+  NodePtr InsertBefore(const NodePtr &child_node, const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  {
+    if (!child_node)
+    {
+      return nullptr;
+    }
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+
+    auto it = std::find(m_elements.begin(), m_elements.end(), child_node);
+    if (it == m_elements.end())
+    {
+      return nullptr;
+    }
+
+    if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
+    {
+      return nullptr;
+    }
+
+    NodePtr new_child = MakeNode(name, kind);
+    if (!new_child)
+    {
+      return nullptr;
+    }
+
+    m_elements.insert(it, new_child);
+    if (!name.empty())
+    {
+      m_nameMap[name] = new_child;
+    }
+
+    NodePtr self_ptr = m_self.lock();
+    lock.unlock();
+
+    new_child->SetParentAndSelf(self_ptr, new_child);
+    return new_child;
+  }
+
+  NodePtr InsertAfter(const NodePtr &child_node, const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  {
+    if (!child_node)
+    {
+      return nullptr;
+    }
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+
+    auto it = std::find(m_elements.begin(), m_elements.end(), child_node);
+    if (it == m_elements.end())
+    {
+      return nullptr;
+    }
+
+    if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
+    {
+      return nullptr;
+    }
+
+    NodePtr new_child = MakeNode(name, kind);
+    if (!new_child)
+    {
+      return nullptr;
+    }
+
+    m_elements.insert(it + 1, new_child);
+    if (!name.empty())
+    {
+      m_nameMap[name] = new_child;
+    }
+
+    NodePtr self_ptr = m_self.lock();
+    lock.unlock();
+
+    new_child->SetParentAndSelf(self_ptr, new_child);
+    return new_child;
+  }
+
   NodePtr PushElement(NodeKind element_kind = NodeKind::Object)
   {
     std::unique_lock<std::shared_mutex> lock(m_mutex);
-    m_kind = NodeKind::Array;  // 自動切換為陣列形態
-
     NodePtr new_elem = MakeNode(u8"", element_kind);
     if (!new_elem)
     {
@@ -361,9 +556,6 @@ public:
     return new_elem;
   }
 
-  /**
-   * @brief 向陣列尾端追加既有節點 (O(1))
-   */
   bool PushElement(const NodePtr &element)
   {
     if (!element)
@@ -371,9 +563,12 @@ public:
       return false;
     }
     std::unique_lock<std::shared_mutex> lock(m_mutex);
-    m_kind = NodeKind::Array;
 
     m_elements.push_back(element);
+    if (!element->GetName().empty())
+    {
+      m_nameMap[element->GetName()] = element;
+    }
     NodePtr self_ptr = m_self.lock();
     lock.unlock();
 
@@ -381,9 +576,10 @@ public:
     return true;
   }
 
-  /**
-   * @brief 移除指定下標的陣列元素
-   */
+  // =========================================================================
+  // 移除方法
+  // =========================================================================
+
   bool RemoveElementAt(size_t index)
   {
     std::unique_lock<std::shared_mutex> lock(m_mutex);
@@ -394,6 +590,10 @@ public:
 
     NodePtr elem = m_elements[index];
     m_elements.erase(m_elements.begin() + index);
+    if (elem && !elem->GetName().empty())
+    {
+      m_nameMap.erase(elem->GetName());
+    }
     lock.unlock();
 
     if (elem)
@@ -404,237 +604,6 @@ public:
     return true;
   }
 
-  /**
-   * @brief 清空所有陣列元素
-   */
-  void ClearElements()
-  {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-    std::vector<NodePtr> copy = std::move(m_elements);
-    m_elements.clear();
-    lock.unlock();
-
-    for (auto &elem : copy)
-    {
-      if (elem)
-      {
-        std::unique_lock<std::shared_mutex> elem_lock(elem->m_mutex);
-        elem->m_parent.reset();
-      }
-    }
-  }
-
-  // =========================================================================
-  // 具名字節點操作通道 (Object Mode)
-  // =========================================================================
-
-  /**
-   * @brief 運算子依照名稱存取子節點 (O(1))
-   */
-  NodePtr operator[](const std::u8string &name)
-  {
-    return FindChildByName(name);
-  }
-
-  ConstNodePtr operator[](const std::u8string &name) const
-  {
-    return FindChildByName(name);
-  }
-
-  /**
-   * @brief 新增具名字節點至開頭 (O(1))
-   */
-  NodePtr AddFrontChild(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
-  {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-
-    if (!name.empty() && m_nameIndex.find(name) != m_nameIndex.end())
-    {
-      return nullptr;  // 名稱不可重複
-    }
-
-    NodePtr new_child = MakeNode(name, kind);
-    if (!new_child)
-    {
-      return nullptr;
-    }
-
-    auto it = m_children.insert(m_children.begin(), new_child);
-    m_childIndex[new_child.get()] = it;
-    if (!name.empty())
-    {
-      m_nameIndex[name] = new_child;
-    }
-
-    NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
-    new_child->SetParentAndSelf(self_ptr, new_child);
-    return new_child;
-  }
-
-  /**
-   * @brief 新增具名字節點至尾端 (O(1))
-   */
-  NodePtr AddBackChild(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
-  {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-
-    if (!name.empty() && m_nameIndex.find(name) != m_nameIndex.end())
-    {
-      return nullptr;  // 名稱不可重複
-    }
-
-    NodePtr new_child = MakeNode(name, kind);
-    if (!new_child)
-    {
-      return nullptr;
-    }
-
-    auto it = m_children.insert(m_children.end(), new_child);
-    m_childIndex[new_child.get()] = it;
-    if (!name.empty())
-    {
-      m_nameIndex[name] = new_child;
-    }
-
-    NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
-    new_child->SetParentAndSelf(self_ptr, new_child);
-    return new_child;
-  }
-
-  /**
-   * @brief 在指定子節點前插入新節點 (O(1))
-   */
-  NodePtr InsertBefore(const NodePtr &child_node, const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
-  {
-    if (!child_node)
-    {
-      return nullptr;
-    }
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-
-    auto index_it = m_childIndex.find(child_node.get());
-    if (index_it == m_childIndex.end())
-    {
-      return nullptr;
-    }
-
-    if (!name.empty() && m_nameIndex.find(name) != m_nameIndex.end())
-    {
-      return nullptr;
-    }
-
-    NodePtr new_child = MakeNode(name, kind);
-    if (!new_child)
-    {
-      return nullptr;
-    }
-
-    auto new_it = m_children.insert(index_it->second, new_child);
-    m_childIndex[new_child.get()] = new_it;
-    if (!name.empty())
-    {
-      m_nameIndex[name] = new_child;
-    }
-
-    NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
-    new_child->SetParentAndSelf(self_ptr, new_child);
-    return new_child;
-  }
-
-  /**
-   * @brief 在指定子節點後插入新節點 (O(1))
-   */
-  NodePtr InsertAfter(const NodePtr &child_node, const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
-  {
-    if (!child_node)
-    {
-      return nullptr;
-    }
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-
-    auto index_it = m_childIndex.find(child_node.get());
-    if (index_it == m_childIndex.end())
-    {
-      return nullptr;
-    }
-
-    if (!name.empty() && m_nameIndex.find(name) != m_nameIndex.end())
-    {
-      return nullptr;
-    }
-
-    NodePtr new_child = MakeNode(name, kind);
-    if (!new_child)
-    {
-      return nullptr;
-    }
-
-    auto new_it = m_children.insert(std::next(index_it->second), new_child);
-    m_childIndex[new_child.get()] = new_it;
-    if (!name.empty())
-    {
-      m_nameIndex[name] = new_child;
-    }
-
-    NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
-    new_child->SetParentAndSelf(self_ptr, new_child);
-    return new_child;
-  }
-
-  /**
-   * @brief 按名稱尋找子節點 (O(1))
-   */
-  [[nodiscard]] NodePtr FindChildByName(const std::u8string &name)
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    auto it = m_nameIndex.find(name);
-    if (it != m_nameIndex.end())
-    {
-      return it->second;
-    }
-    return nullptr;
-  }
-
-  [[nodiscard]] ConstNodePtr FindChildByName(const std::u8string &name) const
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    auto it = m_nameIndex.find(name);
-    if (it != m_nameIndex.end())
-    {
-      return it->second;
-    }
-    return nullptr;
-  }
-
-  /**
-   * @brief 檢查是否存在指定名稱之子節點 (O(1))
-   */
-  [[nodiscard]] bool HasChild(const std::u8string &name) const
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_nameIndex.find(name) != m_nameIndex.end();
-  }
-
-  /**
-   * @brief 取得子節點總數 (O(1))
-   */
-  [[nodiscard]] size_t ChildCount() const
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_children.size();
-  }
-
-  /**
-   * @brief 移除子節點 (O(1))
-   */
   bool RemoveChild(const NodePtr &child)
   {
     if (!child)
@@ -643,20 +612,17 @@ public:
     }
     std::unique_lock<std::shared_mutex> lock(m_mutex);
 
-    auto index_it = m_childIndex.find(child.get());
-    if (index_it == m_childIndex.end())
+    auto it = std::find(m_elements.begin(), m_elements.end(), child);
+    if (it == m_elements.end())
     {
       return false;
     }
 
-    auto list_it = index_it->second;
     if (!child->GetName().empty())
     {
-      m_nameIndex.erase(child->GetName());
+      m_nameMap.erase(child->GetName());
     }
-
-    m_children.erase(list_it);
-    m_childIndex.erase(index_it);
+    m_elements.erase(it);
     lock.unlock();
 
     std::unique_lock<std::shared_mutex> child_lock(child->m_mutex);
@@ -664,9 +630,6 @@ public:
     return true;
   }
 
-  /**
-   * @brief 依據名稱移除子節點 (O(1))
-   */
   bool RemoveChildByName(const std::u8string &name)
   {
     NodePtr child = FindChildByName(name);
@@ -677,15 +640,12 @@ public:
     return false;
   }
 
-  /**
-   * @brief 清空所有子節點
-   */
   void ClearChildren()
   {
     std::unique_lock<std::shared_mutex> lock(m_mutex);
-    std::list<NodePtr> copy = std::move(m_children);
-    m_nameIndex.clear();
-    m_childIndex.clear();
+    std::vector<NodePtr> copy = std::move(m_elements);
+    m_elements.clear();
+    m_nameMap.clear();
     lock.unlock();
 
     for (auto &child : copy)
@@ -698,36 +658,19 @@ public:
     }
   }
 
-  // --- 首尾子節點快速存取 (O(1)) ---
-  [[nodiscard]] NodePtr GetFirstChild()
+  void ClearElements()
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_children.empty() ? nullptr : m_children.front();
+    ClearChildren();
   }
 
-  [[nodiscard]] ConstNodePtr GetFirstChild() const
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_children.empty() ? nullptr : m_children.front();
-  }
+  // =========================================================================
+  // 走訪方法
+  // =========================================================================
 
-  [[nodiscard]] NodePtr GetLastChild()
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_children.empty() ? nullptr : m_children.back();
-  }
-
-  [[nodiscard]] ConstNodePtr GetLastChild() const
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_children.empty() ? nullptr : m_children.back();
-  }
-
-  // --- 遍歷走訪 ---
   void ForEachChild(const std::function<void(const NodePtr &)> &callback)
   {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
-    std::list<NodePtr> copy = m_children;
+    std::vector<NodePtr> copy = m_elements;
     lock.unlock();
 
     for (const auto &child : copy)
@@ -739,7 +682,7 @@ public:
   void ForEachChild(const std::function<void(const ConstNodePtr &)> &callback) const
   {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
-    std::list<NodePtr> copy = m_children;
+    std::vector<NodePtr> copy = m_elements;
     lock.unlock();
 
     for (const auto &child : copy)
@@ -750,33 +693,23 @@ public:
 
   void ForEachElement(const std::function<void(const NodePtr &)> &callback)
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    std::vector<NodePtr> copy = m_elements;
-    lock.unlock();
-
-    for (const auto &elem : copy)
-    {
-      callback(elem);
-    }
+    ForEachChild(callback);
   }
 
   void ForEachElement(const std::function<void(const ConstNodePtr &)> &callback) const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    std::vector<NodePtr> copy = m_elements;
-    lock.unlock();
-
-    for (const auto &elem : copy)
-    {
-      callback(elem);
-    }
+    ForEachChild(callback);
   }
 
-  // 子節點迭代器
-  auto begin() { return m_children.begin(); }
-  auto end() { return m_children.end(); }
-  auto rbegin() { return m_children.rbegin(); }
-  auto rend() { return m_children.rend(); }
+  // 迭代器
+  auto begin() { return m_elements.begin(); }
+  auto end() { return m_elements.end(); }
+  auto begin() const { return m_elements.begin(); }
+  auto end() const { return m_elements.end(); }
+  auto rbegin() { return m_elements.rbegin(); }
+  auto rend() { return m_elements.rend(); }
+  auto rbegin() const { return m_elements.rbegin(); }
+  auto rend() const { return m_elements.rend(); }
 };
 
 /**

@@ -16,6 +16,16 @@ namespace ork::base
 {
 
 /**
+ * @brief TreeIO 緊湊序列化模式 (Compact Mode)
+ */
+enum class CompactMode : uint8_t
+{
+  None = 0,          ///< 沒有緊湊（保留縮排與換行，鍵值賦值使用 " = "）
+  WithEqual = 1,     ///< 保留等號之緊湊模式（無縮排與換行，鍵值賦值使用 "=\""）
+  WithoutEqual = 2   ///< 不保留等號之極致緊湊模式（無縮排與換行，鍵值賦值使用 "\""）
+};
+
+/**
  * @brief 樹狀容器文字 DSL 狀態機序列化與反序列化器
  *
  * 語法規範：
@@ -115,29 +125,33 @@ public:
 
   template <
       typename T = std::string, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool>>>
+      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
+                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
       std::ostream &os, const std::shared_ptr<TreeNode<T>> &root, Func &&data_to_string = nullptr,
-      size_t indent_width = 2, bool compact = false
+      size_t indent_width = 2, CompactMode mode = CompactMode::None
   )
   {
     Serialize<T>(
-        os, std::const_pointer_cast<const TreeNode<T>>(root), std::forward<Func>(data_to_string), indent_width, compact
+        os, std::const_pointer_cast<const TreeNode<T>>(root), std::forward<Func>(data_to_string), indent_width, mode
     );
   }
 
   template <
       typename T = std::string, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool>>>
+      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
+                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
       std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, Func &&data_to_string = nullptr,
-      size_t indent_width = 2, bool compact = false
+      size_t indent_width = 2, CompactMode mode = CompactMode::None
   )
   {
     if (!root)
     {
       return;
     }
+
+    bool is_compact = (mode != CompactMode::None);
 
     auto convert_data = [&](const T &d) -> std::string
     {
@@ -179,11 +193,11 @@ public:
       {
         if (f.node)
         {
-          std::string indent = compact ? "" : MakeIndent(f.depth, indent_width);
+          std::string indent = is_compact ? "" : MakeIndent(f.depth, indent_width);
           if (f.node->IsArray())
           {
             os << indent << ')';
-            if (!compact)
+            if (!is_compact)
             {
               os << '\n';
             }
@@ -191,7 +205,7 @@ public:
           else
           {
             os << indent << '}';
-            if (!compact)
+            if (!is_compact)
             {
               os << '\n';
             }
@@ -205,7 +219,7 @@ public:
         continue;
       }
 
-      std::string indent = compact ? "" : MakeIndent(f.depth, indent_width);
+      std::string indent = is_compact ? "" : MakeIndent(f.depth, indent_width);
       std::string name_s = ork::utf8::to_string(f.node->GetName());
       std::string escaped_name = EscapeName(name_s);
       std::string data_s = convert_data(f.node->GetData());
@@ -217,7 +231,11 @@ public:
         os << indent << '[' << escaped_name << ']';
         if (!escaped_data.empty())
         {
-          if (compact)
+          if (mode == CompactMode::WithoutEqual)
+          {
+            os << "\"" << escaped_data << "\"";
+          }
+          else if (mode == CompactMode::WithEqual)
           {
             os << "=\"" << escaped_data << "\"";
           }
@@ -226,7 +244,7 @@ public:
             os << " = \"" << escaped_data << "\"";
           }
         }
-        if (!compact)
+        if (!is_compact)
         {
           os << '\n';
         }
@@ -237,71 +255,94 @@ public:
         if (!escaped_data.empty())
         {
           os << indent << "\"" << escaped_data << "\"";
-          if (!compact)
+          if (!is_compact)
           {
             os << '\n';
           }
         }
       }
 
-      // 檢查是否具有陣列元素或具名字節點
+      // 檢查是否具有子節點或陣列元素 (底層統一為單一容器)
       bool is_array = f.node->IsArray();
-      size_t elem_count = f.node->ElementCount();
-      size_t child_count = f.node->ChildCount();
+      size_t count = f.node->ChildCount();
 
-      if (is_array && elem_count > 0)
+      if (count > 0)
       {
-        os << indent << '(';
-        if (!compact)
+        if (is_array)
+        {
+          os << indent << '(';
+        }
+        else
+        {
+          os << indent << '{';
+        }
+        if (!is_compact)
         {
           os << '\n';
         }
         stk.push_back({f.node, 1, f.depth, false});
 
-        // 倒序壓棧確保循序輸出
-        for (size_t i = elem_count; i > 0; --i)
+        // 倒序壓棧確保循序輸出 (底層統一為 m_elements)
+        for (size_t i = count; i > 0; --i)
         {
           auto elem = std::const_pointer_cast<const TreeNode<T>>(f.node->GetElementAt(i - 1));
           if (elem)
           {
-            stk.push_back({elem, 0, f.depth + 1, true});
+            stk.push_back({elem, 0, f.depth + 1, is_array});
           }
-        }
-      }
-      else if (!is_array && child_count > 0)
-      {
-        os << indent << '{';
-        if (!compact)
-        {
-          os << '\n';
-        }
-        stk.push_back({f.node, 1, f.depth, false});
-
-        std::vector<std::shared_ptr<const TreeNode<T>>> children;
-        children.reserve(child_count);
-        f.node->ForEachChild(
-            [&children](const auto &c)
-            {
-              if (c)
-              {
-                children.push_back(std::const_pointer_cast<const TreeNode<T>>(c));
-              }
-            }
-        );
-
-        for (auto it = children.rbegin(); it != children.rend(); ++it)
-        {
-          stk.push_back({*it, 0, f.depth + 1, false});
         }
       }
     }
   }
 
-  // 緊湊模式 (Compact) 專用便捷多載
+  // --- 相容 bool compact 的多載 ---
+  template <
+      typename T = std::string, typename Func = std::nullptr_t,
+      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
+                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+  static void Serialize(
+      std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, Func &&data_to_string,
+      size_t indent_width, bool compact
+  )
+  {
+    Serialize<T>(
+        os, root, std::forward<Func>(data_to_string), indent_width,
+        compact ? CompactMode::WithEqual : CompactMode::None
+    );
+  }
+
+  template <
+      typename T = std::string, typename Func = std::nullptr_t,
+      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
+                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+  static void Serialize(
+      std::ostream &os, const std::shared_ptr<TreeNode<T>> &root, Func &&data_to_string,
+      size_t indent_width, bool compact
+  )
+  {
+    Serialize<T>(
+        os, std::const_pointer_cast<const TreeNode<T>>(root), std::forward<Func>(data_to_string), indent_width,
+        compact ? CompactMode::WithEqual : CompactMode::None
+    );
+  }
+
+  // --- 便捷重載 ---
+  template <typename T = std::string>
+  static void Serialize(std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, CompactMode mode)
+  {
+    Serialize<T>(os, root, nullptr, (mode == CompactMode::None) ? 2 : 0, mode);
+  }
+
+  template <typename T = std::string>
+  static void Serialize(std::ostream &os, const std::shared_ptr<TreeNode<T>> &root, CompactMode mode)
+  {
+    Serialize<T>(os, std::const_pointer_cast<const TreeNode<T>>(root), mode);
+  }
+
   template <typename T = std::string>
   static void Serialize(std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, bool compact)
   {
-    Serialize<T>(os, root, nullptr, compact ? 0 : 2, compact);
+    Serialize<T>(os, root, compact ? CompactMode::WithEqual : CompactMode::None);
   }
 
   template <typename T = std::string>
@@ -312,18 +353,20 @@ public:
 
   template <typename T = std::string, typename Func = std::nullptr_t>
   static void SerializeCompact(
-      std::ostream &os, const std::shared_ptr<TreeNode<T>> &root, Func &&data_to_string = nullptr
+      std::ostream &os, const std::shared_ptr<TreeNode<T>> &root,
+      CompactMode mode = CompactMode::WithEqual, Func &&data_to_string = nullptr
   )
   {
-    Serialize<T>(os, root, std::forward<Func>(data_to_string), 0, true);
+    Serialize<T>(os, root, std::forward<Func>(data_to_string), 0, mode);
   }
 
   template <typename T = std::string, typename Func = std::nullptr_t>
   static void SerializeCompact(
-      std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root, Func &&data_to_string = nullptr
+      std::ostream &os, const std::shared_ptr<const TreeNode<T>> &root,
+      CompactMode mode = CompactMode::WithEqual, Func &&data_to_string = nullptr
   )
   {
-    Serialize<T>(os, root, std::forward<Func>(data_to_string), 0, true);
+    Serialize<T>(os, root, std::forward<Func>(data_to_string), 0, mode);
   }
 
   // =========================================================================
@@ -620,15 +663,9 @@ public:
     parse_container(root_holder, '\0');
 
     // 若解析出唯一頂層子節點，則傳回該節點作為根；否則傳回 root_holder
-    if (root_holder->ChildCount() == 1 && root_holder->ElementCount() == 0)
+    if (root_holder->ChildCount() == 1)
     {
       auto first = root_holder->GetFirstChild();
-      first->DetachFromParent();
-      return first;
-    }
-    if (root_holder->ElementCount() == 1 && root_holder->ChildCount() == 0)
-    {
-      auto first = root_holder->GetElementAt(0);
       first->DetachFromParent();
       return first;
     }

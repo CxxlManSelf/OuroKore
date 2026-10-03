@@ -327,7 +327,7 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
 ```
 
 ### 模式 H：現代樹狀結構容器與文字 DSL 狀態機實戰 (Tree & TreeIO Utilities)
-適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。
+適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。容器採用「單一容器雙模態統合」設計，序列化支援標準可讀與 3 種緊湊模式。
 
 ```cpp
 #include <ourokore/base/Tree.hpp>
@@ -335,30 +335,37 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
 
 using ork::base::Tree;
 using ork::base::TreeIO;
-using ork::base::NodeKind;
+using ork::base::CompactMode;
 
-// 1. 建立物件型根節點（Object Mode：具名前綴與哈希索引）
+// 1. 建立根節點
 auto player = Tree::CreateRoot(u8"Player");
 player->SetData("英雄角色");
 
-// 2. 建立具名子節點 (O(1))
-auto hp = player->AddBackChild(u8"HP");
+// 2. 建立具名子節點（物件屬性）
+auto hp = player->AddChild(u8"HP");
 hp->SetData("100");
 
-// 3. 建立陣列型節點 (Array Mode) 並享受 O(1) 隨機下標存取！
-// 💡 徹底根除用無名節點模擬陣列的效能與語意缺陷
-auto inventory = player->AddBackChild(u8"Inventory", NodeKind::Array);
-inventory->PushElement()->SetData("草藥");
-inventory->PushElement()->SetData("黃金盔甲");
-inventory->PushElement()->SetData("雙手大劍");
+// 3. 建立陣列節點（子節點無名即自動判定為陣列形態，DSL 輸出為 ( )）
+// 💡 享受 O(1) 保序 vector 連續記憶體與 O(1) 哈希索引，下標與鍵名 100% 互通！
+auto inventory = player->AddChild(u8"Inventory");
+inventory->AddChild()->SetData("草藥");
+inventory->AddChild()->SetData("黃金盔甲");
+inventory->AddChild()->SetData("雙手大劍");
 
 assert(inventory->ElementCount() == 3);
 assert((*inventory)[0]->GetData() == "草藥");     // O(1) 極速隨機下標存取
 assert((*inventory)[1]->GetData() == "黃金盔甲");
+assert((*player)[0]->GetName() == u8"HP");       // 具名節點也能按下標存取！
 
-// 4. 輸出為文字 DSL（非遞迴顯式堆疊走訪，防範爆棧）
-// 語法特色：[名稱]、"資料"、{物件}、(陣列) 四大正交界定符
-TreeIO::Serialize(std::cout, player);
+// 4. 輸出為文字 DSL（非遞迴顯式堆疊走訪，防範爆棧；支援 3 種緊湊輸出）
+// 標準格式（含縮排換行與空格）
+TreeIO::Serialize(std::cout, player, CompactMode::None);
+
+// 傳輸最佳化：保留等號之緊湊模式 [Player]="英雄角色"{[HP]="100"[Inventory]=("草藥"...)}
+std::string compact_with_eq = TreeIO::SerializeToString(player, CompactMode::WithEqual);
+
+// 極限省頻寬：無等號之極致緊湊模式 [Player]"英雄角色"{[HP]"100"[Inventory]("草藥"...)}
+std::string compact_no_eq = TreeIO::SerializeToString(player, CompactMode::WithoutEqual);
 
 // 5. 寬容型狀態機反序列化（自動過濾並忽略所有非預期雜訊與說明文字）
 std::string config_dsl = R"(
@@ -413,10 +420,11 @@ assert((*restored_inv)[0]->GetData() == "草藥");
      - 當進程內不同子系統多次請求載入同一動態庫時，`DynamicLibrary` 內部透過規範化路徑快取共享控制區塊。
      - 僅在首次載入（0 -> 1）時 `lib.is_first_loaded()` 為 true，可透過 `initialize_once` 執行全域初始化（重複載入時自動安全略過）。
      - 透過 `register_shutdown_symbol` 或 `add_cleanup_hook` 註冊的收尾函式，嚴格保證在最後一個使用者與物件全數釋放（1 -> 0）、DLL 卸載前夕剛好觸發一次。
-9. **樹狀容器物件與陣列模式分流鐵律 (Tree Array & FSM Invariant)**：
-   * 需表示清單、陣列、序列元素時，強制將節點標記為 `NodeKind::Array`（或調用 `PushElement`），嚴禁使用「多個無名節點」委屈模擬陣列！
-   * 陣列元素享有 `std::vector` 連續記憶體佈局與 `operator[](size_t)` $O(1)$ 隨機常數時間存取。
-   * 文字 DSL 嚴格遵守四大正交符號：`[名稱]`、`"資料"`、`{物件}`、`(陣列)`；狀態機具備狀態驅動寬容過濾能力，不在狀態內的文字與符號安全無視，支援 0~255 二進位位元組安全與脫字元（`\]`、`\"`、`\\`、`\xHH`）。
+9. **樹狀容器單一容器雙模態統合與 3 種緊湊模式鐵律 (Tree Dual-Mode & Compact Invariant)**：
+   * 容器內部統一採用保序 `vector` 與名稱查表 `unordered_map` 雙向索引，徹底終結 Array 與 Object 分裂。具名與無名子節點均使用 `AddChild`。
+   * 存取下標 `operator[](size_t)` 與鍵名 `operator[](u8string_view)` 100% 互通，均享有 $O(1)$ 時間複雜度。
+   * 結構形態自動由資料驅動判定：只要包含無名子節點即視為陣列（輸出為 `()`），全為具名鍵值則視為物件（輸出為 `{}`）。
+   * 序列化支援 3 種緊湊模式：`CompactMode::None`（預設，格式化縮排換行）、`CompactMode::WithEqual`（保留 `=` 緊湊）、`CompactMode::WithoutEqual`（無 `=` 極致緊湊）。DSL 狀態機對 3 種格式均具備 100% 雙向反序列化相容性。
 
 ---
 
