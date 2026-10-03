@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -19,14 +18,7 @@
 namespace ork::base
 {
 
-/**
- * @brief 樹狀節點的形態類別 (Node Kind)
- */
-enum class NodeKind : uint8_t
-{
-  Object = 0,  ///< 物件/字典節點：包含具名子節點集合（m_nameIndex 為主）
-  Array = 1    ///< 陣列節點：包含純循序元素集合（支援 O(1) 隨機下標存取）
-};
+
 
 /**
  * @brief 階層式非同步 / 迭代防爆棧節點刪除器
@@ -131,8 +123,6 @@ public:
 
 protected:
   std::u8string m_name;                 ///< 節點名稱 (UTF-8)
-  bool m_forceArrayHint{false};         ///< 空容器時顯式宣告為陣列之標記
-
   // --- 唯一真實子節點容器通道 (連續記憶體快取友善，支援 O(1) 循序/下標隨機存取) ---
   std::vector<NodePtr> m_elements;
 
@@ -163,25 +153,19 @@ public:
   }
 
   // 工廠方法：建構節點並掛載非同步防爆棧析構器
-  static NodePtr MakeNode(const std::u8string &name, NodeKind kind = NodeKind::Object)
+  static NodePtr MakeNode(const std::u8string &name = u8"")
   {
     if (!D::CanCreateChild(name))
     {
       return nullptr;
     }
 
-    std::shared_ptr<D> node(new D(name), [](D *p) {
+    return std::shared_ptr<D>(new D(name), [](D *p) {
       if (p)
       {
         AsyncNodeDeletor::EnqueueTask([p]() { delete p; });
       }
     });
-
-    if (node && kind == NodeKind::Array)
-    {
-      node->m_forceArrayHint = true;
-    }
-    return node;
   }
 
 public:
@@ -208,10 +192,9 @@ public:
     return true;
   }
 
-  // 創建根節點
-  static NodePtr CreateRoot(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  static NodePtr CreateRoot(const std::u8string &name = u8"")
   {
-    NodePtr root = MakeNode(name, kind);
+    NodePtr root = MakeNode(name);
     if (root)
     {
       root->m_self = root;
@@ -219,10 +202,10 @@ public:
     return root;
   }
 
-  // 創建陣列根節點
+  // 創建陣列根節點（便民別名）
   static NodePtr CreateArray(const std::u8string &name = u8"")
   {
-    return CreateRoot(name, NodeKind::Array);
+    return CreateRoot(name);
   }
 
   // --- 基本屬性 ---
@@ -242,10 +225,6 @@ public:
   [[nodiscard]] bool IsArray() const noexcept
   {
     std::shared_lock<std::shared_mutex> lock(m_mutex);
-    if (m_forceArrayHint)
-    {
-      return true;
-    }
     return m_elements.size() > m_nameMap.size();
   }
 
@@ -254,16 +233,7 @@ public:
     return !IsArray();
   }
 
-  [[nodiscard]] NodeKind GetKind() const noexcept
-  {
-    return IsArray() ? NodeKind::Array : NodeKind::Object;
-  }
 
-  void SetKind(NodeKind kind) noexcept
-  {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-    m_forceArrayHint = (kind == NodeKind::Array);
-  }
 
   // 取得父節點與自身
   [[nodiscard]] NodePtr GetParent()
@@ -409,7 +379,10 @@ public:
   // 新增與插入方法
   // =========================================================================
 
-  NodePtr AddBackChild(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  /**
+   * @brief 新增具名或匿名子節點（追加至容器尾端，O(1)）
+   */
+  NodePtr AddChild(const std::u8string &name = u8"")
   {
     std::unique_lock<std::shared_mutex> lock(m_mutex);
     if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
@@ -417,7 +390,7 @@ public:
       return nullptr;  // 具名不可重複
     }
 
-    NodePtr new_child = MakeNode(name, kind);
+    NodePtr new_child = MakeNode(name);
     if (!new_child)
     {
       return nullptr;
@@ -436,34 +409,13 @@ public:
     return new_child;
   }
 
-  NodePtr AddFrontChild(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  // 向下相容別名
+  NodePtr AddBackChild(const std::u8string &name = u8"")
   {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-    if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
-    {
-      return nullptr;
-    }
-
-    NodePtr new_child = MakeNode(name, kind);
-    if (!new_child)
-    {
-      return nullptr;
-    }
-
-    m_elements.insert(m_elements.begin(), new_child);
-    if (!name.empty())
-    {
-      m_nameMap[name] = new_child;
-    }
-
-    NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
-    new_child->SetParentAndSelf(self_ptr, new_child);
-    return new_child;
+    return AddChild(name);
   }
 
-  NodePtr InsertBefore(const NodePtr &child_node, const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  NodePtr InsertBefore(const NodePtr &child_node, const std::u8string &name = u8"")
   {
     if (!child_node)
     {
@@ -482,7 +434,7 @@ public:
       return nullptr;
     }
 
-    NodePtr new_child = MakeNode(name, kind);
+    NodePtr new_child = MakeNode(name);
     if (!new_child)
     {
       return nullptr;
@@ -501,7 +453,7 @@ public:
     return new_child;
   }
 
-  NodePtr InsertAfter(const NodePtr &child_node, const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  NodePtr InsertAfter(const NodePtr &child_node, const std::u8string &name = u8"")
   {
     if (!child_node)
     {
@@ -520,7 +472,7 @@ public:
       return nullptr;
     }
 
-    NodePtr new_child = MakeNode(name, kind);
+    NodePtr new_child = MakeNode(name);
     if (!new_child)
     {
       return nullptr;
@@ -539,21 +491,9 @@ public:
     return new_child;
   }
 
-  NodePtr PushElement(NodeKind element_kind = NodeKind::Object)
+  NodePtr PushElement()
   {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
-    NodePtr new_elem = MakeNode(u8"", element_kind);
-    if (!new_elem)
-    {
-      return nullptr;
-    }
-
-    m_elements.push_back(new_elem);
-    NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
-    new_elem->SetParentAndSelf(self_ptr, new_elem);
-    return new_elem;
+    return AddChild(u8"");
   }
 
   bool PushElement(const NodePtr &element)
@@ -724,6 +664,7 @@ public:
   using Base = TreeNodeBase<TreeNode<T>>;
   using NodePtr = typename Base::NodePtr;
   using ConstNodePtr = typename Base::ConstNodePtr;
+  using DataType = T;
 
 private:
   T m_data{};
@@ -756,10 +697,12 @@ public:
   }
 
   // 靜態工廠方法
-  static NodePtr CreateRoot(const std::u8string &name = u8"", NodeKind kind = NodeKind::Object)
+  static NodePtr CreateRoot(const std::u8string &name = u8"")
   {
-    return Base::CreateRoot(name, kind);
+    return Base::CreateRoot(name);
   }
+
+
 
   template <typename D>
   friend class TreeNodeBase;
@@ -767,6 +710,5 @@ public:
 
 // 便利型別別名
 using StringTreeNode = TreeNode<std::string>;
-using Tree = TreeNode<std::string>;
 
 }  // namespace ork::base

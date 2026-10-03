@@ -104,3 +104,60 @@ assert(save_ok == true);
 ork::HandleID pid = player.GetTargetID();
 std::cout << "玩家建立成功，HandleID: " << pid << std::endl;
 ```
+
+---
+
+## 🌳 第四步：使用樹狀結構容器與文字 DSL 配置 (Tree & TreeIO)
+
+除了託管型持久化物件外，OuroKore 還提供了高效能、雙模態統合的通用樹狀容器與文字 DSL 串流工具（位於 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>`），非常適合用於遊戲設定檔、屬性樹、技能樹與文字 DSL 讀寫：
+
+```cpp
+#include <ourokore/base/Tree.hpp>
+#include <ourokore/base/TreeIO.hpp>
+
+using ork::base::Tree; // 即 ork::base::StringTreeNode
+using ork::base::TreeIO;
+using ork::base::CompactMode;
+
+// 1. 建立根節點
+auto config = Tree::CreateRoot(u8"GameConfig");
+config->SetData("1.0.0");
+
+// 2. 建立具名子節點 (O(1) 雜湊尋址) 與陣列清單 (O(1) 連續記憶體隨機下標)
+auto server = config->AddChild(u8"Server");
+server->AddChild(u8"IP")->SetData("127.0.0.1");
+server->AddChild(u8"Port")->SetData("8080");
+
+auto channels = config->AddChild(u8"Channels");
+channels->AddChild()->SetData("General");
+channels->AddChild()->SetData("Trade");
+
+// 3. 輸出文字 DSL（支援標準美化與 3 種緊湊輸出）
+std::string dsl = TreeIO::SerializeToString(config, CompactMode::WithEqual);
+std::cout << "匯出 DSL: " << dsl << std::endl;
+// 輸出: [GameConfig]="1.0.0"{[Server]{[IP]="127.0.0.1"[Port]="8080"}[Channels]("General""Trade")}
+
+// 4. 寬容型狀態機反序列化（原生支援 //、/* */ 與 # 註解過濾）
+std::string input_dsl = R"(
+    // 伺服器啟動設定檔
+    # 請勿任意變更 IP 參數
+    [GameConfig] = "1.0.0"
+    {
+        /* 內部連線設定 */
+        [Server]
+        {
+            [IP] = "127.0.0.1" // 本機監聽
+            [Port] = "8080"
+        }
+        [Channels] = (
+            "General"
+            /* 暫時關閉頻道："PVP" */
+            "Trade"
+        )
+    }
+)";
+
+auto restored = TreeIO::DeserializeFromString(input_dsl);
+assert((*restored)[u8"Server"][u8"Port"]->GetData() == "8080");
+assert((*restored)[u8"Channels"][0]->GetData() == "General");
+```

@@ -147,35 +147,36 @@
 
 ---
 
-## 🌳 9. 樹狀結構容器與文字 DSL 串流：`ork::base::Tree` / `ork::base::TreeIO`
+## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
 * **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
 * **設計哲學**：
   * **單一容器雙模態統合（Unified Dual-Mode）**：全體子節點統一由連續記憶體 `std::vector` 儲存（享有 CPU 快取極速預讀），具名字節點由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址。**下標與名稱存取 100% 互通**，存取到的為同一節點實體。
   * **形態由資料自動推導（Data-Driven Morphism）**：依據子節點結構純度自動判定——全具名者自動判定為物件模式（大括號 `{}`），混入匿名元素者自動判定為陣列模式（小括號 `()`）。
+  * **CRTP 自定義衍生節點擴充（Extensible CRTP Hierarchy）**：支援繼承 `TreeNodeBase<Derived>` 定義強型別領域節點，序列化與反序列化自適應萃取衍生型別，零成本零強制轉型。
   * **極致執行緒安全**：結構拓撲鎖（`m_mutex`）與資料 Payload 鎖（`m_dataMutex`）獨立讀寫分離，高頻資料更新不阻礙樹結構遍歷。
   * **防遞迴析構爆棧**：整合 `AsyncNodeDeletor`，巨型深樹解構時由非同步隊列安全釋放，杜絕 Stack Overflow。
-  * **寬容型狀態機文字 DSL**：四大正交界定符 `[名稱]`、`"資料"`、`{物件}`、`(陣列)`，狀態機自動過濾並忽略所有非預期雜訊與無效符號，0~255 二進位位元組安全。
+  * **寬容型狀態機文字 DSL**：四大正交界定符 `[名稱]`、`"資料"`、`{物件}`、`(陣列)`，原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機自動忽略所有非預期雜訊與無效符號，0~255 二進位位元組安全。
 * **核心類別與方法**：
   * **樣板基底 `TreeNodeBase<Derived>`**：
-    * `CreateRoot(name, kind)` / `CreateArray(name)`：建立樹之根節點（可指定初始形態提示）。
-    * `bool IsObject() / bool IsArray()`：純狀態驅動判定（`m_elements.size() == m_nameMap.size()`）。
-    * `NodeKind GetKind() / SetKind(kind)`：取得/設定節點形態提示。
-    * `NodePtr PushElement(kind)` / `bool PushElement(element)`：向尾端追加匿名或具名元素。
+    * `CreateRoot(name)` / `CreateArray(name)`：建立樹之根節點。
+    * `bool IsObject() / bool IsArray()`：純資料內容驅動判定（`m_elements.size() > m_nameMap.size()` 為陣列）。
+    * `NodePtr PushElement()` / `bool PushElement(element)`：向尾端追加匿名元素。
     * `size_t ElementCount()` / `size_t ChildCount()` / `size_t Size()`：取得子節點總數（$O(1)$）。
     * `NodePtr GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取元素（$O(1)$）。
     * `NodePtr FindChildByName(name)` / `operator[](const std::u8string &name)`：按名稱尋找子節點（$O(1)$）。
     * `bool HasChild(name)`：查詢子節點存在性。
-    * `NodePtr AddBackChild(name, kind)` / `NodePtr AddFrontChild(name, kind)`：新增具名字節點（$O(1)$）。
-    * `NodePtr InsertBefore(child, name, kind)` / `NodePtr InsertAfter(child, name, kind)`：指定位置插入子節點。
+    * `NodePtr AddChild(name)`（相容別名 `AddBackChild`）：新增具名或匿名子節點（$O(1)$）。
+    * `NodePtr InsertBefore(child, name)` / `NodePtr InsertAfter(child, name)`：指定位置插入子節點。
     * `bool RemoveElementAt(index)` / `bool RemoveChild(child)` / `bool RemoveChildByName(name)`：移除子節點。
     * `void ClearChildren()` / `ClearElements()`：清空所有子項目。
     * `void ForEachChild(...)` / `void ForEachElement(...)`：安全快照走訪所有子項目。
     * `DetachFromParent()`：安全斷開與父節點之雙向弱關聯。
-  * **具體節點 `TreeNode<T>` / `Tree`（預設 `T = std::string`）**：
+  * **具體節點 `TreeNode<T>`（`StringTreeNode` 預設 `T = std::string`）**：
     * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：安全存取節點資料（受資料讀寫鎖保護）。
   * **文字 DSL 串流工具 `TreeIO`**：
     * `CompactMode` 列舉：`None`（標準美化縮排換行）、`WithEqual`（保留等號緊湊 `="`）、`WithoutEqual`（不保留等號極致緊湊 `"`）。
-    * `static void Serialize(ostream, root, mode)` / `Serialize(ostream, root, compact)`：輸出文字 DSL，支援 3 種緊湊模式。
-    * `static void SerializeCompact(ostream, root, mode)`：緊湊序列化便捷函式。
-    * `static NodePtr Deserialize(istream, string_to_data)`：寬容型狀態機反序列化串流。
-    * `static NodePtr DeserializeFromString(string_view, string_to_data)`：自文字字串反序列化。
+    * `static void Serialize<Node = StringTreeNode>(ostream, root, data_to_string, indent_width, mode)`：輸出文字 DSL 至串流，支援應用端自訂 CRTP 衍生節點與 3 種緊湊模式。
+    * `static void SerializeCompact<Node = StringTreeNode>(ostream, root, mode)`：緊湊序列化便捷函式。
+    * `static std::string SerializeToString<Node = StringTreeNode>(root, ...)`：直接輸出文字 DSL 字串（支援 CompactMode 列舉、布林緊湊旗標或自訂縮排與 data_to_string 轉發）。
+    * `static std::shared_ptr<NodeType> Deserialize<NodeType = StringTreeNode>(istream, data_handler)`：寬容型狀態機自輸入串流反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針；handler 支援值轉換或 `(node, str) -> void` 節點現地賦值）。
+    * `static std::shared_ptr<NodeType> DeserializeFromString<NodeType = StringTreeNode>(string_view, data_handler)`：自文字字串反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針）。

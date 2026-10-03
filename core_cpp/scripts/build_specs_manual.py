@@ -168,6 +168,63 @@ assert(save_ok == true);
 ork::HandleID pid = player.GetTargetID();
 std::cout << "玩家建立成功，HandleID: " << pid << std::endl;
 ```
+
+---
+
+## 🌳 第四步：使用樹狀結構容器與文字 DSL 配置 (Tree & TreeIO)
+
+除了託管型持久化物件外，OuroKore 還提供了高效能、雙模態統合的通用樹狀容器與文字 DSL 串流工具（位於 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>`），非常適合用於遊戲設定檔、屬性樹、技能樹與文字 DSL 讀寫：
+
+```cpp
+#include <ourokore/base/Tree.hpp>
+#include <ourokore/base/TreeIO.hpp>
+
+using ork::base::Tree; // 即 ork::base::StringTreeNode
+using ork::base::TreeIO;
+using ork::base::CompactMode;
+
+// 1. 建立根節點
+auto config = Tree::CreateRoot(u8"GameConfig");
+config->SetData("1.0.0");
+
+// 2. 建立具名子節點 (O(1) 雜湊尋址) 與陣列清單 (O(1) 連續記憶體隨機下標)
+auto server = config->AddChild(u8"Server");
+server->AddChild(u8"IP")->SetData("127.0.0.1");
+server->AddChild(u8"Port")->SetData("8080");
+
+auto channels = config->AddChild(u8"Channels");
+channels->AddChild()->SetData("General");
+channels->AddChild()->SetData("Trade");
+
+// 3. 輸出文字 DSL（支援標準美化與 3 種緊湊輸出）
+std::string dsl = TreeIO::SerializeToString(config, CompactMode::WithEqual);
+std::cout << "匯出 DSL: " << dsl << std::endl;
+// 輸出: [GameConfig]="1.0.0"{[Server]{[IP]="127.0.0.1"[Port]="8080"}[Channels]("General""Trade")}
+
+// 4. 寬容型狀態機反序列化（原生支援 //、/* */ 與 # 註解過濾）
+std::string input_dsl = R"(
+    // 伺服器啟動設定檔
+    # 請勿任意變更 IP 參數
+    [GameConfig] = "1.0.0"
+    {
+        /* 內部連線設定 */
+        [Server]
+        {
+            [IP] = "127.0.0.1" // 本機監聽
+            [Port] = "8080"
+        }
+        [Channels] = (
+            "General"
+            /* 暫時關閉頻道："PVP" */
+            "Trade"
+        )
+    }
+)";
+
+auto restored = TreeIO::DeserializeFromString(input_dsl);
+assert((*restored)[u8"Server"][u8"Port"]->GetData() == "8080");
+assert((*restored)[u8"Channels"][0]->GetData() == "General");
+```
 ''', encoding="utf-8")
 
     # 03_domain_object_design.md
@@ -881,42 +938,202 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
 
 ---
 
-## 🌳 9. 樹狀結構容器與文字 DSL 串流：`ork::base::Tree` / `ork::base::TreeIO`
+## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
 * **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
 * **設計哲學**：
   * **單一容器雙模態統合（Unified Dual-Mode）**：全體子節點統一由連續記憶體 `std::vector` 儲存（享有 CPU 快取極速預讀），具名字節點由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址。**下標與名稱存取 100% 互通**，存取到的為同一節點實體。
   * **形態由資料自動推導（Data-Driven Morphism）**：依據子節點結構純度自動判定——全具名者自動判定為物件模式（大括號 `{}`），混入匿名元素者自動判定為陣列模式（小括號 `()`）。
+  * **CRTP 自定義衍生節點擴充（Extensible CRTP Hierarchy）**：支援繼承 `TreeNodeBase<Derived>` 定義強型別領域節點，序列化與反序列化自適應萃取衍生型別，零成本零強制轉型。
   * **極致執行緒安全**：結構拓撲鎖（`m_mutex`）與資料 Payload 鎖（`m_dataMutex`）獨立讀寫分離，高頻資料更新不阻礙樹結構遍歷。
   * **防遞迴析構爆棧**：整合 `AsyncNodeDeletor`，巨型深樹解構時由非同步隊列安全釋放，杜絕 Stack Overflow。
-  * **寬容型狀態機文字 DSL**：四大正交界定符 `[名稱]`、`"資料"`、`{物件}`、`(陣列)`，狀態機自動過濾並忽略所有非預期雜訊與無效符號，0~255 二進位位元組安全。
+  * **寬容型狀態機文字 DSL**：四大正交界定符 `[名稱]`、`"資料"`、`{物件}`、`(陣列)`，原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機自動忽略所有非預期雜訊與無效符號，0~255 二進位位元組安全。
 * **核心類別與方法**：
   * **樣板基底 `TreeNodeBase<Derived>`**：
-    * `CreateRoot(name, kind)` / `CreateArray(name)`：建立樹之根節點（可指定初始形態提示）。
-    * `bool IsObject() / bool IsArray()`：純狀態驅動判定（`m_elements.size() == m_nameMap.size()`）。
-    * `NodeKind GetKind() / SetKind(kind)`：取得/設定節點形態提示。
-    * `NodePtr PushElement(kind)` / `bool PushElement(element)`：向尾端追加匿名或具名元素。
+    * `CreateRoot(name)` / `CreateArray(name)`：建立樹之根節點。
+    * `bool IsObject() / bool IsArray()`：純資料內容驅動判定（`m_elements.size() > m_nameMap.size()` 為陣列）。
+    * `NodePtr PushElement()` / `bool PushElement(element)`：向尾端追加匿名元素。
     * `size_t ElementCount()` / `size_t ChildCount()` / `size_t Size()`：取得子節點總數（$O(1)$）。
     * `NodePtr GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取元素（$O(1)$）。
     * `NodePtr FindChildByName(name)` / `operator[](const std::u8string &name)`：按名稱尋找子節點（$O(1)$）。
     * `bool HasChild(name)`：查詢子節點存在性。
-    * `NodePtr AddBackChild(name, kind)` / `NodePtr AddFrontChild(name, kind)`：新增具名字節點（$O(1)$）。
-    * `NodePtr InsertBefore(child, name, kind)` / `NodePtr InsertAfter(child, name, kind)`：指定位置插入子節點。
+    * `NodePtr AddChild(name)`（相容別名 `AddBackChild`）：新增具名或匿名子節點（$O(1)$）。
+    * `NodePtr InsertBefore(child, name)` / `NodePtr InsertAfter(child, name)`：指定位置插入子節點。
     * `bool RemoveElementAt(index)` / `bool RemoveChild(child)` / `bool RemoveChildByName(name)`：移除子節點。
     * `void ClearChildren()` / `ClearElements()`：清空所有子項目。
     * `void ForEachChild(...)` / `void ForEachElement(...)`：安全快照走訪所有子項目。
     * `DetachFromParent()`：安全斷開與父節點之雙向弱關聯。
-  * **具體節點 `TreeNode<T>` / `Tree`（預設 `T = std::string`）**：
+  * **具體節點 `TreeNode<T>`（`StringTreeNode` 預設 `T = std::string`）**：
     * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：安全存取節點資料（受資料讀寫鎖保護）。
   * **文字 DSL 串流工具 `TreeIO`**：
     * `CompactMode` 列舉：`None`（標準美化縮排換行）、`WithEqual`（保留等號緊湊 `="`）、`WithoutEqual`（不保留等號極致緊湊 `"`）。
-    * `static void Serialize(ostream, root, mode)` / `Serialize(ostream, root, compact)`：輸出文字 DSL，支援 3 種緊湊模式。
-    * `static void SerializeCompact(ostream, root, mode)`：緊湊序列化便捷函式。
-    * `static NodePtr Deserialize(istream, string_to_data)`：寬容型狀態機反序列化串流。
-    * `static NodePtr DeserializeFromString(string_view, string_to_data)`：自文字字串反序列化。
+    * `static void Serialize<Node = StringTreeNode>(ostream, root, data_to_string, indent_width, mode)`：輸出文字 DSL 至串流，支援應用端自訂 CRTP 衍生節點與 3 種緊湊模式。
+    * `static void SerializeCompact<Node = StringTreeNode>(ostream, root, mode)`：緊湊序列化便捷函式。
+    * `static std::string SerializeToString<Node = StringTreeNode>(root, ...)`：直接輸出文字 DSL 字串（支援 CompactMode 列舉、布林緊湊旗標或自訂縮排與 data_to_string 轉發）。
+    * `static std::shared_ptr<NodeType> Deserialize<NodeType = StringTreeNode>(istream, data_handler)`：寬容型狀態機自輸入串流反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針；handler 支援值轉換或 `(node, str) -> void` 節點現地賦值）。
+    * `static std::shared_ptr<NodeType> DeserializeFromString<NodeType = StringTreeNode>(string_view, data_handler)`：自文字字串反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針）。
 ''', encoding="utf-8")
-    print("✅ specs/manual/ 全套 7 份說明書手冊生成完畢！")
+
+    # 08_tree_and_dsl.md
+    (manual_dir / "08_tree_and_dsl.md").write_text(r'''# 08. 樹狀結構容器與文字 DSL 指南 (Tree & TreeIO)
+
+本章節介紹 OuroKore 基礎工具庫（`ourokore_base`）中的現代高效能階層容器 `TreeNode<T>` 與文字 DSL 串流工具 `TreeIO`。
+
+---
+
+## 🧭 1. 設計哲學與心智模型
+
+1. **單一容器雙模態統合（Unified Dual-Mode）**：
+   - 傳統 JSON / XML 解析庫常將「物件（Object/Map）」與「陣列（Array/List）」切分為兩種不相容的容器型別。
+   - OuroKore 徹底終結兩者分裂：所有子節點底層均由連續記憶體 `std::vector` 儲存（享有連續記憶體快取極速讀取與保序特性），具名字節點由 `std::unordered_map` 提供 $O(1)$ 名稱雜湊尋址。
+   - **下標與名稱存取 100% 互通**：`node[0]` 與 `node[u8"HP"]` 存取到的為同一個實體，隨機下標與鍵名存取均為 $O(1)$！
+
+2. **形態由資料自動推導（Data-Driven Morphism）**：
+   - 容器不需要顯式設定或轉換形態，由子節點結構純度自動判定：
+     * **全具名字節點**：自動推導為物件形態（DSL 輸出使用大括號 `{}`）。
+     * **混入任何無名字節點**：自動推導為陣列形態（DSL 輸出使用小括號 `()`）。
+
+3. **極致執行緒安全**：
+   - 樹狀結構拓撲鎖（`m_mutex`）與資料 Payload 鎖（`m_dataMutex`）獨立讀寫分離，高頻資料更新絕不阻礙樹結構遍歷。
+
+4. **百萬層深樹非同步防爆棧析構（Async Stack-Overflow Defense）**：
+   - 內建 `AsyncNodeDeletor`，巨型深樹解構時由非同步隊列安全排空釋放，徹底杜絕遞迴析構引發呼叫堆疊溢位（Stack Overflow）。
+
+---
+
+## 📝 2. 文字 DSL 語法與界定符
+
+OuroKore 文字 DSL 採用四個互不干擾的正交界定符：
+* `[名稱]`：節點名稱標記。
+* `"資料"`：節點資料內容（支援 0~255 二進位位元組與完整脫字元轉義 `\"`、`\\`、`\n`、`\xHH`）。
+* `{物件}`：具名子節點群集（大括號）。
+* `(陣列)`：陣列元素清單（小括號）。
+
+### 註解語法原生支援
+文字 DSL 反序列化狀態機原生支援三種風格的註解：
+* **`//` 單行註解**：跳過至行尾。
+* **`/* ... */` 區塊註解**：跳過至閉合符號 `*/`。
+* **`#` 腳本註解**：跳過至行尾。
+
+> [!NOTE]
+> **註解內語法界定符防禦**：即使註解內部包含引號（`"`）、括號（`[` `]` `{}` `()`）或任意文字，狀態機均會將其完整略過，絕不干擾節點解析！
+
+---
+
+## 💻 3. 基礎使用範例
+
+```cpp
+#include <ourokore/base/Tree.hpp>
+#include <ourokore/base/TreeIO.hpp>
+
+using ork::base::Tree; // 即 ork::base::StringTreeNode
+using ork::base::TreeIO;
+using ork::base::CompactMode;
+
+// 1. 建立根節點
+auto player = Tree::CreateRoot(u8"Player");
+player->SetData("英雄角色");
+
+// 2. 建立具名屬性 (AddChild 支援具名或無名)
+auto hp = player->AddChild(u8"HP");
+hp->SetData("100");
+
+// 3. 建立陣列清單
+auto inventory = player->AddChild(u8"Inventory");
+inventory->AddChild()->SetData("草藥");
+inventory->AddChild()->SetData("黃金盔甲");
+
+// 4. 互通性驗證
+assert(inventory->ElementCount() == 2);
+assert((*inventory)[0]->GetData() == "草藥");     // O(1) 連續向量下標存取
+assert((*player)[0] == hp);                      // 具名節點亦可透過下標 0 存取！
+assert((*player)[u8"HP"] == hp);
+```
+
+---
+
+## 🗜️ 4. 序列化與 3 種緊湊傳輸模式
+
+`TreeIO` 序列化全面採用顯式堆疊走訪（非遞迴），並提供 3 種格式化輸出：
+
+```cpp
+// 模式 1：標準美化縮排模式 (CompactMode::None)
+// 輸出含標準縮排、換行與空格，適合人類閱讀與配置編輯
+TreeIO::Serialize(std::cout, player, CompactMode::None);
+
+// 模式 2：保留等號緊湊模式 (CompactMode::WithEqual)
+// 輸出: [Player]="英雄角色"{[HP]="100"[Inventory]("草藥""黃金盔甲")}
+std::string compact_with_eq = TreeIO::SerializeToString(player, CompactMode::WithEqual);
+
+// 模式 3：無等號極致緊湊模式 (CompactMode::WithoutEqual)
+// 輸出: [Player]"英雄角色"{[HP]"100"[Inventory]("草藥""黃金盔甲")}
+std::string compact_no_eq = TreeIO::SerializeToString(player, CompactMode::WithoutEqual);
+```
+
+---
+
+## 🔄 5. 寬容型反序列化與註解過濾
+
+寬容型有限狀態機（FSM）自動略過非預期雜訊，並完整支援串流與字串解析：
+
+```cpp
+std::string dsl_text = R"(
+    // 伺服器遊戲存檔
+    /* 區塊註解：此處包含 [FakeNode] "FakeData" 均被安全忽略 */
+    # 這是腳本註解
+    [Player] = "英雄角色" // 行尾註解
+    {
+        [HP] = "100" # 生命值
+        [Inventory] = (
+            "草藥"
+            /* 暫時排除裝備："生鏽鐵劍" */
+            "黃金盔甲"
+        )
+    }
+)";
+
+// 支援從 std::istream (std::istringstream) 或字串視圖直接解析
+std::istringstream iss(dsl_text);
+auto restored = TreeIO::Deserialize(iss); // 或 TreeIO::DeserializeFromString(dsl_text)
+
+assert(restored->GetName() == u8"Player");
+assert((*restored)[u8"HP"]->GetData() == "100");
+assert((*(*restored)[u8"Inventory"])[0]->GetData() == "草藥");
+```
+
+---
+
+## 🧬 6. CRTP 自定義衍生節點與雙模式 Handler
+
+應用端可透過 CRTP 繼承 `TreeNodeBase<Derived>` 打造專屬強型別領域節點，反序列化時享有一體化型別自動萃取（精準回傳 `std::shared_ptr<CustomNode>`），並可搭配 In-place Node Setter 回呼：
+
+```cpp
+// 1. 定義自訂 CRTP 領域節點
+class HeroNode : public ork::base::TreeNodeBase<HeroNode> {
+public:
+    std::string role_title;
+    int combat_power{999};
+
+    explicit HeroNode(std::u8string name = u8"")
+        : TreeNodeBase<HeroNode>(std::move(name)) {}
+};
+
+// 2. 一鍵反序列化精準轉化為自定義衍生節點（子節點亦為 HeroNode 型別）
+auto hero = TreeIO::DeserializeFromString<HeroNode>(
+    dsl_text,
+    // 支援 In-place Node Setter Handler 直接解構並賦值給領域節點欄位：
+    [](const std::shared_ptr<HeroNode> &node, const std::string &raw_val) {
+        node->role_title = raw_val;
+    }
+);
+
+static_assert(std::is_same_v<decltype(hero), std::shared_ptr<HeroNode>>);
+assert(hero->role_title == "英雄角色");
+```
+''', encoding="utf-8")
+    print("✅ specs/manual/ 全套 8 份說明書手冊生成完畢！")
 
 if __name__ == "__main__":
     import sys
     specs_dir = Path(__file__).resolve().parent.parent.parent / "specs"
     generate_manual_specs(specs_dir)
+

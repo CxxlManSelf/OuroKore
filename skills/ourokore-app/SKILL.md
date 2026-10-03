@@ -327,13 +327,13 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
 ```
 
 ### 模式 H：現代樹狀結構容器與文字 DSL 狀態機實戰 (Tree & TreeIO Utilities)
-適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。容器採用「單一容器雙模態統合」設計，序列化支援標準可讀與 3 種緊湊模式。
+適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。容器採用「單一容器雙模態統合」設計，序列化支援標準可讀與 3 種緊湊模式，並支援 CRTP 衍生領域節點與精準型別反序列化。
 
 ```cpp
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/TreeIO.hpp>
 
-using ork::base::Tree;
+using ork::base::Tree; // 即 ork::base::StringTreeNode
 using ork::base::TreeIO;
 using ork::base::CompactMode;
 
@@ -341,7 +341,7 @@ using ork::base::CompactMode;
 auto player = Tree::CreateRoot(u8"Player");
 player->SetData("英雄角色");
 
-// 2. 建立具名子節點（物件屬性）
+// 2. 建立具名子節點（物件屬性，AddChild 即享 O(1) 雜湊尋址）
 auto hp = player->AddChild(u8"HP");
 hp->SetData("100");
 
@@ -367,24 +367,53 @@ std::string compact_with_eq = TreeIO::SerializeToString(player, CompactMode::Wit
 // 極限省頻寬：無等號之極致緊湊模式 [Player]"英雄角色"{[HP]"100"[Inventory]("草藥"...)}
 std::string compact_no_eq = TreeIO::SerializeToString(player, CompactMode::WithoutEqual);
 
-// 5. 寬容型狀態機反序列化（自動過濾並忽略所有非預期雜訊與說明文字）
+// 5. 寬容型狀態機反序列化（原生支援 // 單行、/* */ 區塊與 # 腳本註解，自動過濾雜訊）
 std::string config_dsl = R"(
+    // 單行註解：[IgnoreMe] = "FakeData"
+    /* 區塊註解：
+       [Blocked] = "NotLoaded"
+    */
+    # 腳本風格單行註解
     這是一段任意說明文字，狀態機自動無視！
-    [Player] = [多餘無視標記] "英雄角色" "第二段引號視為多餘無視"
+    [Player] = [多餘無視標記] "英雄角色" "第二段引號視為多餘無視" // 行尾註解
     {
-        [HP] = "100"
+        [HP] = "100" # 生命值屬性
         [Inventory] = (
             "草藥"
+            /* 註解排除已廢棄裝備："生鏽鐵劍" */
             這段純文字說明被無視
             "黃金盔甲"
             "雙手大劍"
         )
     }
 )";
-auto restored = TreeIO::DeserializeFromString(config_dsl);
+// 支援從 std::istream 串流 (如 std::istringstream) 或字串視圖直接反序列化
+std::istringstream iss(config_dsl);
+auto restored = TreeIO::Deserialize(iss); // 或 TreeIO::DeserializeFromString(config_dsl);
 assert((*restored)[u8"HP"]->GetData() == "100");
 auto restored_inv = (*restored)[u8"Inventory"];
 assert((*restored_inv)[0]->GetData() == "草藥");
+
+// 6. 自定義 CRTP 衍生領域節點（享有一體化型別自動萃取，回傳精準 std::shared_ptr<CustomNode>）
+class CustomHeroNode : public ork::base::TreeNodeBase<CustomHeroNode> {
+public:
+    std::string title;
+    int power{999};
+
+    explicit CustomHeroNode(std::u8string name = u8"")
+        : TreeNodeBase<CustomHeroNode>(std::move(name)) {}
+};
+
+// 一鍵精準反序列化為自定義節點，子節點亦自動為 CustomHeroNode！
+auto custom_hero = TreeIO::DeserializeFromString<CustomHeroNode>(
+    config_dsl,
+    // 支援 In-place Node Setter Handler 直接解構並賦值給自定義節點欄位：
+    [](const std::shared_ptr<CustomHeroNode> &node, const std::string &raw_val) {
+        node->title = raw_val;
+    }
+);
+static_assert(std::is_same_v<decltype(custom_hero), std::shared_ptr<CustomHeroNode>>);
+assert(custom_hero->title == "英雄角色");
 ```
 
 ---
@@ -420,11 +449,12 @@ assert((*restored_inv)[0]->GetData() == "草藥");
      - 當進程內不同子系統多次請求載入同一動態庫時，`DynamicLibrary` 內部透過規範化路徑快取共享控制區塊。
      - 僅在首次載入（0 -> 1）時 `lib.is_first_loaded()` 為 true，可透過 `initialize_once` 執行全域初始化（重複載入時自動安全略過）。
      - 透過 `register_shutdown_symbol` 或 `add_cleanup_hook` 註冊的收尾函式，嚴格保證在最後一個使用者與物件全數釋放（1 -> 0）、DLL 卸載前夕剛好觸發一次。
-9. **樹狀容器單一容器雙模態統合與 3 種緊湊模式鐵律 (Tree Dual-Mode & Compact Invariant)**：
-   * 容器內部統一採用保序 `vector` 與名稱查表 `unordered_map` 雙向索引，徹底終結 Array 與 Object 分裂。具名與無名子節點均使用 `AddChild`。
+9. **樹狀容器單一容器雙模態統合與 CRTP 型別自適應鐵律 (Tree Dual-Mode & CRTP Invariant)**：
+   * 容器內部統一採用保序 `vector` 與名稱查表 `unordered_map` 雙向索引，徹底終結 Array 與 Object 分裂。具名與無名子節點均使用 `AddChild` 或 `PushElement`。
    * 存取下標 `operator[](size_t)` 與鍵名 `operator[](u8string_view)` 100% 互通，均享有 $O(1)$ 時間複雜度。
    * 結構形態自動由資料驅動判定：只要包含無名子節點即視為陣列（輸出為 `()`），全為具名鍵值則視為物件（輸出為 `{}`）。
-   * 序列化支援 3 種緊湊模式：`CompactMode::None`（預設，格式化縮排換行）、`CompactMode::WithEqual`（保留 `=` 緊湊）、`CompactMode::WithoutEqual`（無 `=` 極致緊湊）。DSL 狀態機對 3 種格式均具備 100% 雙向反序列化相容性。
+   * 序列化支援 3 種緊湊模式：`CompactMode::None`（預設，格式化縮排換行）、`CompactMode::WithEqual`（保留 `=` 緊湊）、`CompactMode::WithoutEqual`（無 `=` 極致緊湊）。DSL 狀態機對 3 種格式均具備 100% 雙向反序列化相容性，並原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾（即使註解內部包含引號或括號界定符亦可安全略過）。
+   * **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化 handler 支援 `(string) -> Data` 值轉換與 `(shared_ptr<NodeType>, string) -> void` 就地賦值兩種模式，徹底實現零樣板、強型別安全的領域樹模型。
 
 ---
 

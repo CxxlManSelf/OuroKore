@@ -264,20 +264,20 @@ OURO_REGISTER_PROXY(BossProxy, Boss)
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/TreeIO.hpp>
 
-using ork::base::Tree;
+using ork::base::StringTreeNode;
 using ork::base::TreeIO;
 using ork::base::CompactMode;
 
 // 1. 建立根節點（單一容器統合架構，全體子項目存於連續記憶體 vector）
-auto player = Tree::CreateRoot(u8"Player");
+auto player = StringTreeNode::CreateRoot(u8"Player");
 player->SetData("英雄角色");
 
 // 2. 建立具名子節點 (O(1) 雜湊尋址)
-auto hp = player->AddBackChild(u8"HP");
+auto hp = player->AddChild(u8"HP");
 hp->SetData("100");
 
 // 3. 建立陣列型節點並享受 O(1) 隨機下標存取！
-auto inventory = player->AddBackChild(u8"Inventory");
+auto inventory = player->AddChild(u8"Inventory");
 inventory->PushElement()->SetData("草藥");
 inventory->PushElement()->SetData("黃金盔甲");
 
@@ -288,11 +288,25 @@ assert((*player)[u8"HP"] == hp);
 
 // 5. 輸出為文字 DSL（支援 3 種緊湊模式，非遞迴顯式堆疊走訪防爆棧）
 TreeIO::Serialize(std::cout, player, CompactMode::None);         // 標準美化縮排
-TreeIO::Serialize(std::cout, player, CompactMode::WithEqual);    // 保留等號緊湊 [Player]="英雄"{...}
-TreeIO::Serialize(std::cout, player, CompactMode::WithoutEqual); // 不保留等號極致緊湊 [Player]"英雄"{...}
+std::string compact_eq = TreeIO::SerializeToString(player, CompactMode::WithEqual);    // 保留等號緊湊 [Player]="英雄"{...}
+std::string compact_min = TreeIO::SerializeToString(player, CompactMode::WithoutEqual); // 不保留等號極致緊湊 [Player]"英雄"{...}
 
 // 6. 寬容型狀態機反序列化（自動過濾並忽略雜訊）
 auto restored = TreeIO::DeserializeFromString(dsl_text);
+
+// 7. CRTP 衍生領域節點擴充與精準型別萃取（自動回傳 std::shared_ptr<CustomEntityNode>）
+class CustomEntityNode : public ork::base::TreeNodeBase<CustomEntityNode> {
+public:
+    std::string tag;
+    explicit CustomEntityNode(std::u8string name = u8"") : TreeNodeBase<CustomEntityNode>(std::move(name)) {}
+};
+auto custom_hero = TreeIO::DeserializeFromString<CustomEntityNode>(
+    dsl_text,
+    [](const std::shared_ptr<CustomEntityNode> &node, const std::string &raw) {
+        node->tag = raw; // 支援 In-place Node Setter Handler
+    }
+);
+static_assert(std::is_same_v<decltype(custom_hero), std::shared_ptr<CustomEntityNode>>);
 ```
 
 ---
@@ -320,7 +334,8 @@ auto restored = TreeIO::DeserializeFromString(dsl_text);
    - 樹狀容器（`TreeNodeBase`、`TreeNode<T>`）與串流解析器（`TreeIO`）為基礎通用設施（`ourokore_base`），零依賴核心層。
    - 採用**單一容器雙模態統合架構**：所有子項目統一存於連續記憶體 `std::vector`，具名者由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址，下標與名稱存取 100% 互通。
    - 形態由長度數學關係自動推導：全具名為 Object（`{}`），混入匿名為 Array（`()`）。
-   - 文字 DSL 支援 3 種緊湊模式（None、WithEqual、WithoutEqual），狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
+   - 文字 DSL 支援 3 種緊湊模式（None、WithEqual、WithoutEqual），原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
+   - **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化 handler 支援 `(string) -> Data` 值轉換與 `(shared_ptr<NodeType>, string) -> void` 就地賦值兩種模式。
 
 ---
 
