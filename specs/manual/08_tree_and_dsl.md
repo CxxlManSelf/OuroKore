@@ -49,12 +49,12 @@ OuroKore 文字 DSL 採用四個互不干擾的正交界定符：
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/TreeIO.hpp>
 
-using ork::base::Tree; // 即 ork::base::StringTreeNode
+using ork::base::StringTreeNode;
 using ork::base::TreeIO;
 using ork::base::CompactMode;
 
 // 1. 建立根節點
-auto player = Tree::CreateRoot(u8"Player");
+auto player = StringTreeNode::CreateRoot(u8"Player");
 player->SetData("英雄角色");
 
 // 2. 建立具名屬性 (AddChild 支援具名或無名)

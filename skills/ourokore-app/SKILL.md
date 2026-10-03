@@ -333,12 +333,12 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/TreeIO.hpp>
 
-using ork::base::Tree; // 即 ork::base::StringTreeNode
+using ork::base::StringTreeNode;
 using ork::base::TreeIO;
 using ork::base::CompactMode;
 
 // 1. 建立根節點
-auto player = Tree::CreateRoot(u8"Player");
+auto player = StringTreeNode::CreateRoot(u8"Player");
 player->SetData("英雄角色");
 
 // 2. 建立具名子節點（物件屬性，AddChild 即享 O(1) 雜湊尋址）
