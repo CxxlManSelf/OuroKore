@@ -1,31 +1,29 @@
 #pragma once
 
+#include <ourokore/base/export.h>
+
 #include <algorithm>
-#include <condition_variable>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <queue>
+#include <ourokore/base/utf8.hpp>
 #include <ranges>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include <ourokore/base/export.h>
-#include <ourokore/base/utf8.hpp>
-
 namespace ork::base
 {
 
-
-
 /**
- * @brief 階層式非同步 / 迭代防爆棧節點刪除器
+ * @brief 迭代式防爆棧節點刪除器（向後相容介面）
  *
  * 專為解決百萬層深樹在析構時引發的呼叫堆疊溢位 (Stack Overflow) 問題。
- * 提供同步迭代清空與非同步執行緒池清空兩種安全模式。
+ * 樹狀結構已直接內建「迭代式展平析構（Iterative Flattening Destructor）」，
+ * 在銷毀鏈路中以 O(1) 呼叫堆疊深度迭代清空，徹底杜絕 Stack Overflow。
+ * 此介面保留作為向下相容之用，已無需啟動背景執行緒，100% 杜絕行程退出時的 UAF 與崩潰。
  */
 class AsyncNodeDeletor
 {
@@ -34,72 +32,15 @@ public:
 
   static void EnqueueTask(Task task)
   {
-    std::lock_guard<std::mutex> lock(GetMutex());
-    GetTasks().push(std::move(task));
-    GetReady() = false;
-
-    if (GetThreadCount() < std::max<size_t>(1, std::thread::hardware_concurrency()))
+    if (task)
     {
-      GetThreadCount()++;
-      std::thread t([]() {
-        while (true)
-        {
-          Task current_task;
-          {
-            std::lock_guard<std::mutex> lock(GetMutex());
-            if (GetTasks().empty())
-            {
-              if (--GetThreadCount() == 0)
-              {
-                GetReady() = true;
-                GetCV().notify_all();
-              }
-              return;
-            }
-            current_task = std::move(GetTasks().front());
-            GetTasks().pop();
-          }
-          if (current_task)
-          {
-            current_task();
-          }
-        }
-      });
-      t.detach();
+      task();
     }
   }
 
-  static void Wait()
+  static void Wait() noexcept
   {
-    std::unique_lock<std::mutex> lock(GetMutex());
-    GetCV().wait(lock, []() { return GetReady(); });
-  }
-
-private:
-  static std::mutex &GetMutex()
-  {
-    static std::mutex s_mutex;
-    return s_mutex;
-  }
-  static std::condition_variable &GetCV()
-  {
-    static std::condition_variable s_cv;
-    return s_cv;
-  }
-  static std::queue<Task> &GetTasks()
-  {
-    static std::queue<Task> s_tasks;
-    return s_tasks;
-  }
-  static size_t &GetThreadCount()
-  {
-    static size_t s_thread_count = 0;
-    return s_thread_count;
-  }
-  static bool &GetReady()
-  {
-    static bool s_ready = true;
-    return s_ready;
+    // 迭代式析構為同步安全完成，無需等待
   }
 };
 
@@ -112,7 +53,7 @@ private:
  * 1. 雙模態支援：支援具名字節點（Object）與 O(1) 循序陣列元素（Array）。
  * 2. 雙向三合一索引：保持插入順序的 list、O(1) 名稱尋址 map、O(1) 節點重排反向索引。
  * 3. 執行緒安全：採用整棵樹共享之 std::shared_mutex 提供多讀單寫（Shared/Unique Lock）機制。
- * 4. 防爆棧析構：整合安全非同步與顯式堆疊析構，杜絕巨深樹級聯析構爆棧。
+ * 4. 防爆棧析構：內建顯式堆疊迭代析構，將遞迴展平為堆積迴圈，杜絕巨深樹級聯析構爆棧。
  * 5. 全域 UTF-8：節點名稱強制使用 C++20 原生 std::u8string。
  */
 template <typename D>
@@ -123,7 +64,7 @@ public:
   using ConstNodePtr = std::shared_ptr<const D>;
 
 protected:
-  std::u8string m_name;                 ///< 節點名稱 (UTF-8)
+  std::u8string m_name;  ///< 節點名稱 (UTF-8)
   // --- 唯一真實子節點容器通道 (連續記憶體快取友善，支援 O(1) 循序/下標隨機存取) ---
   std::vector<NodePtr> m_elements;
 
@@ -192,7 +133,7 @@ public:
     PropagateTreeMutex(std::make_shared<std::shared_mutex>());
   }
 
-  // 工廠方法：建構節點並掛載非同步防爆棧析構器
+  // 工廠方法：建構節點
   static NodePtr MakeNode(const std::u8string &name = u8"")
   {
     if (!D::CanCreateChild(name))
@@ -200,12 +141,7 @@ public:
       return nullptr;
     }
 
-    return std::shared_ptr<D>(new D(name), [](D *p) {
-      if (p)
-      {
-        AsyncNodeDeletor::EnqueueTask([p]() { delete p; });
-      }
-    });
+    return std::shared_ptr<D>(new D(name));
   }
 
 public:
@@ -217,12 +153,40 @@ public:
 
   virtual ~TreeNodeBase()
   {
-    // 解構前主動斷開子節點 parent 弱指針，防範循環懸空
+    // 防範深層樹遞迴析構引發呼叫堆疊溢位 (Stack Overflow)
+    // 將遞迴鏈展平 (Flattening) 為堆積 (Heap) 上的顯式堆疊迭代，以 O(1) 呼叫深度安全釋放
+    std::vector<NodePtr> nodes_to_delete;
+    nodes_to_delete.reserve(m_elements.size());
     for (auto &elem : m_elements)
     {
       if (elem)
       {
         elem->m_parent.reset();
+        nodes_to_delete.push_back(std::move(elem));
+      }
+    }
+    m_elements.clear();
+    m_nameMap.clear();
+
+    while (!nodes_to_delete.empty())
+    {
+      NodePtr current = std::move(nodes_to_delete.back());
+      nodes_to_delete.pop_back();
+
+      if (current && current.use_count() == 1)
+      {
+        // current 僅由本地迭代棧唯一持有，其解構即將發生。
+        // 為防範 current 解構時遞迴連鎖釋放其子節點，在此主動拔出其子節點並推入迭代向量中
+        for (auto &child : current->m_elements)
+        {
+          if (child)
+          {
+            child->m_parent.reset();
+            nodes_to_delete.push_back(std::move(child));
+          }
+        }
+        current->m_elements.clear();
+        current->m_nameMap.clear();
       }
     }
   }
@@ -273,8 +237,6 @@ public:
   {
     return !IsArray();
   }
-
-
 
   // 取得父節點與自身
   [[nodiscard]] NodePtr GetParent()
@@ -653,17 +615,39 @@ public:
     ClearChildren();
   }
 
-
-
   // 迭代器與反向視圖
-  auto begin() { return m_elements.begin(); }
-  auto end() { return m_elements.end(); }
-  auto begin() const { return m_elements.begin(); }
-  auto end() const { return m_elements.end(); }
-  auto rbegin() { return m_elements.rbegin(); }
-  auto rend() { return m_elements.rend(); }
-  auto rbegin() const { return m_elements.rbegin(); }
-  auto rend() const { return m_elements.rend(); }
+  auto begin()
+  {
+    return m_elements.begin();
+  }
+  auto end()
+  {
+    return m_elements.end();
+  }
+  auto begin() const
+  {
+    return m_elements.begin();
+  }
+  auto end() const
+  {
+    return m_elements.end();
+  }
+  auto rbegin()
+  {
+    return m_elements.rbegin();
+  }
+  auto rend()
+  {
+    return m_elements.rend();
+  }
+  auto rbegin() const
+  {
+    return m_elements.rbegin();
+  }
+  auto rend() const
+  {
+    return m_elements.rend();
+  }
 
   /**
    * @brief 反向走訪視圖糖衣方法 (支援 for (const auto &child : node->Reversed()))
@@ -728,8 +712,6 @@ public:
   {
     return Base::CreateRoot(name);
   }
-
-
 
   template <typename D>
   friend class TreeNodeBase;

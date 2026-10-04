@@ -211,7 +211,7 @@ void TestFaultTolerantFSM()
     # 腳本風格單行註解：# [HashNode] "HashData"
 
     這是一段任意說明文字，不在狀態內應全數無視！
-    [GameConfig] = [多餘無視標籤] "版本 1.0.0" "第二段引號視為多餘無視"
+    [GameConfig] = @#$%多餘無視符號說明@#$% "版本 1.0.0" "第二段引號視為多餘無視"
     {
         這裡是物件內部的說明文字，無視！
         // 物件內部行註解 [FakeInside] = "無效"
@@ -338,18 +338,18 @@ void TestConcurrencySafety()
 
 void TestDeepTreeDestruction()
 {
-  std::cout << "[測試 8] 深層階層非同步防爆棧析構測試..." << std::endl;
+  std::cout << "[測試 8] 深層階層顯式堆疊迭代防爆棧析構測試 (20,000 層)..." << std::endl;
 
   {
     auto root = StringTreeNode::CreateRoot(u8"DeepRoot");
     auto current = root;
-    for (int i = 0; i < 5000; ++i)
+    for (int i = 0; i < 20000; ++i)
     {
       current = current->AddBackChild(u8"DeepChild");
     }
   }
 
-  // 等待非同步析構排空
+  // 驗證向下相容介面呼叫
   AsyncNodeDeletor::Wait();
 
   std::cout << " -> 通過！" << std::endl;
@@ -566,6 +566,287 @@ void TestTreeSharedMutex()
   std::cout << " -> 通過！" << std::endl;
 }
 
+void TestUnboxingAndAnonymousContainerSafety()
+{
+  std::cout << "[測試 11] 單元素匿名容器與精準拆箱拓撲保全測試..." << std::endl;
+
+  // 1. 頂層匿名單元素陣列：絕不可被脫殼降級為葉節點
+  {
+    auto single_arr = TreeIO::DeserializeFromString("(\"OnlyOneItem\")");
+    assert(single_arr != nullptr);
+    assert(single_arr->IsArray());
+    assert(single_arr->ElementCount() == 1);
+    assert((*single_arr)[0] != nullptr);
+    assert((*single_arr)[0]->GetData() == "OnlyOneItem");
+    assert(single_arr->GetName().empty());  // 匿名容器不應帶有 __ROOT__ 魔術名稱
+  }
+
+  // 2. 頂層匿名多元素陣列：與單元素陣列結構完全一致
+  {
+    auto multi_arr = TreeIO::DeserializeFromString("(\"ItemA\" \"ItemB\")");
+    assert(multi_arr != nullptr);
+    assert(multi_arr->IsArray());
+    assert(multi_arr->ElementCount() == 2);
+    assert((*multi_arr)[0]->GetData() == "ItemA");
+    assert((*multi_arr)[1]->GetData() == "ItemB");
+  }
+
+  // 3. 頂層匿名單欄位物件：外層物件容器絕不可被破壞
+  {
+    auto single_obj = TreeIO::DeserializeFromString("{ [Setting] = \"On\" }");
+    assert(single_obj != nullptr);
+    assert(single_obj->IsObject());
+    assert(single_obj->ChildCount() == 1);
+    assert(single_obj->HasChild(u8"Setting"));
+    assert((*single_obj)[u8"Setting"]->GetData() == "On");
+    assert(single_obj->GetName().empty());
+  }
+
+  // 4. 頂層匿名多欄位物件
+  {
+    auto multi_obj = TreeIO::DeserializeFromString("{ [A] = \"1\" [B] = \"2\" }");
+    assert(multi_obj != nullptr);
+    assert(multi_obj->HasChild(u8"A"));
+    assert(multi_obj->HasChild(u8"B"));
+    assert((*multi_obj)[u8"A"]->GetData() == "1");
+    assert((*multi_obj)[u8"B"]->GetData() == "2");
+  }
+
+  // 5. 頂層具名根節點：應安全拆箱，傳回以該名稱為根的實體
+  {
+    auto named_root = TreeIO::DeserializeFromString("[Player] = \"Hero\" { [HP] = \"100\" }");
+    assert(named_root != nullptr);
+    assert(named_root->GetName() == u8"Player");
+    assert(named_root->GetData() == "Hero");
+    assert(named_root->HasChild(u8"HP"));
+    assert((*named_root)[u8"HP"]->GetData() == "100");
+  }
+
+  // 6. 頂層具名單元素陣列：應安全拆箱為該具名陣列容器
+  {
+    auto named_arr = TreeIO::DeserializeFromString("[Inventory](\"Sword\")");
+    assert(named_arr != nullptr);
+    assert(named_arr->GetName() == u8"Inventory");
+    assert(named_arr->IsArray());
+    assert(named_arr->ElementCount() == 1);
+    assert((*named_arr)[0]->GetData() == "Sword");
+  }
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
+void TestDeepTreeDeserialization()
+{
+  std::cout << "[測試 12] 巨深階層顯式堆疊非遞迴反序列化防爆棧測試 (10,000 層)..." << std::endl;
+
+  const int depth = 10000;
+  std::string deep_dsl;
+  deep_dsl.reserve(depth * 10);
+
+  // 構造 10,000 層的深層巢狀物件 DSL
+  for (int i = 0; i < depth; ++i)
+  {
+    deep_dsl += "[L";
+    deep_dsl += std::to_string(i);
+    deep_dsl += "]{";
+  }
+  deep_dsl += "[Leaf]=\"Success\"";
+  for (int i = 0; i < depth; ++i)
+  {
+    deep_dsl += "}";
+  }
+
+  // 驗證反序列化使用 Heap 顯式堆疊，以 O(1) Call Stack 深度安全解析 10,000 層
+  auto root = TreeIO::DeserializeFromString(deep_dsl);
+  assert(root != nullptr);
+  assert(root->GetName() == u8"L0");
+
+  std::cout << " -> 反序列化完成，開始安全迭代解構..." << std::endl;
+  root.reset();
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
+void TestConsecutiveEmptyNodes()
+{
+  std::cout << "[測試 13] 連續具名空節點與連續匿名空元素序列化/反序列化測試..." << std::endl;
+
+  // 1. 連續具名空節點（Flag / 標籤樹）
+  {
+    auto root = StringTreeNode::CreateRoot(u8"Flags");
+    root->AddChild(u8"EnableHDR");
+    root->AddChild(u8"EnableVsync");
+    root->AddChild(u8"EnableAA");
+
+    assert(root->ChildCount() == 3);
+
+    // 序列化
+    std::string dsl = TreeIO::SerializeToString(root, CompactMode::WithEqual);
+    std::cout << "  Flags DSL: " << dsl << std::endl;
+
+    // 反序列化
+    auto restored = TreeIO::DeserializeFromString(dsl);
+    assert(restored != nullptr);
+    assert(restored->GetName() == u8"Flags");
+    assert(restored->ChildCount() == 3);
+    assert(restored->HasChild(u8"EnableHDR"));
+    assert(restored->HasChild(u8"EnableVsync"));
+    assert(restored->HasChild(u8"EnableAA"));
+  }
+
+  // 2. 連續匿名空陣列元素（純空字串元素）
+  {
+    auto arr = StringTreeNode::CreateArray(u8"EmptyList");
+    arr->PushElement();
+    arr->PushElement();
+    arr->PushElement();
+    assert(arr->ElementCount() == 3);
+
+    // 序列化
+    std::string dsl = TreeIO::SerializeToString(arr, CompactMode::WithEqual);
+    std::cout << "  EmptyList DSL: " << dsl << std::endl;
+
+    // 反序列化
+    auto restored = TreeIO::DeserializeFromString(dsl);
+    assert(restored != nullptr);
+    assert(restored->GetName() == u8"EmptyList");
+    assert(restored->IsArray());
+    assert(restored->ElementCount() == 3);
+    assert((*restored)[0]->GetData().empty());
+    assert((*restored)[1]->GetData().empty());
+    assert((*restored)[2]->GetData().empty());
+  }
+
+  // 3. 空節點與帶值節點交替混排
+  {
+    auto mix = StringTreeNode::CreateRoot(u8"MixConfig");
+    mix->AddChild(u8"FlagA");
+    mix->AddChild(u8"FlagB");
+    mix->AddChild(u8"ServerIP")->SetData("127.0.0.1");
+    mix->AddChild(u8"FlagC");
+    mix->AddChild(u8"Port")->SetData("8080");
+
+    assert(mix->ChildCount() == 5);
+
+    std::string dsl = TreeIO::SerializeToString(mix, CompactMode::WithEqual);
+    auto restored = TreeIO::DeserializeFromString(dsl);
+    assert(restored != nullptr);
+    assert(restored->ChildCount() == 5);
+    assert(restored->HasChild(u8"FlagA"));
+    assert(restored->HasChild(u8"FlagB"));
+    assert(restored->HasChild(u8"ServerIP"));
+    assert((*restored)[u8"ServerIP"]->GetData() == "127.0.0.1");
+    assert(restored->HasChild(u8"FlagC"));
+    assert(restored->HasChild(u8"Port"));
+    assert((*restored)[u8"Port"]->GetData() == "8080");
+  }
+
+  // 4. 手寫無等號連續標籤 DSL：{[Tag1][Tag2][Tag3]}
+  {
+    auto restored = TreeIO::DeserializeFromString("{[Tag1][Tag2][Tag3]}");
+    assert(restored != nullptr);
+    assert(restored->ChildCount() == 3);
+    assert(restored->HasChild(u8"Tag1"));
+    assert(restored->HasChild(u8"Tag2"));
+    assert(restored->HasChild(u8"Tag3"));
+  }
+
+  // 5. 驗證 CompactMode::WithoutEqual（完全無等號極致緊湊模式）下的連續空節點與混合節點
+  {
+    auto hero = StringTreeNode::CreateRoot(u8"Hero");
+    hero->AddChild(u8"Passive1");
+    hero->AddChild(u8"Passive2");
+    hero->AddChild(u8"Skill")->SetData("Fireball");
+    hero->AddChild(u8"Passive3");
+
+    std::string dsl_without_eq = TreeIO::SerializeToString(hero, CompactMode::WithoutEqual);
+    std::cout << "  WithoutEqual DSL: " << dsl_without_eq << std::endl;
+    // 嚴格斷言：字串中絕不包含 '='
+    assert(dsl_without_eq.find('=') == std::string::npos);
+
+    // 驗證在完全零等號情況下，連續空節點與帶值節點依然 100% 正確還原
+    auto restored = TreeIO::DeserializeFromString(dsl_without_eq);
+    assert(restored != nullptr);
+    assert(restored->GetName() == u8"Hero");
+    assert(restored->ChildCount() == 4);
+    assert(restored->HasChild(u8"Passive1"));
+    assert(restored->HasChild(u8"Passive2"));
+    assert(restored->HasChild(u8"Skill"));
+    assert((*restored)[u8"Skill"]->GetData() == "Fireball");
+    assert(restored->HasChild(u8"Passive3"));
+  }
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
+void TestArrayOfObjectsSerialization()
+{
+  std::cout << "[測試 14] 陣列內包含多個匿名子物件的序列化與反序列化測試..." << std::endl;
+
+  // 1. 程式碼建構陣列包含多個匿名子物件
+  auto arr = StringTreeNode::CreateArray(u8"");
+  auto obj1 = StringTreeNode::MakeNode(u8"");
+  obj1->AddChild(u8"item1")->SetData("A");
+  arr->PushElement(obj1);
+
+  auto obj2 = StringTreeNode::MakeNode(u8"");
+  obj2->AddChild(u8"item2")->SetData("B");
+  arr->PushElement(obj2);
+
+  // 序列化
+  std::string dsl = TreeIO::SerializeToString(arr);
+  std::cout << "  Array of Objects DSL:\n" << dsl << std::endl;
+
+  // 反序列化
+  auto restored = TreeIO::DeserializeFromString(dsl);
+  assert(restored != nullptr);
+  assert(restored->IsArray());
+  assert(restored->ElementCount() == 2);
+
+  auto r_obj1 = (*restored)[0];
+  assert(r_obj1 != nullptr);
+  assert(r_obj1->IsObject());
+  assert(r_obj1->HasChild(u8"item1"));
+  assert((*r_obj1)[u8"item1"]->GetData() == "A");
+
+  auto r_obj2 = (*restored)[1];
+  assert(r_obj2 != nullptr);
+  assert(r_obj2->IsObject());
+  assert(r_obj2->HasChild(u8"item2"));
+  assert((*r_obj2)[u8"item2"]->GetData() == "B");
+
+  // 2. 直接以使用者提供的原始 DSL 文字反序列化驗證
+  std::string user_dsl = R"(
+(
+  {
+    [item1] = "A"
+  }
+  {
+    [item2] = "B"
+  }
+)
+)";
+
+  auto user_restored = TreeIO::DeserializeFromString(user_dsl);
+  assert(user_restored != nullptr);
+  assert(user_restored->IsArray());
+  assert(user_restored->ElementCount() == 2);
+
+  auto u_obj1 = (*user_restored)[0];
+  assert(u_obj1 != nullptr);
+  assert(u_obj1->IsObject());
+  assert(u_obj1->HasChild(u8"item1"));
+  assert((*u_obj1)[u8"item1"]->GetData() == "A");
+
+  auto u_obj2 = (*user_restored)[1];
+  assert(u_obj2 != nullptr);
+  assert(u_obj2->IsObject());
+  assert(u_obj2->HasChild(u8"item2"));
+  assert((*u_obj2)[u8"item2"]->GetData() == "B");
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
 int main()
 {
   std::cout << "========================================" << std::endl;
@@ -582,9 +863,13 @@ int main()
   TestDeepTreeDestruction();
   TestUnifiedDualMode();
   TestCustomCRTPNode();
+  TestUnboxingAndAnonymousContainerSafety();
+  TestDeepTreeDeserialization();
+  TestConsecutiveEmptyNodes();
+  TestArrayOfObjectsSerialization();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 10 項單元測試 100% 成功通過！   " << std::endl;
+  std::cout << "  全數 14 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

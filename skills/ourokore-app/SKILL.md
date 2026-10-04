@@ -375,7 +375,7 @@ std::string config_dsl = R"(
     */
     # 腳本風格單行註解
     這是一段任意說明文字，狀態機自動無視！
-    [Player] = [多餘無視標記] "英雄角色" "第二段引號視為多餘無視" // 行尾註解
+    [Player] = "英雄角色" "第二段引號視為多餘無視" // 行尾註解
     {
         [HP] = "100" # 生命值屬性
         [Inventory] = (
@@ -437,6 +437,19 @@ assert(custom_hero->title == "英雄角色");
     // ⚠️ 嚴禁在持讀鎖期間調用 player->RemoveChild(...) 或 AddChild(...)！
     // 若需依條件刪除節點，必須先收集指標，待讀鎖釋放後再批次呼叫 RemoveChild。
 }
+
+// 8. 🛡️ 百萬層深樹顯式堆疊防爆棧（零 Call Stack 堆疊消耗，無行程退出 UAF）
+// - 析構防爆棧：TreeNodeBase 解構子內建「顯式堆疊迭代展平（Iterative Flattening）」，將級聯析構展平為堆積迴圈。
+// - 反序列化防爆棧：TreeIO::Deserialize 採用純 Heap 顯式堆疊狀態機，以 O(1) 呼叫深度解析巨深巢狀 DSL。
+// - 兩者均完全杜絕遞迴呼叫堆疊溢位 (Stack Overflow)，且不依賴背景分離執行緒 (t.detach())，保證行程退出零 UAF。
+
+// 9. 📐 正交界定符與無等號哲學（連續空節點、匿名容器與物件陣列）
+// - 四大界定符 []、""、{}、() 為唯一語法 Token，等號 = 純為可選裝飾符號。
+// - 在極致緊湊無等號模式（CompactMode::WithoutEqual）下完全省略 =，所有結構 100% 精準對稱還原：
+//   * 連續具名空節點：[Flags]{[EnableHDR][EnableVsync][EnableAA]}
+//   * 連續匿名空元素：[EmptyList]("" "" "")
+//   * 物件陣列：( { [item1]="A" } { [item2]="B" } )
+//   * 單元素容器拓撲保全：("Single") 與 { [Key]="Val" } 完整保留容器身分，絕不發生單元素脫殼降級！
 ```
 
 ---

@@ -2,7 +2,7 @@
 
 #include <cctype>
 #include <cstddef>
-#include <functional>
+#include <cstdio>
 #include <iostream>
 #include <memory>
 #include <ourokore/base/Tree.hpp>
@@ -21,9 +21,9 @@ namespace ork::base
  */
 enum class CompactMode : uint8_t
 {
-  None = 0,          ///< 沒有緊湊（保留縮排與換行，鍵值賦值使用 " = "）
-  WithEqual = 1,     ///< 保留等號之緊湊模式（無縮排與換行，鍵值賦值使用 "=\""）
-  WithoutEqual = 2   ///< 不保留等號之極致緊湊模式（無縮排與換行，鍵值賦值使用 "\""）
+  None = 0,         ///< 沒有緊湊（保留縮排與換行，鍵值賦值使用 " = "）
+  WithEqual = 1,    ///< 保留等號之緊湊模式（無縮排與換行，鍵值賦值使用 "=\""）
+  WithoutEqual = 2  ///< 不保留等號之極致緊湊模式（無縮排與換行，鍵值賦值使用 "\""）
 };
 
 namespace detail
@@ -151,11 +151,11 @@ public:
 
   template <
       typename Node = TreeNode<std::string>, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
-                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+      typename = std::enable_if_t<
+          !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
-      std::ostream &os, const std::shared_ptr<Node> &root, Func &&data_to_string = nullptr,
-      size_t indent_width = 2, CompactMode mode = CompactMode::None
+      std::ostream &os, const std::shared_ptr<Node> &root, Func &&data_to_string = nullptr, size_t indent_width = 2,
+      CompactMode mode = CompactMode::None
   )
   {
     Serialize<Node>(
@@ -165,8 +165,8 @@ public:
 
   template <
       typename Node = TreeNode<std::string>, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
-                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+      typename = std::enable_if_t<
+          !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
       std::ostream &os, const std::shared_ptr<const Node> &root, Func &&data_to_string = nullptr,
       size_t indent_width = 2, CompactMode mode = CompactMode::None
@@ -207,8 +207,9 @@ public:
           return data_to_string(node_ptr);
         }
         // 4. 向下相容：若自訂函式只接受 Payload 資料，且該節點具備 GetData()
-        else if constexpr (requires { node_ptr->GetData(); } &&
-                           std::is_invocable_v<Func, decltype(node_ptr->GetData())>)
+        else if constexpr (requires {
+                             node_ptr->GetData();
+                           } && std::is_invocable_v<Func, decltype(node_ptr->GetData())>)
         {
           return data_to_string(node_ptr->GetData());
         }
@@ -300,7 +301,7 @@ public:
       std::string escaped_data = EscapeContent(data_s);
 
       // 輸出節點開頭
-      if (!f.is_array_element || !escaped_name.empty())
+      if (!escaped_name.empty())
       {
         os << indent << '[' << escaped_name << ']';
         if (!escaped_data.empty())
@@ -325,8 +326,9 @@ public:
       }
       else
       {
-        // 純陣列元素且無名稱
-        if (!escaped_data.empty())
+        // 匿名節點：若為純資料葉節點（無子節點）或帶有資料，輸出字串引號 ""
+        // 若為匿名容器節點（ChildCount > 0），則無須輸出 [] 或多餘引號，直接由後續容器括號括起
+        if (!escaped_data.empty() || f.node->ChildCount() == 0)
         {
           os << indent << "\"" << escaped_data << "\"";
           if (!is_compact)
@@ -372,26 +374,24 @@ public:
   // --- 相容 bool compact 的多載 ---
   template <
       typename Node = TreeNode<std::string>, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
-                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+      typename = std::enable_if_t<
+          !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
-      std::ostream &os, const std::shared_ptr<const Node> &root, Func &&data_to_string,
-      size_t indent_width, bool compact
+      std::ostream &os, const std::shared_ptr<const Node> &root, Func &&data_to_string, size_t indent_width,
+      bool compact
   )
   {
     Serialize<Node>(
-        os, root, std::forward<Func>(data_to_string), indent_width,
-        compact ? CompactMode::WithEqual : CompactMode::None
+        os, root, std::forward<Func>(data_to_string), indent_width, compact ? CompactMode::WithEqual : CompactMode::None
     );
   }
 
   template <
       typename Node = TreeNode<std::string>, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
-                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+      typename = std::enable_if_t<
+          !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
-      std::ostream &os, const std::shared_ptr<Node> &root, Func &&data_to_string,
-      size_t indent_width, bool compact
+      std::ostream &os, const std::shared_ptr<Node> &root, Func &&data_to_string, size_t indent_width, bool compact
   )
   {
     Serialize<Node>(
@@ -427,8 +427,8 @@ public:
 
   template <typename Node = TreeNode<std::string>, typename Func = std::nullptr_t>
   static void SerializeCompact(
-      std::ostream &os, const std::shared_ptr<Node> &root,
-      CompactMode mode = CompactMode::WithEqual, Func &&data_to_string = nullptr
+      std::ostream &os, const std::shared_ptr<Node> &root, CompactMode mode = CompactMode::WithEqual,
+      Func &&data_to_string = nullptr
   )
   {
     Serialize<Node>(os, root, std::forward<Func>(data_to_string), 0, mode);
@@ -436,8 +436,8 @@ public:
 
   template <typename Node = TreeNode<std::string>, typename Func = std::nullptr_t>
   static void SerializeCompact(
-      std::ostream &os, const std::shared_ptr<const Node> &root,
-      CompactMode mode = CompactMode::WithEqual, Func &&data_to_string = nullptr
+      std::ostream &os, const std::shared_ptr<const Node> &root, CompactMode mode = CompactMode::WithEqual,
+      Func &&data_to_string = nullptr
   )
   {
     Serialize<Node>(os, root, std::forward<Func>(data_to_string), 0, mode);
@@ -446,11 +446,11 @@ public:
   // --- 字串序列化便捷函式 (SerializeToString) ---
   template <
       typename Node = TreeNode<std::string>, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
-                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+      typename = std::enable_if_t<
+          !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static std::string SerializeToString(
-      const std::shared_ptr<const Node> &root, Func &&data_to_string = nullptr,
-      size_t indent_width = 2, CompactMode mode = CompactMode::None
+      const std::shared_ptr<const Node> &root, Func &&data_to_string = nullptr, size_t indent_width = 2,
+      CompactMode mode = CompactMode::None
   )
   {
     std::ostringstream oss;
@@ -460,11 +460,11 @@ public:
 
   template <
       typename Node = TreeNode<std::string>, typename Func = std::nullptr_t,
-      typename = std::enable_if_t<!std::is_same_v<std::decay_t<Func>, bool> &&
-                                  !std::is_same_v<std::decay_t<Func>, CompactMode>>>
+      typename = std::enable_if_t<
+          !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static std::string SerializeToString(
-      const std::shared_ptr<Node> &root, Func &&data_to_string = nullptr,
-      size_t indent_width = 2, CompactMode mode = CompactMode::None
+      const std::shared_ptr<Node> &root, Func &&data_to_string = nullptr, size_t indent_width = 2,
+      CompactMode mode = CompactMode::None
   )
   {
     return SerializeToString<Node>(
@@ -502,8 +502,7 @@ public:
 
   template <typename NodeOrData = TreeNode<std::string>, typename Func = std::nullptr_t>
   static std::shared_ptr<detail::resolve_node_type_t<NodeOrData>> Deserialize(
-      std::istream &is,
-      Func &&data_handler = nullptr
+      std::istream &is, Func &&data_handler = nullptr
   )
   {
     std::string text((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
@@ -512,8 +511,7 @@ public:
 
   template <typename NodeOrData = TreeNode<std::string>, typename Func = std::nullptr_t>
   static std::shared_ptr<detail::resolve_node_type_t<NodeOrData>> DeserializeFromString(
-      std::string_view text,
-      Func &&data_handler = nullptr
+      std::string_view text, Func &&data_handler = nullptr
   )
   {
     using NodeType = detail::resolve_node_type_t<NodeOrData>;
@@ -681,177 +679,181 @@ public:
       return content;
     };
 
-    // 遞迴解析節點或元素群
-    std::function<void(const NodePtr &, char)> parse_container;
+    // 建立頂層容器節點進行全體解析 (預設名稱為空字串，防止內部標記字串外洩)
+    NodePtr root_holder = NodeType::CreateRoot(u8"");
+    bool root_adopted_as_container = false;
 
-    parse_container = [&](const NodePtr &current_parent, char terminator)
+    // 非遞迴顯式走訪堆疊幀 (免疫巨深階層 Call Stack Overflow)
+    struct ParseFrame
     {
-      bool is_array_mode = (terminator == ')');
-      NodePtr active_child = nullptr;
-      bool active_child_has_data = false;
+      NodePtr current_parent;
+      char terminator{'\0'};
+      NodePtr active_child{nullptr};
+      bool active_child_has_data{false};
+    };
 
-      while (pos < len)
+    std::vector<ParseFrame> parse_stack;
+    parse_stack.reserve(64);
+    parse_stack.push_back({root_holder, '\0', nullptr, false});
+
+    while (pos < len && !parse_stack.empty())
+    {
+      auto &frame = parse_stack.back();
+      bool is_array_mode = (frame.terminator == ')');
+
+      int ch = peek();
+      if (ch == -1)
       {
-        int ch = peek();
-        if (ch == -1)
-        {
-          break;
-        }
+        break;
+      }
 
-        // 遇到容器終止符（'}' 或 ')'）
-        if (terminator != '\0' && ch == terminator)
-        {
-          next();  // 消耗終止符
-          break;
-        }
+      // 遇到容器終止符（'}' 或 ')'）
+      if (frame.terminator != '\0' && ch == frame.terminator)
+      {
+        next();                  // 消耗終止符
+        parse_stack.pop_back();  // 顯式彈棧：結束當前層級，零 Call Stack 消耗
+        continue;
+      }
 
-        // 0. 註解處理：支援 // 單行註解、/* ... */ 區塊註解、# 腳本風格單行註解
-        if (ch == '/')
+      // 0. 註解處理：支援 // 單行註解、/* ... */ 區塊註解、# 腳本風格單行註解
+      if (ch == '/')
+      {
+        if (pos + 1 < len && text[pos + 1] == '/')
         {
-          if (pos + 1 < len && text[pos + 1] == '/')
-          {
-            // // 單行註解：消耗至行尾或 EOF
-            pos += 2;
-            while (pos < len && text[pos] != '\n' && text[pos] != '\r')
-            {
-              pos++;
-            }
-            continue;
-          }
-          if (pos + 1 < len && text[pos + 1] == '*')
-          {
-            // /* ... */ 區塊註解：消耗至 */ 或 EOF
-            pos += 2;
-            bool closed = false;
-            while (pos + 1 < len)
-            {
-              if (text[pos] == '*' && text[pos + 1] == '/')
-              {
-                pos += 2;
-                closed = true;
-                break;
-              }
-              pos++;
-            }
-            if (!closed)
-            {
-              pos = len;
-            }
-            continue;
-          }
-        }
-        else if (ch == '#')
-        {
-          // # 單行註解：消耗至行尾或 EOF
-          next();
+          // // 單行註解：消耗至行尾或 EOF
+          pos += 2;
           while (pos < len && text[pos] != '\n' && text[pos] != '\r')
           {
             pos++;
           }
           continue;
         }
-
-        // 1. 遇到節點名稱標記 '['
-        if (ch == '[')
+        if (pos + 1 < len && text[pos + 1] == '*')
         {
-          next();  // 消耗 '['
-          std::string name_s = read_name();
-          std::u8string name_u8 = ork::utf8::to_u8string(name_s);
-
-          if (is_array_mode)
+          // /* ... */ 區塊註解：消耗至 */ 或 EOF
+          pos += 2;
+          bool closed = false;
+          while (pos + 1 < len)
           {
-            // 陣列中若出現具名節點，同時享有循序元素存取與具名索引尋址
-            active_child = current_parent->AddChild(name_u8);
-            active_child_has_data = false;
-          }
-          else
-          {
-            if (!active_child || active_child_has_data)
+            if (text[pos] == '*' && text[pos + 1] == '/')
             {
-              active_child = current_parent->AddChild(name_u8);
-              active_child_has_data = false;
+              pos += 2;
+              closed = true;
+              break;
             }
-            // 若 active_child 存在且尚未接收資料或子容器，連續出現的 [名稱] 標籤視為雜訊安全忽略
+            pos++;
+          }
+          if (!closed)
+          {
+            pos = len;
           }
           continue;
         }
-
-        // 2. 遇到引號 '"'
-        if (ch == '"')
-        {
-          next();  // 消耗 '"'
-          std::string data_s = read_string();
-
-          if (is_array_mode)
-          {
-            // 在陣列中遇到純引號
-            if (!active_child || active_child_has_data)
-            {
-              // 作為純字串陣列元素
-              NodePtr elem = current_parent->PushElement();
-              if (elem)
-              {
-                apply_data(elem, data_s);
-              }
-              active_child = nullptr;
-              active_child_has_data = false;
-            }
-            else
-            {
-              // 賦值給剛剛建構但尚未賦值的 active_child
-              apply_data(active_child, data_s);
-              active_child_has_data = true;
-            }
-          }
-          else
-          {
-            // 在物件中：若有 active_child 且尚未有資料，填入資料
-            if (active_child && !active_child_has_data)
-            {
-              apply_data(active_child, data_s);
-              active_child_has_data = true;
-            }
-            else
-            {
-              // 若前面沒有節點名稱或已經有資料，視為「多餘引號」，由寬容狀態機無視！
-            }
-          }
-          continue;
-        }
-
-        // 3. 遇到物件子區塊 '{'
-        if (ch == '{')
-        {
-          next();  // 消耗 '{'
-          NodePtr target = active_child ? active_child : current_parent;
-          parse_container(target, '}');
-          active_child = nullptr;
-          active_child_has_data = false;
-          continue;
-        }
-
-        // 4. 遇到陣列子區塊 '('
-        if (ch == '(')
-        {
-          next();  // 消耗 '('
-          NodePtr target = active_child ? active_child : current_parent;
-          parse_container(target, ')');
-          active_child = nullptr;
-          active_child_has_data = false;
-          continue;
-        }
-
-        // 5. 任何其他符號或空白或非預期字元：由寬容狀態機安全無視！
-        next();
       }
-    };
+      else if (ch == '#')
+      {
+        // # 單行註解：消耗至行尾或 EOF
+        next();
+        while (pos < len && text[pos] != '\n' && text[pos] != '\r')
+        {
+          pos++;
+        }
+        continue;
+      }
 
-    // 建立虛擬根節點進行全體解析
-    NodePtr root_holder = NodeType::CreateRoot(u8"__ROOT__");
-    parse_container(root_holder, '\0');
+      // 1. 遇到節點名稱標記 '['：建立新節點（完全正交，徹底支援有等號/無等號下的連續空節點）
+      if (ch == '[')
+      {
+        next();  // 消耗 '['
+        std::string name_s = read_name();
+        std::u8string name_u8 = ork::utf8::to_u8string(name_s);
 
-    // 若解析出唯一頂層子節點，則傳回該節點作為根；否則傳回 root_holder
-    if (root_holder->ChildCount() == 1)
+        frame.active_child = frame.current_parent->AddChild(name_u8);
+        frame.active_child_has_data = false;
+        continue;
+      }
+
+      // 2. 遇到引號 '"'
+      if (ch == '"')
+      {
+        next();  // 消耗 '"'
+        std::string data_s = read_string();
+
+        if (is_array_mode)
+        {
+          // 在陣列中遇到純引號
+          if (!frame.active_child || frame.active_child_has_data)
+          {
+            // 作為純字串陣列元素
+            NodePtr elem = frame.current_parent->PushElement();
+            if (elem)
+            {
+              apply_data(elem, data_s);
+            }
+            frame.active_child = nullptr;
+            frame.active_child_has_data = false;
+          }
+          else
+          {
+            // 賦值給剛剛建構但尚未賦值的 active_child
+            apply_data(frame.active_child, data_s);
+            frame.active_child_has_data = true;
+          }
+        }
+        else
+        {
+          // 在物件中：若有 active_child 且尚未有資料，填入資料
+          if (frame.active_child && !frame.active_child_has_data)
+          {
+            apply_data(frame.active_child, data_s);
+            frame.active_child_has_data = true;
+          }
+          else
+          {
+            // 若前面沒有節點名稱或已經有資料，視為「多餘引號」，由寬容狀態機無視！
+          }
+        }
+        continue;
+      }
+
+      // 3. 遇到物件子區塊 '{' 或陣列子區塊 '('：顯式壓棧進入深層，完全非遞迴
+      if (ch == '{' || ch == '(')
+      {
+        char term = (ch == '{') ? '}' : ')';
+        next();  // 消耗 '{' 或 '('
+        NodePtr target = frame.active_child;
+        if (!target)
+        {
+          if (is_array_mode)
+          {
+            // 在陣列中遭遇匿名子容器 ({ 或 ()，代表這是陣列中的匿名子物件或子陣列元素！
+            target = frame.current_parent->PushElement();
+          }
+          else
+          {
+            target = frame.current_parent;
+            if (frame.current_parent == root_holder)
+            {
+              root_adopted_as_container = true;
+            }
+          }
+        }
+        frame.active_child = nullptr;
+        frame.active_child_has_data = false;
+
+        parse_stack.push_back({std::move(target), term, nullptr, false});
+        continue;
+      }
+
+      // 4. 任何其他符號或空白或非預期字元：由寬容狀態機安全無視！
+      next();
+    }
+
+    // 拆箱判定：
+    // 只有當 root_holder 未被頂層顯式括號 ({ 或 () 直接作為匿名容器使用，
+    // 且頂層恰好僅解析出唯一一個獨立子節點時，方可進行安全拆箱（將其從 root_holder 解除綁定傳回）。
+    // 若頂層為匿名容器 (如 ("A") 或 { [B]="1" }) 或多節點，則完整保留容器拓撲，絕不破壞結構一致性。
+    if (!root_adopted_as_container && root_holder->ChildCount() == 1)
     {
       auto first = root_holder->GetFirstChild();
       first->DetachFromParent();
