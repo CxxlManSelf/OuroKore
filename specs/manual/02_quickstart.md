@@ -115,12 +115,12 @@ std::cout << "玩家建立成功，HandleID: " << pid << std::endl;
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/TreeIO.hpp>
 
-using ork::base::StringTreeNode;
+using ork::base::Tree; // 即 ork::base::StringTreeNode
 using ork::base::TreeIO;
 using ork::base::CompactMode;
 
 // 1. 建立根節點
-auto config = StringTreeNode::CreateRoot(u8"GameConfig");
+auto config = Tree::CreateRoot(u8"GameConfig");
 config->SetData("1.0.0");
 
 // 2. 建立具名子節點 (O(1) 雜湊尋址) 與陣列清單 (O(1) 連續記憶體隨機下標)

@@ -760,18 +760,19 @@ public:
 
           if (is_array_mode)
           {
-            // 陣列中若出現具名節點，作為帶有名稱的陣列元素加入
-            active_child = current_parent->PushElement();
-            if (active_child)
-            {
-              active_child->SetName(name_u8);
-            }
+            // 陣列中若出現具名節點，同時享有循序元素存取與具名索引尋址
+            active_child = current_parent->AddChild(name_u8);
+            active_child_has_data = false;
           }
           else
           {
-            active_child = current_parent->AddChild(name_u8);
+            if (!active_child || active_child_has_data)
+            {
+              active_child = current_parent->AddChild(name_u8);
+              active_child_has_data = false;
+            }
+            // 若 active_child 存在且尚未接收資料或子容器，連續出現的 [名稱] 標籤視為雜訊安全忽略
           }
-          active_child_has_data = false;
           continue;
         }
 

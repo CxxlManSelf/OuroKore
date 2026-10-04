@@ -307,6 +307,21 @@ auto custom_hero = TreeIO::DeserializeFromString<CustomEntityNode>(
     }
 );
 static_assert(std::is_same_v<decltype(custom_hero), std::shared_ptr<CustomEntityNode>>);
+
+// 8. 🛡️ 執行緒安全整樹走訪與死鎖防範（關鍵鐵律：走訪期間只能讀取資料，嚴禁操作節點！）
+{
+    // 整棵樹所有節點共享同一個讀寫鎖，外層只需持讀鎖一次
+    std::shared_lock<std::shared_mutex> lock(player->GetTreeMutex());
+    for (const auto &child : *player) {
+        std::cout << child->GetData() << std::endl; // ✅ 純資料使用：絕對安全！
+        // player->RemoveChild(child);              // ❌ 嚴格禁止！非遞迴鎖會引發重複加鎖死鎖 (Deadlock)！
+    }
+
+    // 由右向左反向走訪：直接使用 node->Reversed() 視圖糖衣（零拷貝）
+    for (const auto &child : player->Reversed()) {
+        std::cout << child->GetData() << std::endl;
+    }
+}
 ```
 
 ---
@@ -334,6 +349,7 @@ static_assert(std::is_same_v<decltype(custom_hero), std::shared_ptr<CustomEntity
    - 樹狀容器（`TreeNodeBase`、`TreeNode<T>`）與串流解析器（`TreeIO`）為基礎通用設施（`ourokore_base`），零依賴核心層。
    - 採用**單一容器雙模態統合架構**：所有子項目統一存於連續記憶體 `std::vector`，具名者由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址，下標與名稱存取 100% 互通。
    - 形態由長度數學關係自動推導：全具名為 Object（`{}`），混入匿名為 Array（`()`）。
+   - **整樹共享讀寫鎖與走訪死鎖防禦鐵律**：整棵樹（Root 與所有子孫節點）共享同一個 `std::shared_mutex`，節點脫離時自立分配新鎖。**呼叫端在持讀鎖走訪期間「只能進行純資料使用，絕對禁止操作節點拓撲（Add/Remove/Clear/Detach）」**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）；動態刪除需求必須採用「先收集指針、釋放讀鎖後再批次修改」的兩階段安全範式。
    - 文字 DSL 支援 3 種緊湊模式（None、WithEqual、WithoutEqual），原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
    - **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化 handler 支援 `(string) -> Data` 值轉換與 `(shared_ptr<NodeType>, string) -> void` 就地賦值兩種模式。
 

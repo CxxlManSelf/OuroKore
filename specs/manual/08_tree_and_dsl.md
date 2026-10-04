@@ -49,12 +49,12 @@ OuroKore 文字 DSL 採用四個互不干擾的正交界定符：
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/TreeIO.hpp>
 
-using ork::base::StringTreeNode;
+using ork::base::Tree; // 即 ork::base::StringTreeNode
 using ork::base::TreeIO;
 using ork::base::CompactMode;
 
 // 1. 建立根節點
-auto player = StringTreeNode::CreateRoot(u8"Player");
+auto player = Tree::CreateRoot(u8"Player");
 player->SetData("英雄角色");
 
 // 2. 建立具名屬性 (AddChild 支援具名或無名)
@@ -152,4 +152,77 @@ auto hero = TreeIO::DeserializeFromString<HeroNode>(
 
 static_assert(std::is_same_v<decltype(hero), std::shared_ptr<HeroNode>>);
 assert(hero->role_title == "英雄角色");
+```
+
+---
+
+## 🔒 7. 整樹走訪安全範式與死鎖防禦指南 (Tree Traversal & Deadlock Prevention)
+
+OuroKore 的樹狀結構採用**「整棵樹（Root 與所有子孫節點）共享同一個讀寫鎖（`std::shared_mutex`）」**之架構，確保跨節點操作之原子性與跨樹獨立性。
+
+由於 `std::shared_mutex` 為**不可重入鎖（Non-recursive Mutex）**，在進行整樹或子樹遍歷時，必須誓死遵守以下黃金法則：
+
+### ⚠️ 高壓線禁忌：走訪期間「只能做資料存取，絕不能操作節點拓撲」
+
+> [!CAUTION]
+> **嚴禁在持讀鎖走訪期間調用節點拓撲修改介面！**
+> 在持共享讀鎖（`std::shared_lock`）的保護區塊內，若調用 `AddChild()`、`RemoveChild()`、`PushElement()`、`ClearChildren()`、`DetachFromParent()` 等會索取獨占寫鎖（`std::unique_lock`）的函式，**當前執行緒會立即引發不可重入的重複鎖死鎖（Deadlock）！**
+
+### 1. 標準整樹唯讀走訪（遞迴或深度走訪）
+只需在最外層 Root 節點取得一次樹級讀鎖，遞迴走訪整個階層期間零多餘加鎖開銷，且能 100% 保證拓撲結構不被其他執行緒篡改：
+
+```cpp
+// 走訪輔助函式（專職資料存取或純分析）
+void TraverseTreeData(const StringTreeNode::NodePtr &node) {
+    if (!node) return;
+    
+    // 讀取節點名稱與 Payload 資料（安全）
+    std::cout << "節點名稱: " << ork::utf8::to_string(node->GetName())
+              << ", 內容: " << node->GetData() << std::endl;
+              
+    // 走訪所有直接子節點（零加鎖，沿用外層讀鎖）
+    for (const auto &child : *node) {
+        TraverseTreeData(child);
+    }
+}
+
+// 呼叫端：在最外層持讀鎖保護整棵樹走訪
+void ReadTreeSafely(const StringTreeNode::NodePtr &root) {
+    std::shared_lock<std::shared_mutex> lock(root->GetTreeMutex());
+    TraverseTreeData(root);
+}
+
+// 呼叫端：由右向左（反向）走訪，直接使用 node->Reversed() 視圖糖衣（零拷貝）
+void ReadTreeReverseSafely(const StringTreeNode::NodePtr &root) {
+    std::shared_lock<std::shared_mutex> lock(root->GetTreeMutex());
+    for (const auto &child : root->Reversed()) {
+        if (child) {
+            std::cout << child->GetData() << std::endl;
+        }
+    }
+}
+```
+
+### 2. 邊走訪邊過濾並刪除節點之安全範式（兩階段延遲操作）
+若業務邏輯需要依據節點資料「動態移除或增修子節點」，**切勿在走訪迴圈中直接調用 `RemoveChild()`**！必須採用「**第一階段收集目標 -> 釋放讀鎖 -> 第二階段批次修改**」的兩階段安全範式：
+
+```cpp
+void PruneTreeSafely(const StringTreeNode::NodePtr &root) {
+    std::vector<StringTreeNode::NodePtr> to_remove;
+    
+    // 【第一階段：持讀鎖安全收集待刪除節點】
+    {
+        std::shared_lock<std::shared_mutex> lock(root->GetTreeMutex());
+        for (const auto &child : *root) {
+            if (child && child->GetData() == "過期項目") {
+                to_remove.push_back(child); // 僅收集指針，絕不在此調用 RemoveChild！
+            }
+        }
+    } // 讀鎖在此安全解構釋放！
+
+    // 【第二階段：無鎖或依需獲取寫鎖批次執行拓撲異動】
+    for (const auto &child : to_remove) {
+        root->RemoveChild(child); // 安全！內部獨占寫鎖不會與讀鎖衝突
+    }
+}
 ```

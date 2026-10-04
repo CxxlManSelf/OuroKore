@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <ranges>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -110,7 +111,7 @@ private:
  * 特性：
  * 1. 雙模態支援：支援具名字節點（Object）與 O(1) 循序陣列元素（Array）。
  * 2. 雙向三合一索引：保持插入順序的 list、O(1) 名稱尋址 map、O(1) 節點重排反向索引。
- * 3. 執行緒安全：採用 std::shared_mutex 提供多讀單寫（Shared/Unique Lock）機制。
+ * 3. 執行緒安全：採用整棵樹共享之 std::shared_mutex 提供多讀單寫（Shared/Unique Lock）機制。
  * 4. 防爆棧析構：整合安全非同步與顯式堆疊析構，杜絕巨深樹級聯析構爆棧。
  * 5. 全域 UTF-8：節點名稱強制使用 C++20 原生 std::u8string。
  */
@@ -133,23 +134,62 @@ protected:
   std::weak_ptr<D> m_parent;  ///< 父節點弱引用
   std::weak_ptr<D> m_self;    ///< 自身弱引用
 
-  // 執行緒安全鎖 (讀寫鎖)
-  mutable std::shared_mutex m_mutex;
+  // 執行緒安全鎖 (整棵樹共享同一個讀寫鎖)
+  mutable std::shared_ptr<std::shared_mutex> m_treeMutex;
+
+  void PropagateTreeMutex(const std::shared_ptr<std::shared_mutex> &mutex)
+  {
+    if (!mutex || m_treeMutex == mutex)
+    {
+      return;
+    }
+    m_treeMutex = mutex;
+    for (auto &elem : m_elements)
+    {
+      if (elem)
+      {
+        elem->PropagateTreeMutex(mutex);
+      }
+    }
+  }
 
   void SetParentAndSelf(const NodePtr &parent, const NodePtr &self)
   {
     m_parent = parent;
     m_self = self;
+    if (parent)
+    {
+      PropagateTreeMutex(parent->GetTreeMutexPtr());
+    }
   }
 
 public:
+  [[nodiscard]] std::shared_mutex &GetTreeMutex() const noexcept
+  {
+    if (!m_treeMutex)
+    {
+      m_treeMutex = std::make_shared<std::shared_mutex>();
+    }
+    return *m_treeMutex;
+  }
+
+  [[nodiscard]] std::shared_ptr<std::shared_mutex> GetTreeMutexPtr() const noexcept
+  {
+    if (!m_treeMutex)
+    {
+      m_treeMutex = std::make_shared<std::shared_mutex>();
+    }
+    return m_treeMutex;
+  }
+
   /**
-   * @brief 斷開與父節點的關聯
+   * @brief 斷開與父節點的關聯並自立為新樹（分配專屬共享鎖）
    */
   void DetachFromParent()
   {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     m_parent.reset();
+    PropagateTreeMutex(std::make_shared<std::shared_mutex>());
   }
 
   // 工廠方法：建構節點並掛載非同步防爆棧析構器
@@ -170,7 +210,8 @@ public:
 
 public:
   explicit TreeNodeBase(std::u8string name = u8"") :
-      m_name(std::move(name))
+      m_name(std::move(name)),
+      m_treeMutex(std::make_shared<std::shared_mutex>())
   {
   }
 
@@ -211,20 +252,20 @@ public:
   // --- 基本屬性 ---
   [[nodiscard]] std::u8string GetName() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_name;
   }
 
   void SetName(const std::u8string &name)
   {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     m_name = name;
   }
 
   // --- 形態判定 (資料驅動：m_elements.size() vs m_nameMap.size()) ---
   [[nodiscard]] bool IsArray() const noexcept
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.size() > m_nameMap.size();
   }
 
@@ -238,25 +279,25 @@ public:
   // 取得父節點與自身
   [[nodiscard]] NodePtr GetParent()
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_parent.lock();
   }
 
   [[nodiscard]] ConstNodePtr GetParent() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_parent.lock();
   }
 
   [[nodiscard]] NodePtr GetSelf()
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_self.lock();
   }
 
   [[nodiscard]] ConstNodePtr GetSelf() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_self.lock();
   }
 
@@ -266,32 +307,32 @@ public:
 
   [[nodiscard]] size_t ChildCount() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.size();
   }
 
   [[nodiscard]] size_t ElementCount() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.size();
   }
 
   [[nodiscard]] size_t Size() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.size();
   }
 
   [[nodiscard]] bool Empty() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.empty();
   }
 
   // 下標隨機存取 (O(1))
   [[nodiscard]] NodePtr GetElementAt(size_t index)
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     if (index < m_elements.size())
     {
       return m_elements[index];
@@ -301,7 +342,7 @@ public:
 
   [[nodiscard]] ConstNodePtr GetElementAt(size_t index) const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     if (index < m_elements.size())
     {
       return m_elements[index];
@@ -322,21 +363,21 @@ public:
   // 名稱尋址 (O(1))
   [[nodiscard]] NodePtr FindChildByName(const std::u8string &name)
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     auto it = m_nameMap.find(name);
     return (it != m_nameMap.end()) ? it->second : nullptr;
   }
 
   [[nodiscard]] ConstNodePtr FindChildByName(const std::u8string &name) const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     auto it = m_nameMap.find(name);
     return (it != m_nameMap.end()) ? it->second : nullptr;
   }
 
   [[nodiscard]] bool HasChild(const std::u8string &name) const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_nameMap.find(name) != m_nameMap.end();
   }
 
@@ -353,25 +394,25 @@ public:
   // 首尾存取 (O(1))
   [[nodiscard]] NodePtr GetFirstChild()
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.empty() ? nullptr : m_elements.front();
   }
 
   [[nodiscard]] ConstNodePtr GetFirstChild() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.empty() ? nullptr : m_elements.front();
   }
 
   [[nodiscard]] NodePtr GetLastChild()
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.empty() ? nullptr : m_elements.back();
   }
 
   [[nodiscard]] ConstNodePtr GetLastChild() const
   {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.empty() ? nullptr : m_elements.back();
   }
 
@@ -384,7 +425,7 @@ public:
    */
   NodePtr AddChild(const std::u8string &name = u8"")
   {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
     {
       return nullptr;  // 具名不可重複
@@ -396,6 +437,7 @@ public:
       return nullptr;
     }
 
+    new_child->PropagateTreeMutex(GetTreeMutexPtr());
     m_elements.push_back(new_child);
     if (!name.empty())
     {
@@ -403,8 +445,6 @@ public:
     }
 
     NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
     new_child->SetParentAndSelf(self_ptr, new_child);
     return new_child;
   }
@@ -421,7 +461,7 @@ public:
     {
       return nullptr;
     }
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
 
     auto it = std::find(m_elements.begin(), m_elements.end(), child_node);
     if (it == m_elements.end())
@@ -440,6 +480,7 @@ public:
       return nullptr;
     }
 
+    new_child->PropagateTreeMutex(GetTreeMutexPtr());
     m_elements.insert(it, new_child);
     if (!name.empty())
     {
@@ -447,8 +488,6 @@ public:
     }
 
     NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
     new_child->SetParentAndSelf(self_ptr, new_child);
     return new_child;
   }
@@ -459,7 +498,7 @@ public:
     {
       return nullptr;
     }
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
 
     auto it = std::find(m_elements.begin(), m_elements.end(), child_node);
     if (it == m_elements.end())
@@ -478,6 +517,7 @@ public:
       return nullptr;
     }
 
+    new_child->PropagateTreeMutex(GetTreeMutexPtr());
     m_elements.insert(it + 1, new_child);
     if (!name.empty())
     {
@@ -485,8 +525,6 @@ public:
     }
 
     NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
     new_child->SetParentAndSelf(self_ptr, new_child);
     return new_child;
   }
@@ -502,16 +540,15 @@ public:
     {
       return false;
     }
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
 
+    element->PropagateTreeMutex(GetTreeMutexPtr());
     m_elements.push_back(element);
-    if (!element->GetName().empty())
+    if (!element->m_name.empty())
     {
-      m_nameMap[element->GetName()] = element;
+      m_nameMap[element->m_name] = element;
     }
     NodePtr self_ptr = m_self.lock();
-    lock.unlock();
-
     element->SetParentAndSelf(self_ptr, element);
     return true;
   }
@@ -522,7 +559,7 @@ public:
 
   bool RemoveElementAt(size_t index)
   {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     if (index >= m_elements.size())
     {
       return false;
@@ -530,16 +567,15 @@ public:
 
     NodePtr elem = m_elements[index];
     m_elements.erase(m_elements.begin() + index);
-    if (elem && !elem->GetName().empty())
+    if (elem && !elem->m_name.empty())
     {
-      m_nameMap.erase(elem->GetName());
+      m_nameMap.erase(elem->m_name);
     }
-    lock.unlock();
 
     if (elem)
     {
-      std::unique_lock<std::shared_mutex> elem_lock(elem->m_mutex);
       elem->m_parent.reset();
+      elem->PropagateTreeMutex(std::make_shared<std::shared_mutex>());
     }
     return true;
   }
@@ -550,7 +586,7 @@ public:
     {
       return false;
     }
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
 
     auto it = std::find(m_elements.begin(), m_elements.end(), child);
     if (it == m_elements.end())
@@ -558,42 +594,56 @@ public:
       return false;
     }
 
-    if (!child->GetName().empty())
+    if (!child->m_name.empty())
     {
-      m_nameMap.erase(child->GetName());
+      m_nameMap.erase(child->m_name);
     }
     m_elements.erase(it);
-    lock.unlock();
 
-    std::unique_lock<std::shared_mutex> child_lock(child->m_mutex);
     child->m_parent.reset();
+    child->PropagateTreeMutex(std::make_shared<std::shared_mutex>());
     return true;
   }
 
   bool RemoveChildByName(const std::u8string &name)
   {
-    NodePtr child = FindChildByName(name);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+    auto it = m_nameMap.find(name);
+    if (it == m_nameMap.end())
+    {
+      return false;
+    }
+
+    NodePtr child = it->second;
+    m_nameMap.erase(it);
+
+    auto elem_it = std::find(m_elements.begin(), m_elements.end(), child);
+    if (elem_it != m_elements.end())
+    {
+      m_elements.erase(elem_it);
+    }
+
     if (child)
     {
-      return RemoveChild(child);
+      child->m_parent.reset();
+      child->PropagateTreeMutex(std::make_shared<std::shared_mutex>());
     }
-    return false;
+    return true;
   }
 
   void ClearChildren()
   {
-    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     std::vector<NodePtr> copy = std::move(m_elements);
     m_elements.clear();
     m_nameMap.clear();
-    lock.unlock();
 
     for (auto &child : copy)
     {
       if (child)
       {
-        std::unique_lock<std::shared_mutex> child_lock(child->m_mutex);
         child->m_parent.reset();
+        child->PropagateTreeMutex(std::make_shared<std::shared_mutex>());
       }
     }
   }
@@ -603,45 +653,9 @@ public:
     ClearChildren();
   }
 
-  // =========================================================================
-  // 走訪方法
-  // =========================================================================
 
-  void ForEachChild(const std::function<void(const NodePtr &)> &callback)
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    std::vector<NodePtr> copy = m_elements;
-    lock.unlock();
 
-    for (const auto &child : copy)
-    {
-      callback(child);
-    }
-  }
-
-  void ForEachChild(const std::function<void(const ConstNodePtr &)> &callback) const
-  {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    std::vector<NodePtr> copy = m_elements;
-    lock.unlock();
-
-    for (const auto &child : copy)
-    {
-      callback(child);
-    }
-  }
-
-  void ForEachElement(const std::function<void(const NodePtr &)> &callback)
-  {
-    ForEachChild(callback);
-  }
-
-  void ForEachElement(const std::function<void(const ConstNodePtr &)> &callback) const
-  {
-    ForEachChild(callback);
-  }
-
-  // 迭代器
+  // 迭代器與反向視圖
   auto begin() { return m_elements.begin(); }
   auto end() { return m_elements.end(); }
   auto begin() const { return m_elements.begin(); }
@@ -650,6 +664,19 @@ public:
   auto rend() { return m_elements.rend(); }
   auto rbegin() const { return m_elements.rbegin(); }
   auto rend() const { return m_elements.rend(); }
+
+  /**
+   * @brief 反向走訪視圖糖衣方法 (支援 for (const auto &child : node->Reversed()))
+   */
+  [[nodiscard]] auto Reversed() noexcept
+  {
+    return std::ranges::subrange(m_elements.rbegin(), m_elements.rend());
+  }
+
+  [[nodiscard]] auto Reversed() const noexcept
+  {
+    return std::ranges::subrange(m_elements.rbegin(), m_elements.rend());
+  }
 };
 
 /**

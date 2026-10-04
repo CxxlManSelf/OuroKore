@@ -414,6 +414,29 @@ auto custom_hero = TreeIO::DeserializeFromString<CustomHeroNode>(
 );
 static_assert(std::is_same_v<decltype(custom_hero), std::shared_ptr<CustomHeroNode>>);
 assert(custom_hero->title == "英雄角色");
+
+// 7. 🛡️ 執行緒安全整樹走訪與反向走訪（關鍵鐵律：走訪期間只能讀取資料，嚴禁操作節點！）
+{
+    // 整棵樹所有節點共享同一個讀寫鎖，外層只需持讀鎖一次即可保護整棵子樹
+    std::shared_lock<std::shared_mutex> lock(player->GetTreeMutex());
+
+    // 正向走訪（由左向右）：使用標準 STL Range-for 零拷貝遍歷
+    for (const auto &child : *player) {
+        if (child) {
+            std::cout << "節點: " << ork::utf8::to_string(child->GetName())
+                      << ", 資料: " << child->GetData() << std::endl;
+        }
+    }
+
+    // 反向走訪（由右向左）：直接使用 node->Reversed() 視圖糖衣（零拷貝）
+    for (const auto &child : player->Reversed()) {
+        if (child) {
+            std::cout << "反向節點: " << child->GetData() << std::endl;
+        }
+    }
+    // ⚠️ 嚴禁在持讀鎖期間調用 player->RemoveChild(...) 或 AddChild(...)！
+    // 若需依條件刪除節點，必須先收集指標，待讀鎖釋放後再批次呼叫 RemoveChild。
+}
 ```
 
 ---
@@ -454,6 +477,7 @@ assert(custom_hero->title == "英雄角色");
    * 存取下標 `operator[](size_t)` 與鍵名 `operator[](u8string_view)` 100% 互通，均享有 $O(1)$ 時間複雜度。
    * 結構形態自動由資料驅動判定：只要包含無名子節點即視為陣列（輸出為 `()`），全為具名鍵值則視為物件（輸出為 `{}`）。
    * 序列化支援 3 種緊湊模式：`CompactMode::None`（預設，格式化縮排換行）、`CompactMode::WithEqual`（保留 `=` 緊湊）、`CompactMode::WithoutEqual`（無 `=` 極致緊湊）。DSL 狀態機對 3 種格式均具備 100% 雙向反序列化相容性，並原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾（即使註解內部包含引號或括號界定符亦可安全略過）。
+   * **整樹共享讀寫鎖與走訪死鎖防禦鐵律**：整棵樹（Root 與所有子孫節點）共享同一個 `std::shared_mutex`，節點脫離時自立分配新鎖。**呼叫端在持讀鎖走訪期間「只能進行純資料使用，絕對禁止操作節點拓撲（Add/Remove/Clear/Detach）」**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）；動態刪除需求必須採用「先收集指針、釋放讀鎖後再批次修改」的兩階段安全範式。
    * **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化 handler 支援 `(string) -> Data` 值轉換與 `(shared_ptr<NodeType>, string) -> void` 就地賦值兩種模式，徹底實現零樣板、強型別安全的領域樹模型。
 
 ---

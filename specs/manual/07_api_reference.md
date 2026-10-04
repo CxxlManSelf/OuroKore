@@ -169,8 +169,8 @@
     * `NodePtr InsertBefore(child, name)` / `NodePtr InsertAfter(child, name)`：指定位置插入子節點。
     * `bool RemoveElementAt(index)` / `bool RemoveChild(child)` / `bool RemoveChildByName(name)`：移除子節點。
     * `void ClearChildren()` / `ClearElements()`：清空所有子項目。
-    * `void ForEachChild(...)` / `void ForEachElement(...)`：安全快照走訪所有子項目。
-    * `DetachFromParent()`：安全斷開與父節點之雙向弱關聯。
+    * `auto begin() / end()` / `rbegin() / rend()` / `Reversed()` / `GetTreeMutex()`：支援配合樹級讀寫鎖進行標準 STL 迭代器與 range-for 安全走訪（支援 `for (auto &c : node->Reversed())` 零成本反向視圖）。⚠️ **關鍵防禦鐵律**：走訪期間僅供純資料使用（`GetData` / `GetName`），**絕對禁止在此期間執行節點拓撲修改（如 `AddChild` / `RemoveChild`）**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）！
+    * `DetachFromParent()`：安全斷開與父節點之雙向弱關聯並自立為新樹（配發專屬獨立鎖）。
   * **具體節點 `TreeNode<T>`（`StringTreeNode` 預設 `T = std::string`）**：
     * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：安全存取節點資料（受資料讀寫鎖保護）。
   * **文字 DSL 串流工具 `TreeIO`**：

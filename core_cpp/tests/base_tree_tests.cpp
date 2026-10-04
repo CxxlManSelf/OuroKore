@@ -55,7 +55,7 @@ void TestBasicTreeOperations()
 
 void TestArrayOperations()
 {
-  std::cout << "[測試 2] 陣列形態與 O(1) 隨機下標存取測試..." << std::endl;
+  std::cout << "[測試 4] 陣列形態與 O(1) 隨機下標存取測試..." << std::endl;
 
   auto array_node = StringTreeNode::CreateArray(u8"Inventory");
   assert(array_node->ElementCount() == 0);
@@ -78,15 +78,39 @@ void TestArrayOperations()
   assert((*array_node)[1]->GetData() == "魔法卷軸");
   assert((*array_node)[2]->GetData() == "雙手大劍");
 
-  // 測試遍歷走訪
+  // 測試遍歷走訪（使用 GetTreeMutex 讀鎖搭配標準 STL range-for）
   std::vector<std::string> collected;
-  array_node->ForEachElement([&collected](const auto &elem) {
-    collected.push_back(elem->GetData());
-  });
+  {
+    std::shared_lock<std::shared_mutex> lock(array_node->GetTreeMutex());
+    for (const auto &elem : *array_node)
+    {
+      if (elem)
+      {
+        collected.push_back(elem->GetData());
+      }
+    }
+  }
   assert(collected.size() == 3);
   assert(collected[0] == "草藥");
   assert(collected[1] == "魔法卷軸");
   assert(collected[2] == "雙手大劍");
+
+  // 測試反向走訪（使用 node->Reversed() 視圖糖衣）
+  std::vector<std::string> rev_collected;
+  {
+    std::shared_lock<std::shared_mutex> lock(array_node->GetTreeMutex());
+    for (const auto &elem : array_node->Reversed())
+    {
+      if (elem)
+      {
+        rev_collected.push_back(elem->GetData());
+      }
+    }
+  }
+  assert(rev_collected.size() == 3);
+  assert(rev_collected[0] == "雙手大劍");
+  assert(rev_collected[1] == "魔法卷軸");
+  assert(rev_collected[2] == "草藥");
 
   // 測試下標移除
   assert(array_node->RemoveElementAt(1));
@@ -99,7 +123,7 @@ void TestArrayOperations()
 
 void TestTreeIOSerialization()
 {
-  std::cout << "[測試 3] TreeIO 序列化與反序列化測試（含物件與陣列）..." << std::endl;
+  std::cout << "[測試 5] TreeIO 序列化與反序列化測試（含物件與陣列）..." << std::endl;
 
   auto player = StringTreeNode::CreateRoot(u8"Player");
   player->SetData("英雄角色");
@@ -176,7 +200,7 @@ void TestTreeIOSerialization()
 
 void TestFaultTolerantFSM()
 {
-  std::cout << "[測試 4] 寬容型狀態機過濾雜訊與非法字元測試..." << std::endl;
+  std::cout << "[測試 6] 寬容型狀態機過濾雜訊與非法字元測試..." << std::endl;
 
   // 測試包含任意雜訊、多餘引號、多餘節點名、無效符號，以及包含 DSL 界定符的各類註解文字
   std::string messy_dsl = R"(
@@ -233,9 +257,9 @@ void TestFaultTolerantFSM()
 
 void TestBinaryAndEscapeHandling()
 {
-  std::cout << "[測試 5] 0~255 二進位位元組與脫字元安全測試..." << std::endl;
+  std::cout << "[測試 7] 0~255 二進位位元組與脫字元安全測試..." << std::endl;
 
-  auto root = StringTreeNode::CreateRoot(u8"Special\\]Node");
+  auto root = StringTreeNode::CreateRoot(u8"Special]Node");
   // 建立包含引號、反斜線、換行與 0x00 空字元的 Payload
   std::string binary_data = "Line1\nLine2\t\"Quotes\"\\\\Path\\to\\file";
   binary_data.push_back('\0');
@@ -259,7 +283,7 @@ void TestBinaryAndEscapeHandling()
 
 void TestConcurrencySafety()
 {
-  std::cout << "[測試 6] 多執行緒並發讀寫鎖安全測試..." << std::endl;
+  std::cout << "[測試 3] 多執行緒並發讀寫鎖安全測試..." << std::endl;
 
   auto root = StringTreeNode::CreateRoot(u8"SharedRoot");
   for (int i = 0; i < 50; ++i)
@@ -314,7 +338,7 @@ void TestConcurrencySafety()
 
 void TestDeepTreeDestruction()
 {
-  std::cout << "[測試 7] 深層階層非同步防爆棧析構測試..." << std::endl;
+  std::cout << "[測試 8] 深層階層非同步防爆棧析構測試..." << std::endl;
 
   {
     auto root = StringTreeNode::CreateRoot(u8"DeepRoot");
@@ -333,7 +357,7 @@ void TestDeepTreeDestruction()
 
 void TestUnifiedDualMode()
 {
-  std::cout << "[測試 8] 單一容器雙模態統合、互通性與形態自動推導測試..." << std::endl;
+  std::cout << "[測試 9] 單一容器雙模態統合、互通性與形態自動推導測試..." << std::endl;
 
   auto hero = StringTreeNode::CreateRoot(u8"Hero");
   assert(hero->IsObject());  // 空容器預設為 Object
@@ -403,7 +427,7 @@ public:
 
 void TestCustomCRTPNode()
 {
-  std::cout << "[測試 9] 自定義 CRTP 節點延伸類別替換與 TreeIO 序列化/反序列化測試..." << std::endl;
+  std::cout << "[測試 10] 自定義 CRTP 節點延伸類別替換與 TreeIO 序列化/反序列化測試..." << std::endl;
 
   // 1. 應用端使用自定義節點建立樹
   auto hero = CustomEntityNode::CreateRoot(u8"CustomHero");
@@ -505,6 +529,43 @@ void TestCustomCRTPNode()
   std::cout << " -> 通過！" << std::endl;
 }
 
+void TestTreeSharedMutex()
+{
+  std::cout << "[測試 2] 樹級讀寫鎖共享機制與跨樹獨立性測試..." << std::endl;
+
+  auto root = StringTreeNode::CreateRoot(u8"TreeRoot");
+  assert(root->GetTreeMutexPtr() != nullptr);
+
+  // 1. 建立子節點，驗證鎖被繼承與共享
+  auto child1 = root->AddChild(u8"Child1");
+  auto child2 = root->AddChild(u8"Child2");
+  auto grandchild = child1->AddChild(u8"GrandChild");
+
+  assert(child1->GetTreeMutexPtr() == root->GetTreeMutexPtr());
+  assert(child2->GetTreeMutexPtr() == root->GetTreeMutexPtr());
+  assert(grandchild->GetTreeMutexPtr() == root->GetTreeMutexPtr());
+
+  // 2. 獨立子樹掛載測試
+  auto standalone = StringTreeNode::MakeNode(u8"Standalone");
+  auto subchild = standalone->AddChild(u8"SubChild");
+  assert(standalone->GetTreeMutexPtr() != root->GetTreeMutexPtr());
+  assert(standalone->GetTreeMutexPtr() == subchild->GetTreeMutexPtr());
+
+  root->PushElement(standalone);
+  assert(standalone->GetTreeMutexPtr() == root->GetTreeMutexPtr());
+  assert(subchild->GetTreeMutexPtr() == root->GetTreeMutexPtr());
+
+  // 3. 節點移除自立新鎖測試
+  assert(root->RemoveChild(child2));
+  assert(child2->GetTreeMutexPtr() != root->GetTreeMutexPtr());
+
+  // 4. Detach 自立新鎖測試
+  grandchild->DetachFromParent();
+  assert(grandchild->GetTreeMutexPtr() != root->GetTreeMutexPtr());
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
 int main()
 {
   std::cout << "========================================" << std::endl;
@@ -512,17 +573,18 @@ int main()
   std::cout << "========================================" << std::endl;
 
   TestBasicTreeOperations();
+  TestTreeSharedMutex();
+  TestConcurrencySafety();
   TestArrayOperations();
   TestTreeIOSerialization();
   TestFaultTolerantFSM();
   TestBinaryAndEscapeHandling();
-  TestConcurrencySafety();
   TestDeepTreeDestruction();
   TestUnifiedDualMode();
   TestCustomCRTPNode();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 9 項單元測試 100% 成功通過！    " << std::endl;
+  std::cout << "  全數 10 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;
