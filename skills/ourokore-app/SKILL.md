@@ -43,6 +43,8 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
      只要先前產生的物件仍有存活，隨時可透過 `if (auto locked = weak_lib.lock())` 零開銷重獲強引用（無須重新調用作業系統 LoadLibrary）；當所有物件解構後，DLL 自動安全卸載，弱引用安全過期（`weak_lib.expired() == true`，`lock()` 安全傳回無效實例）。
    - 🪙 **純生命週期存活權杖 (Pure Lifetime Token Invariant)**：
      若外掛內部為複雜樹狀結構（如 `TreeNodeBase` 百萬節點群）、容器群或非同步任務，不便或無需綁定單一實體物件裸指標時，可透過 `auto token = lib.create_lifetime_token();` 產生型別擦除之純存活權杖（`std::shared_ptr<const void>`）。整棵樹的所有節點均可共同持有此 Token，只要全宇宙尚有任一節點存活，DLL 便絕不被物理卸載；最後一個節點解構時 Token 計數歸零觸發自動卸載。
+   - 🤝 **非同步善後握手卸載協定 (Async Shutdown Handshake)**：
+     主程式發起外掛關閉（`reset()` 或釋放引用）後，主程式執行緒**0ms 立即返回繼續運作，絕不卡頓**；外掛於背景執行冗長善後（資料落盤、關閉網路、釋放大型 GPU/快取資源），完成後呼叫 `on_ready_to_unload()` 握手通知 DynamicLibrary 背景等待線程被喚醒，確認外掛徹底停工後才呼叫 `FreeLibrary` 物理卸載 DLL，兼顧主程式極致流暢與外掛安全收尾！
    - 🔔 **物理卸載完成通知回呼 (Post-Unload Hook)**：
      宿主可透過 `lib.add_post_unload_hook(cb)` 註冊在 DLL 物理卸載（`FreeLibrary` / `dlclose`）完成後執行的通知回呼，零輪詢被動接收「外掛已完全死透、資源已全數釋放」事件。
    - 🛡️ **非同步離棧延遲卸載防護 (Deferred Stack-Decoupled Unload)**：
@@ -564,6 +566,7 @@ void ConcurrencyCookbook() {
    * **弱引用重獲保證 (WeakDynamicLibrary)**：主程式在呼叫 `reset()` 放棄持有前，可透過 `lib.to_weak()` 保留弱引用觀察者。日後需要再次存取符號或建立物件時，呼叫 `lock()` 即可安全晉升重獲強引用；若所有物件已釋放，DLL 自動卸載，弱引用安全過期（`expired() == true`）。
    * 🛡️ **受管物件 Payload 銷毀即刻解錨（墓碑零阻礙）**：綁定至受管物件的動態庫會在物件 Payload 實體物理解構完成時立即由核心釋放引用，弱引用句柄（UnboundHandle）的長存墓碑絕不阻礙動態庫及時卸載。
    * 🪙 **純存活權杖與多節點共生 (create_lifetime_token)**：樹狀結構（百萬節點）或無單一裸指標時，透過 `create_lifetime_token()` 產生純權杖，任意節點存活皆保證 DLL 代碼段存活，全數死透自動卸載。
+   * 🤝 **非同步善後握手協定 (Async Shutdown Handshake)**：外掛若有冗長善後（磁碟落盤、關閉連線、釋放大型 GPU 資源），應透過 `add_async_cleanup_hook` 或 `register_async_shutdown_symbol` 註冊。主程式呼叫 `reset()` 後**0ms 立即返回繼續運作（零卡頓）**；外掛於背景執行善後完畢後調用 `on_ready()` 握手通知 DynamicLibrary 背景等待線程被喚醒，確認外掛停工後才呼叫 `FreeLibrary` 物理卸載 DLL。
    * 🔔 **後置卸載通知與離棧保護 (add_post_unload_hook & enable_deferred_unload)**：可透過 `add_post_unload_hook` 註冊物理卸載完成通知；開啟 `enable_deferred_unload(true)` 可將卸載移交分離執行緒，徹底杜絕外掛自解構呼叫棧崩潰 (Self-Unload Stack Trap)。
    * 🔄 **多重載入快取分辨與單次啟始/收尾保證 (Single-Execution Lifecycle Invariant)**：
      - 當進程內不同子系統多次請求載入同一動態庫時，`DynamicLibrary` 內部透過規範化路徑快取共享控制區塊。

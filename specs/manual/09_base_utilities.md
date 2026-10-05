@@ -76,24 +76,31 @@ if (lib.is_loaded()) {
 為了在動態庫生命週期走向終結時進行安全清理與狀態通知，`DynamicLibrary` 提供了兩階段、不同時機的卸載掛鉤：
 
 ```
-引用計數歸零 (1 -> 0)
-         │
-         ▼
-[ 第一階段：Pre-Unload 收尾 ] ─── 執行 add_cleanup_hook / register_shutdown_symbol
-         │                       (⚠️ 此刻 DLL 程式碼段與 vtable 依然完整有效，LIFO 倒序執行)
-         ▼
-[ 作業系統物理卸載 ] ──────────── FreeLibrary (Windows) / dlclose (POSIX)
-         │                       (DLL 代碼段已完全從進程記憶體中移除)
-         ▼
-[ 第二階段：Post-Unload 通知 ] ── 執行 add_post_unload_hook
-                                 (⚠️ 代碼段已死，不可呼叫 DLL 函式！純用於通知宿主更新狀態)
+主程式執行緒 (Main Thread)        DynamicLibrary 背景等待執行緒         外掛 DLL (Plugin)
+        │                                  │                                   │
+  1. 釋放最後引用 (如 lib.reset())         │                                   │
+        │ ── 觸發卸載 (非同步交棒) ───────> │                                   │
+  2. 立即返回繼續主程式工作！              │ ── 調用非同步善後函式 ──────────> │ 3. 執行冗長善後...
+     (主程式 0ms 延遲、完全零卡頓)          │    (附帶 on_ready_to_unload 回呼) │    - 快取與資料落盤
+        │                                  │                                   │    - 釋放 GPU/緩衝區
+        │                                  │ ── 背景阻塞等待握手通知 ────      │    - 關閉連線或背景執行緒
+        │                                  │                            │      │
+        │                                  │ <── 呼叫 on_ready_to_unload() ────│ 4. 善後徹底完畢！
+        │                                  │     (握手喚醒背景線程)            │    (外掛不再執行任何代碼)
+        │                                  │                                  
+        │                                  │ 5. 收到確認，呼叫 FreeLibrary() 物理卸載 DLL
+        │                                  │ 6. 觸發 post_unload_hooks 通知主程式
 ```
 
-#### 1. 第一階段：卸載前收尾 (Pre-Unload Hook)
-* **`add_cleanup_hook(std::function<void()> hook)`**：註冊在動態庫引用計數徹底歸零、作業系統執行 `FreeLibrary` 之前執行的收尾回呼。
-  * **保證**：執行時動態庫的實體程式碼段與虛擬函式表（vtable）100% 有效。
-  * **順序**：多個 hook 依照先進後出（LIFO）順序逆向執行。
-* **`register_shutdown_symbol(std::string_view symbol_name)`**：依據符號名稱自動解析 `void()` 函式並註冊為收尾回呼（例如 `"PluginShutdown"`）。
+#### 1. 第一階段：卸載前收尾與非同步握手協定 (Pre-Unload & Async Handshake)
+* **同步收尾：`add_cleanup_hook(std::function<void()> hook)`**：註冊在動態庫卸載前執行的同步收尾回呼（保證代碼段與 vtable 依然完整有效，LIFO 順序執行）。
+* **同步符號：`register_shutdown_symbol(std::string_view symbol_name)`**：依據符號名稱自動註冊無參 `void()` 函式為收尾回呼。
+* 🌟 **非同步握手收尾：`add_async_cleanup_hook(AsyncCleanupHook hook)`**：
+  * **設計目的**：解決外掛 shutdown 冗長善後導致主程式卡頓問題。
+  * **握手運作**：主程式觸發卸載後**立即返回繼續運行（0ms 延遲）**；`DynamicLibrary` 在背景等待執行緒中調用 hook，外掛在完成所有耗時工作後主動呼叫傳入的 `on_ready_to_unload()`。背景執行緒收到通知被喚醒後，才執行 `FreeLibrary` 物理卸載 DLL！
+* 🌟 **純 C 非同步符號：`register_async_shutdown_symbol(std::string_view symbol_name)`**：
+  * 支援跨語言 C ABI：外掛導出 `void PluginAsyncShutdown(void (*on_ready)(void*), void* user_data)`。
+* **逾時保護：`set_async_shutdown_timeout(std::chrono::milliseconds timeout)`**：設定非同步善後最大等待逾時（預設 30 秒），防範外掛死鎖。
 
 #### 2. 第二階段：卸載完成通知 (Post-Unload Hook)
 * **`add_post_unload_hook(std::function<void()> hook)`**：註冊在動態庫完成作業系統物理卸載後執行的通知回呼。
@@ -103,13 +110,27 @@ if (lib.is_loaded()) {
 ```cpp
 auto lib = ork::DynamicLibrary::load("plugins/render_system.dll");
 
-// 1. 註冊卸載前收尾：允許呼叫外掛函式清理全域資源
+// 1. 【同步模式】註冊卸載前收尾：在 FreeLibrary 前同步清理
 lib.add_cleanup_hook([]() {
     std::cout << "[Pre-Unload] 正在清理外掛內部 GPU 緩衝區..." << std::endl;
 });
 lib.register_shutdown_symbol("RenderShutdown");
 
-// 2. 註冊卸載後通知：僅更新宿主狀態，絕不碰觸外掛代碼
+// 2. 🌟【非同步握手模式】註冊非同步善後（主程式 0ms 立即返回，外掛背景耗時善後完畢後握手卸載）
+lib.add_async_cleanup_hook([](ork::DynamicLibrary::ReadyToUnloadCallback on_ready) {
+    std::thread([on_ready = std::move(on_ready)]() {
+        std::cout << "[外掛背景] 正在非同步落盤大型存檔與中斷網絡...
+";
+        std::this_thread::sleep_for(std::chrono::milliseconds(200)); // 耗時善後
+        std::cout << "[外掛背景] 善後全數完畢！通知 DynamicLibrary 可以 FreeLibrary 了。
+";
+        
+        // 握手確認：外掛保證絕不再執行任何代碼，喚醒卸載等待線程
+        on_ready();
+    }).detach();
+});
+
+// 3. 註冊卸載後通知：僅更新宿主狀態，絕不碰觸外掛代碼
 lib.add_post_unload_hook([]() {
     std::cout << "[Post-Unload] 渲染插件已完全從記憶體卸載！宿主切換為軟體渲染模式。" << std::endl;
 });

@@ -507,6 +507,72 @@ int main(int argc, char *argv[])
     std::cout << "  ✅ 非同步離棧延遲卸載與後置通知成功完成，100% 杜絕呼叫棧自毀崩潰！" << std::endl;
   }
 
+  // 13. 測試：核心驗證 —— 外掛非同步善後握手協定 (Async Shutdown Handshake)
+  // 驗證流程：
+  // 1. 主程式觸發 shutdown（如 reset 放棄持有），主程式線程立即返回（零卡頓、不等待）。
+  // 2. 外掛在背景執行冗長的善後工作（例如落盤、資源釋放）。善後期間 DLL 絕不被提前卸載。
+  // 3. 外掛善後徹底結束後，呼叫 on_ready_to_unload()。
+  // 4. DynamicLibrary 的背景等待線程被通知喚醒，安全呼叫 FreeLibrary() 卸載 DLL 並觸發 post_unload_hook！
+  {
+    std::cout << "[Test 13] 核心驗證：外掛非同步善後握手協定 (Async Shutdown Handshake)..." << std::endl;
+    auto lib = ork::DynamicLibrary::load(plugin_path);
+    assert(lib.is_loaded());
+    auto weak_lib = lib.to_weak();
+
+    std::atomic<bool> plugin_cleanup_started{false};
+    std::atomic<bool> plugin_cleanup_finished{false};
+    std::atomic<bool> host_post_unload_called{false};
+
+    // 註冊非同步善後收尾 hook
+    lib.add_async_cleanup_hook([&](ork::DynamicLibrary::ReadyToUnloadCallback on_ready) {
+      plugin_cleanup_started.store(true);
+      // 外掛在自己的背景執行緒中進行冗長善後（如寫入快取、磁碟落盤、網路中斷等）
+      std::thread([on_ready = std::move(on_ready), &plugin_cleanup_finished]() mutable {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 模擬耗時善後 50ms
+        plugin_cleanup_finished.store(true);
+        // 善後徹底完畢，外掛確認絕不再執行任何代碼，非同步通知 DynamicLibrary 可以卸載！
+        on_ready();
+      }).detach();
+    });
+
+    // 註冊卸載完成後置通知
+    lib.add_post_unload_hook([&]() {
+      host_post_unload_called.store(true);
+    });
+
+    auto start_time = std::chrono::steady_clock::now();
+
+    // 關鍵時刻：主程式觸發卸載（釋放強引用）
+    std::cout << "  -> 主程式釋放引用句柄 lib.reset()..." << std::endl;
+    lib.reset();
+
+    // 💡 關鍵驗證 1：主程式線程完全不被阻塞，立即返回！耗時應遠小於外掛善後的 50ms
+    auto return_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start_time).count();
+    std::cout << "  -> 主程式立即返回！耗時: " << return_duration << " ms（主程式零卡頓！）" << std::endl;
+    assert(return_duration < 30); // 主程式未等待外掛善後
+
+    // 💡 關鍵驗證 2：外掛善後進行期間，DLL 絕未被提前卸載（依然存活中）
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    assert(plugin_cleanup_started.load() == true);
+    assert(host_post_unload_called.load() == false);
+    assert(!weak_lib.expired()); // 握手完成前，DLL 絕不可提前卸載！
+
+    // 等待外掛善後完成與 DynamicLibrary 喚醒卸載
+    int wait_cycles = 0;
+    while (!host_post_unload_called.load() && wait_cycles < 100)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      wait_cycles++;
+    }
+
+    // 💡 關鍵驗證 3：外掛善後已徹底完成，且 DLL 在收到通知後才被物理卸載
+    assert(plugin_cleanup_finished.load() == true);
+    assert(host_post_unload_called.load() == true);
+    assert(weak_lib.expired());
+    std::cout << "  ✅ [PASS] 外掛非同步善後徹底完成後通知 DynamicLibrary，DLL 安全卸載，握手全流程成功！" << std::endl;
+  }
+
   std::cout << "============================================================" << std::endl;
   std::cout << "🎉 恭喜！DynamicLibrary 所有單元測試全部 PASS！" << std::endl;
   std::cout << "============================================================" << std::endl;

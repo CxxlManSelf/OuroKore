@@ -234,8 +234,11 @@ public:
    */
   [[nodiscard]] bool is_first_loaded() const noexcept;
 
+  using ReadyToUnloadCallback = std::function<void()>;
+  using AsyncCleanupHook = std::function<void(ReadyToUnloadCallback on_ready_to_unload)>;
+
   /**
-   * @brief 註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的收尾回呼 (Pre-Unload Hook)
+   * @brief 註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的同步收尾回呼 (Pre-Unload Hook)
    *
    * 所有透過此函式註冊的收尾回呼，將嚴格保證在動態庫引用計數徹底歸零（1 -> 0）、
    * 且在動態庫代碼段解除映射之前，依反向順序 (LIFO) 執行。
@@ -244,6 +247,20 @@ public:
    * @param hook 收尾回呼閉包
    */
   void add_cleanup_hook(std::function<void()> hook);
+
+  /**
+   * @brief 註冊非同步善後收尾回呼 (Async Cleanup Hook with Handshake)
+   *
+   * 【非同步善後握手協定 (Async Shutdown Handshake)】
+   * 主程式非同步觸發外掛 shutdown 後立即返回繼續工作（主程式零卡頓、不等待）。
+   * 外掛在背景執行其冗長的善後工作（資料落盤、關閉網路、釋放大型 GPU/快取資源）後，
+   * 呼叫傳入的 on_ready_to_unload 回呼。此時外掛保證不再執行任何代碼，
+   * DynamicLibrary 的背景等待執行緒收到通知被喚醒，執行 FreeLibrary 物理卸載 DLL，
+   * 並觸發 post_unload_hooks 通知主程式。
+   *
+   * @param hook 接受 ReadyToUnloadCallback 的非同步收尾函式
+   */
+  void add_async_cleanup_hook(AsyncCleanupHook hook);
 
   /**
    * @brief 註冊在動態函式庫卸載（FreeLibrary / dlclose）完成後執行的通知回呼 (Post-Unload Hook)
@@ -279,12 +296,28 @@ public:
   [[nodiscard]] bool is_deferred_unload_enabled() const noexcept;
 
   /**
-   * @brief 依據符號名稱自動註冊無參數收尾函式（void()）為卸載前回呼
+   * @brief 設定非同步善後最大等待逾時時間（防範不良外掛無限期卡住未通知）
+   * @param timeout 逾時時間，若為 0 則表示無限等待
+   */
+  void set_async_shutdown_timeout(std::chrono::milliseconds timeout) noexcept;
+
+  /**
+   * @brief 依據符號名稱自動註冊無參數同步收尾函式（void()）為卸載前回呼
    *
    * @param symbol_name 收尾函式符號名稱（例如 "ork_plugin_shutdown"）
    * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
    */
   bool register_shutdown_symbol(std::string_view symbol_name);
+
+  /**
+   * @brief 依據符號名稱自動註冊純 C 簽章的非同步收尾函式
+   *
+   * 符號簽章需為：void (*)(void (*on_ready_cb)(void *user_data), void *user_data)
+   *
+   * @param symbol_name 非同步收尾符號名稱（例如 "ork_plugin_async_shutdown"）
+   * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
+   */
+  bool register_async_shutdown_symbol(std::string_view symbol_name);
 
   /**
    * @brief 僅在首次載入（0 -> 1）時執行指定的符號初始化函式

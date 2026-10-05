@@ -102,7 +102,10 @@
   * `std::shared_ptr<const void> create_lifetime_token() const noexcept`：產生純生命週期存活權杖（Pure Lifetime Token），無須綁定單一裸指標，任何容器、樹狀結構（如整棵樹的所有節點）或非同步任務均可共享持有，只要任一節點存活即保證 DLL 絕對不被物理卸載。
   * `static std::filesystem::path format_filename(std::string_view base_name)`：依作業系統格式化動態庫檔名（Windows `.dll`、Linux `.so`、macOS `.dylib`）。
   * `bool is_first_loaded() const noexcept`：查詢本次 `load()` 取得的實例是否為動態庫於進程中的首次載入（0 -> 1）。若為 false 代表先前已由其他模組載入並存活中。
-  * `void add_cleanup_hook(std::function<void()> hook)`：註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的收尾回呼（Pre-Unload Hook）。保證在代碼段解除映射前依反向順序 (LIFO) 執行。
+  * `void add_cleanup_hook(std::function<void()> hook)`：註冊在動態函式庫卸載前執行的同步收尾回呼（Pre-Unload Hook）。保證在代碼段解除映射前依反向順序 (LIFO) 執行。
+  * `void add_async_cleanup_hook(AsyncCleanupHook hook)`：註冊非同步善後收尾回呼（Async Cleanup Hook with Handshake）。主程式觸發卸載後立即返回（0ms 延遲不卡頓），外掛於背景執行耗時善後完畢後呼叫 `on_ready_to_unload()` 喚醒背景執行緒執行 `FreeLibrary`。
+  * `bool register_async_shutdown_symbol(std::string_view symbol_name)`：依符號名稱自動解析純 C 簽章之非同步收尾函式（`void (*)(void (*on_ready)(void*), void*)`）。
+  * `void set_async_shutdown_timeout(std::chrono::milliseconds timeout) noexcept`：設定非同步善後最大等待逾時（預設 30 秒）。
   * `void add_post_unload_hook(std::function<void()> hook)`：註冊在動態函式庫物理卸載（FreeLibrary / dlclose）完成後執行的通知回呼（Post-Unload Hook）。嚴格保證在代碼段已完全解除映射後觸發，通知宿主資源已全數釋放完畢。
   * `void enable_deferred_unload(bool enable = true) noexcept`：啟用非同步離棧延遲卸載模式。當由受管物件或生命週期權杖解構觸發最後引用歸零時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構棧幀安全退出後再卸載代碼段，徹底杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
   * `bool is_deferred_unload_enabled() const noexcept`：查詢當前是否啟用了非同步離棧延遲卸載模式。
