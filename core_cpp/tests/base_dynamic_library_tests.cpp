@@ -1,6 +1,9 @@
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <thread>
 
 #include "ourokore/base/DynamicLibrary.hpp"
 
@@ -392,6 +395,116 @@ int main(int argc, char *argv[])
     lib_third.reset();
 
     std::cout << "  ✅ 模組首次/重複載入分辨與收尾回呼全流程驗證通過！" << std::endl;
+  }
+
+  // 10. 測試：純生命週期存活權杖 (create_lifetime_token) 與多方共享
+  {
+    std::cout << "[Test 10] 驗證純生命週期權杖 (create_lifetime_token) 與多節點共享存活..." << std::endl;
+    auto lib = ork::DynamicLibrary::load(plugin_path);
+    assert(lib.is_loaded());
+    auto weak_lib = lib.to_weak();
+
+    // 模擬節點群（例如整棵樹的多個節點）持有此權杖
+    std::shared_ptr<const void> root_token = lib.create_lifetime_token();
+    assert(root_token != nullptr);
+    assert(lib.use_count() == 2); // lib 句柄 + root_token
+
+    // 子節點共享複製權杖
+    std::shared_ptr<const void> child_node_token = root_token;
+    assert(lib.use_count() == 3);
+
+    // 宿主主動放棄 DynamicLibrary 初始句柄
+    lib.reset();
+    assert(!weak_lib.expired());
+    assert(weak_lib.use_count() == 2); // 尚有 2 個節點權杖持有
+
+    // 模擬 Root 釋放（假結束）
+    std::cout << "  -> 模擬 Root 釋放，尚有子節點持有權杖..." << std::endl;
+    root_token.reset();
+    assert(!weak_lib.expired());
+    assert(weak_lib.use_count() == 1); // 還有 child_node_token
+
+    // 模擬最後一個子節點釋放（真結束）
+    std::cout << "  -> 模擬最後一個子節點釋放，權杖歸零..." << std::endl;
+    child_node_token.reset();
+    assert(weak_lib.expired()); // 底層安全自動卸載！
+    std::cout << "  ✅ 純生命週期權杖多節點共享與最後釋放自動卸載測試通過！" << std::endl;
+  }
+
+  // 11. 測試：卸載完成通知回呼 (add_post_unload_hook)
+  {
+    std::cout << "[Test 11] 驗證卸載完成通知回呼 (add_post_unload_hook)..." << std::endl;
+    auto lib = ork::DynamicLibrary::load(plugin_path);
+    assert(lib.is_loaded());
+    auto weak_lib = lib.to_weak();
+
+    bool post_unload_called = false;
+    lib.add_post_unload_hook([&post_unload_called, weak_lib]() {
+      post_unload_called = true;
+      // 驗證在執行 post_unload_hook 時，DLL 已經處於過期（完全卸載）狀態
+      assert(weak_lib.expired());
+    });
+
+    auto token = lib.create_lifetime_token();
+    lib.reset(); // 放棄宿主句柄
+    assert(!post_unload_called);
+
+    // 釋放最後權杖
+    token.reset();
+    assert(post_unload_called == true);
+    assert(weak_lib.expired());
+    std::cout << "  ✅ add_post_unload_hook 成功在 DLL 物理卸載後被精確觸發！" << std::endl;
+  }
+
+  // 12. 測試：非同步離棧延遲卸載模式 (enable_deferred_unload)
+  {
+    std::cout << "[Test 12] 驗證非同步離棧延遲卸載模式 (enable_deferred_unload)..." << std::endl;
+    auto lib = ork::DynamicLibrary::load(plugin_path);
+    assert(lib.is_loaded());
+    auto weak_lib = lib.to_weak();
+
+    lib.enable_deferred_unload(true);
+    assert(lib.is_deferred_unload_enabled() == true);
+
+    std::atomic<bool> post_unload_done{false};
+    lib.add_post_unload_hook([&post_unload_done]() {
+      post_unload_done.store(true);
+    });
+
+    // 模擬自解構物件
+    struct SelfDestructNode
+    {
+      std::shared_ptr<const void> token;
+      bool *destructed_flag;
+      ~SelfDestructNode()
+      {
+        *destructed_flag = true;
+        // token 在此處解構（最後一個引用歸零）
+      }
+    };
+
+    bool node_destructed = false;
+    {
+      auto token = lib.create_lifetime_token();
+      lib.reset(); // 宿主句柄先放
+
+      SelfDestructNode node{std::move(token), &node_destructed};
+    } // node 離開作用域，觸發析構
+
+    assert(node_destructed == true);
+    std::cout << "  -> 自解構物件棧幀已安全退出，等待非同步離棧卸載完成..." << std::endl;
+
+    // 等待非同步卸載執行緒完成
+    int wait_cycles = 0;
+    while (!post_unload_done.load() && wait_cycles < 100)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      wait_cycles++;
+    }
+
+    assert(post_unload_done.load() == true);
+    assert(weak_lib.expired());
+    std::cout << "  ✅ 非同步離棧延遲卸載與後置通知成功完成，100% 杜絕呼叫棧自毀崩潰！" << std::endl;
   }
 
   std::cout << "============================================================" << std::endl;

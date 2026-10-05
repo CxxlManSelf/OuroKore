@@ -210,6 +210,22 @@ public:
   }
 
   /**
+   * @brief 產生一個純生命週期存活權杖 (Pure Lifetime Token)
+   *
+   * 回傳之 std::shared_ptr 在其控制區塊內部持有一份動態函式庫存活引用。
+   * 與 bind_lifecycle() 相比，本函式無須綁定任何特定的物件裸指標，而是產生一個型別擦除的純權杖。
+   *
+   * 適用情境：
+   * 1. 樹狀結構（如 TreeNodeBase）或容器群：整棵樹的所有節點均可共同持有此 Token，
+   *    只要尚有任一節點存活於記憶體中，底層動態庫便絕不會被物理卸載。
+   * 2. 背景工作任務（Worker Tasks）或會話物件（Sessions）：任何非同步閉包均可捕獲此 Token，
+   *    確保背景邏輯執行期間代碼段始終安全有效。
+   *
+   * @return 若動態庫已有效載入傳回有效權杖；若動態庫未載入則傳回 nullptr
+   */
+  [[nodiscard]] std::shared_ptr<const void> create_lifetime_token() const noexcept;
+
+  /**
    * @brief 查詢本次 load() 取得的實例是否為動態庫於進程中的首次載入 (0 -> 1)
    *
    * 若傳回 true，代表動態庫為首次載入進程，呼叫端應在此時執行模組級全域啟始工作（Init）；
@@ -223,10 +239,44 @@ public:
    *
    * 所有透過此函式註冊的收尾回呼，將嚴格保證在動態庫引用計數徹底歸零（1 -> 0）、
    * 且在動態庫代碼段解除映射之前，依反向順序 (LIFO) 執行。
+   * 此時動態庫的實體程式碼段與 vtable 依然完整有效。
    *
    * @param hook 收尾回呼閉包
    */
   void add_cleanup_hook(std::function<void()> hook);
+
+  /**
+   * @brief 註冊在動態函式庫卸載（FreeLibrary / dlclose）完成後執行的通知回呼 (Post-Unload Hook)
+   *
+   * 與 add_cleanup_hook()（於 FreeLibrary 之前執行）不同，此回呼嚴格保證在動態庫引用計數徹底歸零、
+   * 且底層作業系統實體動態庫已經完全物理卸載出記憶體之後執行。
+   *
+   * ⚠️ 注意事項：
+   * 回呼執行時，動態庫代碼段已被作業系統解除映射（Unmap），因此傳入的 hook 閉包內部
+   * 絕不可呼叫已卸載動態庫的任何函式或存取其虛擬函式表，通常用於通知宿主「插件資源已完全釋放/可更新狀態」。
+   *
+   * @param hook 卸載完成通知回呼閉包
+   */
+  void add_post_unload_hook(std::function<void()> hook);
+
+  /**
+   * @brief 啟用或停用非同步離棧延遲卸載模式 (Deferred Stack-Decoupled Unload)
+   *
+   * 當由受管物件或生命週期權杖（Lifetime Token）的解構觸發動態庫最後一次引用歸零時，
+   * 呼叫棧頂層可能仍殘留有動態庫內部的解構子代碼（例如外掛節點自己的虛擬解構函式）。
+   * 若直接在當前執行緒同步調用 FreeLibrary，會引發在自身呼叫棧中解除映射代碼段的崩潰 (Self-Unload Stack Trap)。
+   *
+   * 啟用非同步離棧卸載後，當最後一個引用歸零時，動態庫卸載動作將自動移交至獨立的背景執行緒執行，
+   * 確保當前物件的解構呼叫棧完全退出後才執行物理卸載，達成 100% 絕對安全的自毀與卸載。
+   *
+   * @param enable 是否啟用非同步離棧卸載（預設為 true）
+   */
+  void enable_deferred_unload(bool enable = true) noexcept;
+
+  /**
+   * @brief 查詢當前是否啟用了非同步離棧延遲卸載模式
+   */
+  [[nodiscard]] bool is_deferred_unload_enabled() const noexcept;
 
   /**
    * @brief 依據符號名稱自動註冊無參數收尾函式（void()）為卸載前回呼
@@ -349,6 +399,13 @@ public:
    * @brief 查詢當前動態庫的存活引用計數（所有持有該 DLL 之物件與 DynamicLibrary 強引用總數）
    */
   [[nodiscard]] size_t use_count() const noexcept;
+
+  /**
+   * @brief 產生一個對應於本動態庫的弱引用權杖 (Weak Lifetime Token)
+   *
+   * @return 若底層控制區塊仍存活傳回有效弱引用；若已過期則傳回空弱引用
+   */
+  [[nodiscard]] std::weak_ptr<const void> create_weak_lifetime_token() const noexcept;
 
   /**
    * @brief 重設弱引用為空狀態

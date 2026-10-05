@@ -1,6 +1,8 @@
 #include "ourokore/base/DynamicLibrary.hpp"
 
+#include <atomic>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -161,7 +163,9 @@ public:
   void *m_native_handle{nullptr};
   std::filesystem::path m_path;
   std::vector<std::function<void()>> m_cleanup_hooks;
+  std::vector<std::function<void()>> m_post_unload_hooks;
   std::mutex m_hooks_mutex;
+  std::atomic<bool> m_deferred_unload{false};
 
   LibraryControlBlock(void *handle, std::filesystem::path path)
       : m_native_handle(handle), m_path(std::move(path))
@@ -173,6 +177,23 @@ public:
     if (!hook) return;
     std::lock_guard<std::mutex> lock(m_hooks_mutex);
     m_cleanup_hooks.push_back(std::move(hook));
+  }
+
+  void add_post_unload_hook(std::function<void()> hook)
+  {
+    if (!hook) return;
+    std::lock_guard<std::mutex> lock(m_hooks_mutex);
+    m_post_unload_hooks.push_back(std::move(hook));
+  }
+
+  void enable_deferred_unload(bool enable) noexcept
+  {
+    m_deferred_unload.store(enable, std::memory_order_relaxed);
+  }
+
+  bool is_deferred_unload_enabled() const noexcept
+  {
+    return m_deferred_unload.load(std::memory_order_relaxed);
   }
 
   ~LibraryControlBlock()
@@ -201,15 +222,52 @@ public:
     // 2. 自全域快取表中除名
     UnregisterControlBlock(m_path);
 
-    // 3. 作業系統級動態庫卸載
-    if (m_native_handle)
+    // 3. 提取後置卸載通知回呼 (Post-unload hooks)
+    std::vector<std::function<void()>> post_hooks;
     {
+      std::lock_guard<std::mutex> lock(m_hooks_mutex);
+      post_hooks = std::move(m_post_unload_hooks);
+    }
+
+    // 4. 作業系統級動態庫卸載與後置通知執行
+    void *handle = m_native_handle;
+    m_native_handle = nullptr;
+
+    auto execute_unload_and_post_hooks = [handle, hooks = std::move(post_hooks)]() mutable {
+      if (handle)
+      {
 #if defined(_WIN32)
-      ::FreeLibrary(static_cast<HMODULE>(m_native_handle));
+        ::FreeLibrary(static_cast<HMODULE>(handle));
 #else
-      ::dlclose(m_native_handle);
+        ::dlclose(handle);
 #endif
-      m_native_handle = nullptr;
+      }
+
+      // 嚴格在物理卸載之後依序觸發後置通知
+      for (auto &hook : hooks)
+      {
+        if (hook)
+        {
+          try
+          {
+            hook();
+          }
+          catch (...)
+          {
+          }
+        }
+      }
+    };
+
+    if (m_deferred_unload.load(std::memory_order_relaxed))
+    {
+      // 非同步離棧延遲卸載：移交分離執行緒執行，確保當前物件解構棧幀安全退出後再釋放代碼段
+      std::thread(std::move(execute_unload_and_post_hooks)).detach();
+    }
+    else
+    {
+      // 同步就地卸載
+      execute_unload_and_post_hooks();
     }
   }
 
@@ -358,12 +416,38 @@ bool DynamicLibrary::is_first_loaded() const noexcept
   return m_is_first_loaded;
 }
 
+std::shared_ptr<const void> DynamicLibrary::create_lifetime_token() const noexcept
+{
+  return m_control_block;
+}
+
 void DynamicLibrary::add_cleanup_hook(std::function<void()> hook)
 {
   if (m_control_block && hook)
   {
     m_control_block->add_cleanup_hook(std::move(hook));
   }
+}
+
+void DynamicLibrary::add_post_unload_hook(std::function<void()> hook)
+{
+  if (m_control_block && hook)
+  {
+    m_control_block->add_post_unload_hook(std::move(hook));
+  }
+}
+
+void DynamicLibrary::enable_deferred_unload(bool enable) noexcept
+{
+  if (m_control_block)
+  {
+    m_control_block->enable_deferred_unload(enable);
+  }
+}
+
+bool DynamicLibrary::is_deferred_unload_enabled() const noexcept
+{
+  return m_control_block ? m_control_block->is_deferred_unload_enabled() : false;
 }
 
 bool DynamicLibrary::register_shutdown_symbol(std::string_view symbol_name)
@@ -486,6 +570,11 @@ size_t WeakDynamicLibrary::use_count() const noexcept
 void WeakDynamicLibrary::reset() noexcept
 {
   m_control_block.reset();
+}
+
+std::weak_ptr<const void> WeakDynamicLibrary::create_weak_lifetime_token() const noexcept
+{
+  return m_control_block;
 }
 
 }  // namespace ork

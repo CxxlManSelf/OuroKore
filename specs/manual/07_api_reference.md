@@ -99,9 +99,13 @@
   * `size_t use_count() const noexcept`：取得當前動態庫的存活引用計數（含句柄變數與綁定物件）。
   * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析動態庫導出符號並智慧推導函式指標型別。
   * `template <typename T, typename DeleterT> std::shared_ptr<T> bind_lifecycle(T *raw_ptr, DeleterT deleter)`：將自訂裸指標與動態庫存活權杖綁定，確保指標銷毀前動態庫永不卸載。
+  * `std::shared_ptr<const void> create_lifetime_token() const noexcept`：產生純生命週期存活權杖（Pure Lifetime Token），無須綁定單一裸指標，任何容器、樹狀結構（如整棵樹的所有節點）或非同步任務均可共享持有，只要任一節點存活即保證 DLL 絕對不被物理卸載。
   * `static std::filesystem::path format_filename(std::string_view base_name)`：依作業系統格式化動態庫檔名（Windows `.dll`、Linux `.so`、macOS `.dylib`）。
   * `bool is_first_loaded() const noexcept`：查詢本次 `load()` 取得的實例是否為動態庫於進程中的首次載入（0 -> 1）。若為 false 代表先前已由其他模組載入並存活中。
   * `void add_cleanup_hook(std::function<void()> hook)`：註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的收尾回呼（Pre-Unload Hook）。保證在代碼段解除映射前依反向順序 (LIFO) 執行。
+  * `void add_post_unload_hook(std::function<void()> hook)`：註冊在動態函式庫物理卸載（FreeLibrary / dlclose）完成後執行的通知回呼（Post-Unload Hook）。嚴格保證在代碼段已完全解除映射後觸發，通知宿主資源已全數釋放完畢。
+  * `void enable_deferred_unload(bool enable = true) noexcept`：啟用非同步離棧延遲卸載模式。當由受管物件或生命週期權杖解構觸發最後引用歸零時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構棧幀安全退出後再卸載代碼段，徹底杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
+  * `bool is_deferred_unload_enabled() const noexcept`：查詢當前是否啟用了非同步離棧延遲卸載模式。
   * `bool register_shutdown_symbol(std::string_view symbol_name)`：依據符號名稱自動解析無參數收尾函式（`void()`）並註冊為卸載前回呼。
   * `template <typename FuncT, typename... Args> bool initialize_once(std::string_view symbol_name, Args &&...args)`：僅在首次載入（0 -> 1）時執行指定的符號初始化函式，重複載入時自動安全略過。
   * `WeakDynamicLibrary to_weak() const noexcept`：建立並取得該動態庫之弱引用觀察者（不增加強引用計數，不阻止自動卸載）。
@@ -116,6 +120,7 @@
   * `DynamicLibrary lock() const noexcept`：嘗試將弱引用晉升為強引用。若動態庫仍存活傳回有效實例；若已卸載則傳回無效實例。
   * `bool expired() const noexcept`：查詢動態庫是否已經卸載或過期。
   * `size_t use_count() const noexcept`：查詢當前存活之強引用計數（所有綁定活體物件與強引用總數）。
+  * `std::weak_ptr<const void> create_weak_lifetime_token() const noexcept`：產生對應於本動態庫的弱引用權杖。
   * `void reset() noexcept`：重設弱引用為空狀態。
   * `explicit operator bool() const noexcept`：等同於 `!expired()`。
 

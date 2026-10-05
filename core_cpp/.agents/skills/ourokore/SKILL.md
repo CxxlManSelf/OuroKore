@@ -74,6 +74,12 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 > 5. **主程式 reset() 後之弱引用晉升重獲（WeakDynamicLibrary 鐵律）**：
 >    當主程式為配合自動卸載而呼叫 `lib.reset()` 或讓強引用變數離開作用域時，若未來仍需要使用該動態庫（如再次解析符號、創建物件）或監控其存活，**應事先透過 `auto weak_lib = lib.to_weak();` 保留一份 `ork::WeakDynamicLibrary` 弱引用**。
 >    日後需要使用時，透過 `if (auto locked = weak_lib.lock())` 即可零開銷晉升為有效強引用（無須重新 LoadLibrary）；若所有物件已解構且 DLL 已卸載，`weak_lib.expired()` 為 `true`，`lock()` 安全傳回無效實例。
+> 6. **純生命週期存活權杖 (Pure Lifetime Token Invariant)**：
+>    若外掛內部為複雜樹狀結構（如 `TreeNodeBase` 百萬節點群）、容器群或非同步任務，不便或無需綁定單一實體物件裸指標時，可透過 `auto token = lib.create_lifetime_token();` 產生型別擦除之純存活權杖（`std::shared_ptr<const void>`）。整棵樹的所有節點均可共同持有此 Token，只要全宇宙尚有任一節點存活，DLL 便絕不被物理卸載；最後一個節點解構時 Token 計數歸零觸發自動卸載。
+> 7. **物理卸載完成通知回呼 (Post-Unload Hook)**：
+>    宿主可透過 `lib.add_post_unload_hook(cb)` 註冊在 DLL 物理卸載（`FreeLibrary` / `dlclose`）完成後執行的通知回呼，零輪詢被動接收「外掛已完全死透、資源已全數釋放」事件。
+> 8. **非同步離棧延遲卸載防護 (Deferred Stack-Decoupled Unload)**：
+>    呼叫 `lib.enable_deferred_unload(true)` 可開啟離棧保護。當最後一個節點是在外掛自身的虛擬解構函式中解構時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構呼叫棧完全退出後才卸載代碼段，100% 杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
 
 ### 2.1 主程式 Entry Point (HostContext)
 ```cpp

@@ -41,6 +41,12 @@ description: "專為 OuroKore 應用程式與外掛開發人員設計的 AI 輔�
    - 👁️ **弱引用觀察與 reset() 後重獲晉升 (WeakDynamicLibrary Invariant)**：
      若主程式或外掛管理器為了配合自動卸載而呼叫了 `DynamicLibrary::reset()` 放棄初始強引用，但未來仍需要使用該動態庫（如再次獲取工廠符號產生物件），**應事先在呼叫 `reset()` 前透過 `auto weak_lib = lib.to_weak();` 保留一份弱引用**。
      只要先前產生的物件仍有存活，隨時可透過 `if (auto locked = weak_lib.lock())` 零開銷重獲強引用（無須重新調用作業系統 LoadLibrary）；當所有物件解構後，DLL 自動安全卸載，弱引用安全過期（`weak_lib.expired() == true`，`lock()` 安全傳回無效實例）。
+   - 🪙 **純生命週期存活權杖 (Pure Lifetime Token Invariant)**：
+     若外掛內部為複雜樹狀結構（如 `TreeNodeBase` 百萬節點群）、容器群或非同步任務，不便或無需綁定單一實體物件裸指標時，可透過 `auto token = lib.create_lifetime_token();` 產生型別擦除之純存活權杖（`std::shared_ptr<const void>`）。整棵樹的所有節點均可共同持有此 Token，只要全宇宙尚有任一節點存活，DLL 便絕不被物理卸載；最後一個節點解構時 Token 計數歸零觸發自動卸載。
+   - 🔔 **物理卸載完成通知回呼 (Post-Unload Hook)**：
+     宿主可透過 `lib.add_post_unload_hook(cb)` 註冊在 DLL 物理卸載（`FreeLibrary` / `dlclose`）完成後執行的通知回呼，零輪詢被動接收「外掛已完全死透、資源已全數釋放」事件。
+   - 🛡️ **非同步離棧延遲卸載防護 (Deferred Stack-Decoupled Unload)**：
+     呼叫 `lib.enable_deferred_unload(true)` 可開啟離棧保護。當最後一個節點是在外掛自身的虛擬解構函式中解構時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構呼叫棧完全退出後才卸載代碼段，100% 杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
 
 ---
 
@@ -326,6 +332,37 @@ plugin.reset(); // 此刻底層安全呼叫 FreeLibrary / dlclose
 // 此時 weak_lib.expired() == true，weak_lib.lock() 安全傳回無效實例
 ```
 
+### 模式 G-1：純生命週期權杖、多節點共享（如 Tree）與後置卸載通知、離棧保護實戰
+適用於外掛內部包含整棵龐大樹狀結構（百萬節點）、非同步背景工作，且宿主手上沒有單一實體指標時。
+
+```cpp
+#include <ourokore/base/DynamicLibrary.hpp>
+#include <ourokore/base/Tree.hpp>
+
+// 1. 宿主載入外掛 DLL
+auto plugin = ork::DynamicLibrary::load("PluginWithTree.dll");
+
+// 2. 啟用非同步離棧卸載保護（杜絕節點解構棧自毀崩潰）
+plugin.enable_deferred_unload(true);
+
+// 3. 註冊真結束事件通知（DLL 物理卸載完成後通知宿主）
+plugin.add_post_unload_hook([]() {
+    std::cout << "【宿主收到通知】外掛內部的所有樹節點已全數死透，DLL 已安全卸載！\n";
+});
+
+// 4. 插件索取純生命週期存活權杖
+std::shared_ptr<const void> tree_token = plugin.create_lifetime_token();
+
+// 5. 宿主放心地放棄初始強引用句柄
+// （若日後需重獲可事先 auto weak_plugin = plugin.to_weak();）
+plugin.reset(); 
+
+// 6. 插件內部：樹狀結構共享此 Token（任意子節點被拿去外面用都安全）
+// auto root = StringTreeNode::CreateRoot(u8"Root");
+// ... 當外部手裡最後一個節點被釋放時，Token 計數歸零，
+// DynamicLibrary 自動在背景分離執行緒安全執行 FreeLibrary，並觸發宿主通知回呼！
+```
+
 ### 模式 H：現代樹狀結構容器與文字 DSL 狀態機實戰 (Tree & TreeIO Utilities)
 適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。容器採用「單一容器雙模態統合」設計，序列化支援標準可讀與 3 種緊湊模式，並支援 CRTP 衍生領域節點與精準型別反序列化。
 
@@ -481,6 +518,8 @@ assert(custom_hero->title == "英雄角色");
    * ⚠️ **高壓約束**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將動態庫綁定（持有引用計數）」。若應用端一直保留該回傳值（如存為長存成員或未離開作用域/未呼叫 `reset()`），DLL 是絕對不會被卸載的！必須主動放棄該初始句柄（如 `lib.reset()`），才能實現產生物件全數銷毀後 DLL 自動卸載。
    * **弱引用重獲保證 (WeakDynamicLibrary)**：主程式在呼叫 `reset()` 放棄持有前，可透過 `lib.to_weak()` 保留弱引用觀察者。日後需要再次存取符號或建立物件時，呼叫 `lock()` 即可安全晉升重獲強引用；若所有物件已釋放，DLL 自動卸載，弱引用安全過期（`expired() == true`）。
    * 🛡️ **受管物件 Payload 銷毀即刻解錨（墓碑零阻礙）**：綁定至受管物件的動態庫會在物件 Payload 實體物理解構完成時立即由核心釋放引用，弱引用句柄（UnboundHandle）的長存墓碑絕不阻礙動態庫及時卸載。
+   * 🪙 **純存活權杖與多節點共生 (create_lifetime_token)**：樹狀結構（百萬節點）或無單一裸指標時，透過 `create_lifetime_token()` 產生純權杖，任意節點存活皆保證 DLL 代碼段存活，全數死透自動卸載。
+   * 🔔 **後置卸載通知與離棧保護 (add_post_unload_hook & enable_deferred_unload)**：可透過 `add_post_unload_hook` 註冊物理卸載完成通知；開啟 `enable_deferred_unload(true)` 可將卸載移交分離執行緒，徹底杜絕外掛自解構呼叫棧崩潰 (Self-Unload Stack Trap)。
    * 🔄 **多重載入快取分辨與單次啟始/收尾保證 (Single-Execution Lifecycle Invariant)**：
      - 當進程內不同子系統多次請求載入同一動態庫時，`DynamicLibrary` 內部透過規範化路徑快取共享控制區塊。
      - 僅在首次載入（0 -> 1）時 `lib.is_first_loaded()` 為 true，可透過 `initialize_once` 執行全域初始化（重複載入時自動安全略過）。
