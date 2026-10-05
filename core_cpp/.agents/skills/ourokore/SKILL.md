@@ -330,6 +330,36 @@ static_assert(std::is_same_v<decltype(custom_hero), std::shared_ptr<CustomEntity
 }
 ```
 
+### 2.8 Base 並行排程與基礎同步原語 (ThreadPool, Queue, Semaphore & Event)
+`ourokore_base` 模組內建一套現代 C++20 高效能多執行緒工具：
+```cpp
+#include <ourokore/base/ThreadPool.hpp>
+#include <ourokore/base/ThreadSafeQueue.hpp>
+#include <ourokore/base/Semaphore.hpp>
+
+// 1. 固定執行緒池：支援 Future 與 Fire-and-Forget (submit_detached)
+ork::base::FixedThreadPool fixed_pool(4);
+auto fut = fixed_pool.submit([](int a, int b) { return a + b; }, 10, 20);
+int sum = fut.get();
+fixed_pool.wait_idle(); // Worker 內部呼叫自動安全防自我死鎖
+
+// 2. 彈性動態伸縮執行緒池：尖峰負載擴增至 max_threads，閒置逾時 idle_timeout 自動縮容至 min_threads
+ork::base::DynamicThreadPool dynamic_pool(2, 8, std::chrono::milliseconds(3000));
+dynamic_pool.submit_detached([]() { /* 背景處理 */ });
+
+// 3. 多生產者多消費者 (MPMC) 阻塞佇列：逾時彈性取出與鎖外析構保證
+ork::base::ThreadSafeQueue<std::string> queue;
+queue.push("task_data");
+std::string item;
+queue.pop_for(item, std::chrono::milliseconds(100));
+
+// 4. 計數信號量 (Semaphore) 與事件同步原語 (Event)
+ork::base::Semaphore sem(0);
+// sem.acquire(); sem.release();
+ork::base::Event event(ork::base::EventResetMode::AutoReset, false);
+// event.wait(); event.set();
+```
+
 ---
 
 ## ⚖️ 3. 核心擴展鐵律 (Core Contributor Invariants)

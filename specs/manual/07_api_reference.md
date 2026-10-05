@@ -186,3 +186,42 @@
     * `static std::string SerializeToString<Node = StringTreeNode>(root, ...)`：直接輸出文字 DSL 字串（支援 CompactMode 列舉、布林緊湊旗標或自訂縮排與 data_to_string 轉發）。
     * `static std::shared_ptr<NodeType> Deserialize<NodeType = StringTreeNode>(istream, data_handler)`：寬容型狀態機自輸入串流反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針；handler 支援值轉換或 `(node, str) -> void` 節點現地賦值）。
     * `static std::shared_ptr<NodeType> DeserializeFromString<NodeType = StringTreeNode>(string_view, data_handler)`：自文字字串反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針）。
+
+---
+
+## ⚡ 10. 高效能執行緒池與同步原語：`ork::base::ThreadPool` / `Semaphore` / `Event` / `ThreadSafeQueue`
+* **標頭檔**：`ourokore/base/ThreadPool.hpp`、`ourokore/base/Semaphore.hpp`、`ourokore/base/ThreadSafeQueue.hpp`
+* **類別與方法**：
+  * **固定數量執行緒池 `FixedThreadPool`**：
+    * `explicit FixedThreadPool(size_t thread_count = 0)`：建立固定數量工作執行緒（0 表示預設硬體並發數）。
+    * `template <typename F, typename... Args> auto submit(F&&, Args&&...) -> std::future<...>`：提交任務並回傳 `std::future`。
+    * `template <typename F, typename... Args> bool submit_detached(F&&, Args&&...)`：提交 Fire-and-Forget 輕量任務（避免 packaged_task 堆積配置）。
+    * `void wait_idle()`：阻塞等待直到所有排隊任務與目前正在執行的任務全數完成（Worker 內部調用自動安全防自我死鎖）。
+    * `void stop()`：停止執行緒池並等待所有 Worker 執行緒退出。
+    * `size_t get_worker_count() const` / `size_t get_active_worker_count() const` / `size_t get_queue_size() const`。
+  * **動態彈性伸縮執行緒池 `DynamicThreadPool`**：
+    * `explicit DynamicThreadPool(size_t min_threads = 2, size_t max_threads = 0, milliseconds idle_timeout = 3000ms)`：建立動態伸縮池。
+    * 負載增加時自動擴展 Worker 執行緒至 `max_threads`；空閒超過 `idle_timeout` 自動縮容回收至 `min_threads`。
+    * 介面相容 `submit`、`submit_detached`、`wait_idle`、`stop`。
+  * **執行緒安全阻塞佇列 `ThreadSafeQueue<T>`**：
+    * `bool push(T item)` / `bool emplace(Args&&...)`：推入元素，成功回傳 true；若佇列已停止回傳 false。
+    * `bool pop(T &out_val)`：阻塞等待取出隊首元素。若佇列已停止且空回傳 false。
+    * `bool pop_for(T &out_val, rel_time)`：在指定逾時內嘗試取出隊首元素。
+    * `bool try_pop(T &out_val)`：非阻塞嘗試取出隊首元素。
+    * `void stop()`：停止佇列並喚醒所有等待中執行緒。
+    * `void clear()`：清空佇列（於鎖外安全析構殘留元素，防範死鎖）。
+    * `bool empty() const` / `size_t size() const` / `bool is_stopped() const`。
+  * **計數信號量 `Semaphore`**：
+    * `explicit Semaphore(ptrdiff_t initial_count = 0)`：建構計數信號量。
+    * `void acquire()`：阻塞等待並遞減資源計數。
+    * `bool try_acquire()`：非阻塞嘗試獲取。
+    * `bool try_acquire_for(rel_time)` / `try_acquire_until(abs_time)`：逾時等待獲取。
+    * `void release(ptrdiff_t update = 1)`：釋放並增加資源計數。
+    * `ptrdiff_t available() const`：查詢即時可用資源計數。
+  * **事件通知原語 `Event`**：
+    * `explicit Event(EventResetMode mode = AutoReset, bool initially_signaled = false)`：建構事件（支援 `EventResetMode::AutoReset` 與 `EventResetMode::ManualReset`）。
+    * `void set()`：觸發事件狀態為 Signaled。
+    * `void reset()`：重設事件狀態為 Non-Signaled。
+    * `void wait()`：阻塞等待事件觸發（AutoReset 喚醒時自動重設為 false）。
+    * `bool wait_for(rel_time)`：逾時等待事件觸發。
+    * `bool is_set() const`：查詢目前是否處於觸發狀態。

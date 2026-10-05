@@ -491,6 +491,51 @@ assert(custom_hero->title == "英雄角色");
 
 ---
 
+### 模式 I：Base 高效能並行排程與同步原語實戰 (ThreadPool, Queue & Synchronization)
+`ourokore_base` 提供開箱即用的現代 C++20 執行緒池與同步設施：
+
+```cpp
+#include <ourokore/base/ThreadPool.hpp>
+#include <ourokore/base/ThreadSafeQueue.hpp>
+#include <ourokore/base/Semaphore.hpp>
+#include <iostream>
+
+void ConcurrencyCookbook() {
+    // 1. 固定執行緒池 (CPU 密集型任務)
+    ork::base::FixedThreadPool fixed_pool(4);
+    auto fut = fixed_pool.submit([](int x) { return x * x; }, 42);
+    std::cout << "平方計算: " << fut.get() << std::endl;
+
+    // 2. 彈性動態伸縮執行緒池 (I/O 與非同步任務突增場景)
+    // 核心 2 個執行緒，上限 8 個，閒置 3 秒自動縮容回收
+    ork::base::DynamicThreadPool dynamic_pool(2, 8, std::chrono::milliseconds(3000));
+    dynamic_pool.submit_detached([]() {
+        // Fire-and-Forget 任務，零包裝器配置開銷
+    });
+    dynamic_pool.wait_idle();
+
+    // 3. 多生產者-多消費者 (MPMC) 阻塞佇列
+    ork::base::ThreadSafeQueue<std::string> task_queue;
+    task_queue.push("Job_Alpha");
+    std::string job;
+    if (task_queue.pop_for(job, std::chrono::milliseconds(200))) {
+        // 成功在逾時前取出
+    }
+
+    // 4. 計數信號量 (資源併發門閥)
+    ork::base::Semaphore sem(0);
+    // sem.acquire(); // 阻塞等待資源
+    // sem.release(2); // 批次補充 2 個可用資源
+
+    // 5. 事件通知原語 (Event)
+    ork::base::Event broadcast(ork::base::EventResetMode::ManualReset, false);
+    // broadcast.wait(); // 等待信號
+    // broadcast.set();  // 廣播喚醒全體等待者
+}
+```
+
+---
+
 ## ⚠️ 4. 應用開發高壓線條款 (Critical Invariants)
 
 1. **全面杜絕裸指標解引用 (Zero Raw Pointer Guarantee)**：
@@ -531,6 +576,12 @@ assert(custom_hero->title == "英雄角色");
    * 序列化支援 3 種緊湊模式：`CompactMode::None`（預設，格式化縮排換行）、`CompactMode::WithEqual`（保留 `=` 緊湊）、`CompactMode::WithoutEqual`（無 `=` 極致緊湊）。DSL 狀態機對 3 種格式均具備 100% 雙向反序列化相容性，並原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾（即使註解內部包含引號或括號界定符亦可安全略過）。
    * **整樹共享讀寫鎖與走訪死鎖防禦鐵律**：整棵樹（Root 與所有子孫節點）共享同一個 `std::shared_mutex`，節點脫離時自立分配新鎖。**呼叫端在持讀鎖走訪期間「只能進行純資料使用，絕對禁止操作節點拓撲（Add/Remove/Clear/Detach）」**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）；動態刪除需求必須採用「先收集指針、釋放讀鎖後再批次修改」的兩階段安全範式。
    * **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化 handler 支援 `(string) -> Data` 值轉換與 `(shared_ptr<NodeType>, string) -> void` 就地賦值兩種模式，徹底實現零樣板、強型別安全的領域樹模型。
+
+---
+
+10. **執行緒池與同步原語使用鐵律 (ThreadPool & Queue Invariant)**：
+    * **禁止 Worker 自我等待死鎖**：`FixedThreadPool` 與 `DynamicThreadPool` 內部已針對 `wait_idle()` 設置執行緒防護（Worker 呼叫時自動略過），但應用端切忌在池內任務中 `get()` 一個排在自己之後、且執行緒池已無額外 Worker 可調度的子任務，以防執行緒飢餓死鎖。
+    * **MPMC 佇列鎖外安全析構**：`ThreadSafeQueue::clear()` 會在釋放互斥鎖後才進行元素析構，應用端自訂 Task 或析構函式中若涉及其他鎖，應注意鎖的獲取順序，杜絕逆向加鎖。
 
 ---
 
