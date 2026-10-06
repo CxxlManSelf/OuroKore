@@ -102,11 +102,14 @@
   * `std::shared_ptr<const void> create_lifetime_token() const noexcept`：產生純生命週期存活權杖（Pure Lifetime Token），無須綁定單一裸指標，任何容器、樹狀結構（如整棵樹的所有節點）或非同步任務均可共享持有，只要任一節點存活即保證 DLL 絕對不被物理卸載。
   * `static std::filesystem::path format_filename(std::string_view base_name)`：依作業系統格式化動態庫檔名（Windows `.dll`、Linux `.so`、macOS `.dylib`）。
   * `bool is_first_loaded() const noexcept`：查詢本次 `load()` 取得的實例是否為動態庫於進程中的首次載入（0 -> 1）。若為 false 代表先前已由其他模組載入並存活中。
-  * `void add_cleanup_hook(std::function<void()> hook)`：註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的收尾回呼（Pre-Unload Hook）。保證在代碼段解除映射前依反向順序 (LIFO) 執行。
+  * `void add_cleanup_hook(std::function<void()> hook)`：註冊在動態函式庫卸載前執行的通用前置收尾回呼（Pre-Unload Hook）。在代碼段解除映射前依反向順序 (LIFO) 執行。
+  * `void add_shutdown_hook(std::function<void()> hook)`：註冊模組最終同步收尾回呼。享有【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】，不論註冊時機為何，必定在所有通用清理回呼執行完畢後才最後被觸發。
+  * `void add_async_shutdown_hook(AsyncCleanupHook hook)`：註冊模組最終非同步善後收尾回呼。享有最後執行保證，於所有通用清理後觸發並等待握手完成。
   * `void add_post_unload_hook(std::function<void()> hook)`：註冊在動態函式庫物理卸載（FreeLibrary / dlclose）完成後執行的通知回呼（Post-Unload Hook）。嚴格保證在代碼段已完全解除映射後觸發，通知宿主資源已全數釋放完畢。
   * `void enable_deferred_unload(bool enable = true) noexcept`：啟用非同步離棧延遲卸載模式。當由受管物件或生命週期權杖解構觸發最後引用歸零時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構棧幀安全退出後再卸載代碼段，徹底杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
   * `bool is_deferred_unload_enabled() const noexcept`：查詢當前是否啟用了非同步離棧延遲卸載模式。
-  * `bool register_shutdown_symbol(std::string_view symbol_name)`：依據符號名稱自動解析無參數收尾函式（`void()`）並註冊為卸載前回呼。
+  * `bool register_shutdown_symbol(std::string_view symbol_name)`：依據符號名稱自動解析無參數收尾函式（`void()`）並註冊為模組終端收尾回呼（享有 Terminal Shutdown Guarantee）。
+  * `bool register_async_shutdown_symbol(std::string_view symbol_name)`：依據符號名稱自動解析純 C 簽章之非同步收尾函式並註冊（享有 Terminal Shutdown Guarantee）。
   * `template <typename FuncT, typename... Args> bool initialize_once(std::string_view symbol_name, Args &&...args)`：僅在首次載入（0 -> 1）時執行指定的符號初始化函式，重複載入時自動安全略過。
   * `WeakDynamicLibrary to_weak() const noexcept`：建立並取得該動態庫之弱引用觀察者（不增加強引用計數，不阻止自動卸載）。
 

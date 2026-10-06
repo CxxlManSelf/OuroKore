@@ -573,6 +573,103 @@ int main(int argc, char *argv[])
     std::cout << "  ✅ [PASS] 外掛非同步善後徹底完成後通知 DynamicLibrary，DLL 安全卸載，握手全流程成功！" << std::endl;
   }
 
+  // 14. 測試：核心保證 —— 模組收尾最後執行保證 (Terminal Shutdown Guarantee)
+  // 驗證重點：
+  // 不論註冊的先後時機為何，模組終端收尾（register_shutdown_symbol / add_shutdown_hook 及
+  // register_async_shutdown_symbol / add_async_shutdown_hook）必定在所有通用清理回呼
+  // （add_cleanup_hook / add_async_cleanup_hook）全數執行完成之後、且在 FreeLibrary 之前最後執行！
+  {
+    std::cout << "[Test 14] 核心驗證：模組收尾最後執行保證 (Terminal Shutdown Guarantee)..." << std::endl;
+    auto lib = ork::DynamicLibrary::load(plugin_path);
+    assert(lib.is_loaded());
+
+    std::vector<std::string> execution_order;
+
+    auto get_shutdown_cnt = lib.get_symbol<int()>("GetShutdownCallCount");
+    assert(get_shutdown_cnt != nullptr);
+    int initial_shutdown_cnt = get_shutdown_cnt();
+
+    // 14.1 刻意以交錯順序註冊回呼：
+    // 先註冊通用清理 1
+    lib.add_cleanup_hook([&]() {
+      execution_order.push_back("general_cleanup_1");
+      // 💡 關鍵保證：通用清理執行時，PluginShutdown 絕對尚未被執行！
+      assert(get_shutdown_cnt() == initial_shutdown_cnt);
+    });
+
+    // 中間註冊模組終端同步收尾符號
+    bool reg_ok = lib.register_shutdown_symbol("PluginShutdown");
+    assert(reg_ok == true);
+
+    // 再註冊自訂終端收尾 hook
+    lib.add_shutdown_hook([&]() {
+      execution_order.push_back("terminal_shutdown_custom");
+    });
+
+    // 後註冊通用清理 2（晚於 shutdown 註冊）
+    lib.add_cleanup_hook([&]() {
+      execution_order.push_back("general_cleanup_2");
+      assert(get_shutdown_cnt() == initial_shutdown_cnt);
+    });
+
+    // 註冊物理卸載後置通知
+    lib.add_post_unload_hook([&]() {
+      execution_order.push_back("post_unload");
+    });
+
+    // 觸發卸載
+    lib.reset();
+
+    // 💡 驗證執行順序：
+    // 通用清理（LIFO）：general_cleanup_2 -> general_cleanup_1
+    // 模組終端收尾（LIFO）：terminal_shutdown_custom -> PluginShutdown
+    // 物理卸載後置：post_unload
+    assert(execution_order.size() == 4);
+    assert(execution_order[0] == "general_cleanup_2");
+    assert(execution_order[1] == "general_cleanup_1");
+    assert(execution_order[2] == "terminal_shutdown_custom");
+    assert(execution_order[3] == "post_unload");
+
+    std::cout << "  ✅ 模組同步收尾最後執行保證驗證通過！" << std::endl;
+
+    // 14.2 驗證非同步善後模組收尾最後執行保證
+    auto lib2 = ork::DynamicLibrary::load(plugin_path);
+    assert(lib2.is_loaded());
+
+    std::vector<std::string> async_order;
+    std::atomic<bool> async_done{false};
+
+    // 先註冊終端非同步收尾
+    lib2.add_async_shutdown_hook([&](ork::DynamicLibrary::ReadyToUnloadCallback on_ready) {
+      async_order.push_back("terminal_async_shutdown");
+      std::thread([on_ready = std::move(on_ready), &async_done]() mutable {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        async_done.store(true);
+        on_ready();
+      }).detach();
+    });
+
+    // 後註冊通用同步清理
+    lib2.add_cleanup_hook([&]() {
+      async_order.push_back("general_sync_cleanup");
+    });
+
+    lib2.reset();
+
+    int wait_cycles = 0;
+    while (!async_done.load() && wait_cycles < 100)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      wait_cycles++;
+    }
+
+    assert(async_done.load() == true);
+    assert(async_order.size() == 2);
+    assert(async_order[0] == "general_sync_cleanup");
+    assert(async_order[1] == "terminal_async_shutdown");
+    std::cout << "  ✅ 模組非同步收尾最後執行保證驗證通過！" << std::endl;
+  }
+
   std::cout << "============================================================" << std::endl;
   std::cout << "🎉 恭喜！DynamicLibrary 所有單元測試全部 PASS！" << std::endl;
   std::cout << "============================================================" << std::endl;

@@ -166,6 +166,8 @@ public:
   std::filesystem::path m_path;
   std::vector<std::function<void()>> m_cleanup_hooks;
   std::vector<DynamicLibrary::AsyncCleanupHook> m_async_cleanup_hooks;
+  std::vector<std::function<void()>> m_shutdown_hooks;
+  std::vector<DynamicLibrary::AsyncCleanupHook> m_async_shutdown_hooks;
   std::vector<std::function<void()>> m_post_unload_hooks;
   std::mutex m_hooks_mutex;
   std::atomic<bool> m_deferred_unload{false};
@@ -188,6 +190,20 @@ public:
     if (!hook) return;
     std::lock_guard<std::mutex> lock(m_hooks_mutex);
     m_async_cleanup_hooks.push_back(std::move(hook));
+  }
+
+  void add_shutdown_hook(std::function<void()> hook)
+  {
+    if (!hook) return;
+    std::lock_guard<std::mutex> lock(m_hooks_mutex);
+    m_shutdown_hooks.push_back(std::move(hook));
+  }
+
+  void add_async_shutdown_hook(DynamicLibrary::AsyncCleanupHook hook)
+  {
+    if (!hook) return;
+    std::lock_guard<std::mutex> lock(m_hooks_mutex);
+    m_async_shutdown_hooks.push_back(std::move(hook));
   }
 
   void add_post_unload_hook(std::function<void()> hook)
@@ -218,12 +234,16 @@ public:
     // 1. 提取所有收尾掛鉤與通知回呼
     std::vector<std::function<void()>> sync_hooks;
     std::vector<DynamicLibrary::AsyncCleanupHook> async_hooks;
+    std::vector<std::function<void()>> sync_shutdown_hooks;
+    std::vector<DynamicLibrary::AsyncCleanupHook> async_shutdown_hooks;
     std::vector<std::function<void()>> post_hooks;
     std::chrono::milliseconds timeout;
     {
       std::lock_guard<std::mutex> lock(m_hooks_mutex);
       sync_hooks = std::move(m_cleanup_hooks);
       async_hooks = std::move(m_async_cleanup_hooks);
+      sync_shutdown_hooks = std::move(m_shutdown_hooks);
+      async_shutdown_hooks = std::move(m_async_shutdown_hooks);
       post_hooks = std::move(m_post_unload_hooks);
       timeout = m_async_timeout;
     }
@@ -235,17 +255,19 @@ public:
     void *handle = m_native_handle;
     m_native_handle = nullptr;
 
-    bool has_async = !async_hooks.empty();
+    bool has_async = !async_hooks.empty() || !async_shutdown_hooks.empty();
     bool is_deferred = m_deferred_unload.load(std::memory_order_relaxed);
 
     auto execute_shutdown_and_unload = [
       handle,
       sync_hooks = std::move(sync_hooks),
       async_hooks = std::move(async_hooks),
+      sync_shutdown_hooks = std::move(sync_shutdown_hooks),
+      async_shutdown_hooks = std::move(async_shutdown_hooks),
       post_hooks = std::move(post_hooks),
       timeout
     ]() mutable {
-      // (1) 執行同步收尾回呼（以先進後出 LIFO 順序執行）
+      // (1) 執行通用前置同步收尾回呼（以先進後出 LIFO 順序執行業務/宿主清理）
       for (auto it = sync_hooks.rbegin(); it != sync_hooks.rend(); ++it)
       {
         if (*it)
@@ -261,14 +283,13 @@ public:
       }
       sync_hooks.clear();
 
-      // (2) 執行非同步善後回呼，並透過握手機制等待 DLL 善後完成通知
-      if (!async_hooks.empty())
-      {
-        auto remaining = std::make_shared<std::atomic<size_t>>(async_hooks.size());
+      auto wait_async_hooks = [&timeout](std::vector<DynamicLibrary::AsyncCleanupHook> &hooks) {
+        if (hooks.empty()) return;
+        auto remaining = std::make_shared<std::atomic<size_t>>(hooks.size());
         auto cv = std::make_shared<std::condition_variable>();
         auto cv_mutex = std::make_shared<std::mutex>();
 
-        for (auto &async_fn : async_hooks)
+        for (auto &async_fn : hooks)
         {
           if (async_fn)
           {
@@ -302,7 +323,6 @@ public:
           }
         }
 
-        // 背景等待執行緒被通知喚醒（具備安全逾時防護）
         std::unique_lock<std::mutex> lock(*cv_mutex);
         if (timeout.count() > 0)
         {
@@ -316,9 +336,33 @@ public:
             return remaining->load(std::memory_order_acquire) == 0;
           });
         }
-      }
+        hooks.clear();
+      };
 
-      // (3) 此時 DLL 善後徹底完畢，確認 DLL 絕不再執行任何代碼，安全物理卸載！
+      // (2) 執行通用前置非同步善後回呼，並透過握手機制等待善後完成通知
+      wait_async_hooks(async_hooks);
+
+      // (3) 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
+      // 確保所有前置依賴/業務清理全數完畢後，執行外掛模組本身的最終同步收尾函式（LIFO 倒序）
+      for (auto it = sync_shutdown_hooks.rbegin(); it != sync_shutdown_hooks.rend(); ++it)
+      {
+        if (*it)
+        {
+          try
+          {
+            (*it)();
+          }
+          catch (...)
+          {
+          }
+        }
+      }
+      sync_shutdown_hooks.clear();
+
+      // (4) 執行外掛模組本身的最終非同步善後握手（Terminal Async Shutdown）
+      wait_async_hooks(async_shutdown_hooks);
+
+      // (5) 此時外掛自身善後徹底完畢，確認 DLL 絕不再執行任何代碼，安全物理卸載！
       if (handle)
       {
 #if defined(_WIN32)
@@ -328,7 +372,7 @@ public:
 #endif
       }
 
-      // (4) 嚴格在物理卸載之後依序觸發後置通知
+      // (6) 嚴格在物理卸載之後依序觸發後置通知
       for (auto &hook : post_hooks)
       {
         if (hook)
@@ -551,6 +595,22 @@ void DynamicLibrary::set_async_shutdown_timeout(std::chrono::milliseconds timeou
   }
 }
 
+void DynamicLibrary::add_shutdown_hook(std::function<void()> hook)
+{
+  if (m_control_block && hook)
+  {
+    m_control_block->add_shutdown_hook(std::move(hook));
+  }
+}
+
+void DynamicLibrary::add_async_shutdown_hook(AsyncCleanupHook hook)
+{
+  if (m_control_block && hook)
+  {
+    m_control_block->add_async_shutdown_hook(std::move(hook));
+  }
+}
+
 bool DynamicLibrary::register_shutdown_symbol(std::string_view symbol_name)
 {
   if (!is_loaded() || symbol_name.empty())
@@ -563,7 +623,7 @@ bool DynamicLibrary::register_shutdown_symbol(std::string_view symbol_name)
   {
     return false;
   }
-  add_cleanup_hook([fn]() { fn(); });
+  add_shutdown_hook([fn]() { fn(); });
   return true;
 }
 
@@ -579,7 +639,7 @@ bool DynamicLibrary::register_async_shutdown_symbol(std::string_view symbol_name
   {
     return false;
   }
-  add_async_cleanup_hook([fn](ReadyToUnloadCallback on_ready) {
+  add_async_shutdown_hook([fn](ReadyToUnloadCallback on_ready) {
     auto cb_holder = new ReadyToUnloadCallback(std::move(on_ready));
     auto c_callback = [](void *user_data) {
       auto p = static_cast<ReadyToUnloadCallback *>(user_data);

@@ -82,6 +82,8 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 >    呼叫 `lib.enable_deferred_unload(true)` 可開啟離棧保護。當最後一個節點是在外掛自身的虛擬解構函式中解構時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構呼叫棧完全退出後才卸載代碼段，100% 杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
 > 9. **非同步善後握手協定 (Async Shutdown Handshake Invariant)**：
 >    若外掛具有冗長善後（資料落盤、關閉連線、釋放大型 GPU 資源），必須透過 `lib.add_async_cleanup_hook` 或 `lib.register_async_shutdown_symbol` 註冊。主程式發起關閉（`reset()`）時**0ms 立即返回繼續運作（零卡頓）**；外掛於背景執行緒執行善後完畢後調用 `on_ready()` 握手通知 DynamicLibrary 背景等待線程被喚醒，確認外掛徹底停工後才呼叫 `FreeLibrary` 物理卸載 DLL，兼顧主程式極致流暢與外掛安全收尾。
+> 10. **模組終端收尾最後執行保證 (Terminal Shutdown Guarantee Invariant)**：
+>     外掛模組本身的收尾函式（透過 `register_shutdown_symbol`、`add_shutdown_hook`、`register_async_shutdown_symbol` 或 `add_async_shutdown_hook` 註冊），享有最高層級之「生命週期終端保證」。**不論註冊先後時機為何，系統嚴格保證在所有通用清理掛鉤（`add_cleanup_hook` / `add_async_cleanup_hook`）全數執行完成之後、且在物理卸載（`FreeLibrary` / `dlclose`）前一刻最後被觸發**。這徹底杜絕了外部依賴清理回呼尚未結束前外掛全域狀態即遭提早解構的 Use-After-Free 崩潰。
 
 ### 2.0.4 外掛 Heap 取代與卸載前清空檢驗規範 (Plugin Heap Tracking & Zero-Leak Invariant)
 > ⚠️ **外掛 Heap 取代與卸載前清空檢驗鐵律**：

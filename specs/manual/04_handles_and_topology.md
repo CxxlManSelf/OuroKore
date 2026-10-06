@@ -114,7 +114,7 @@ public:
 4. **模組全域啟始與收尾保證（Lifecycle Hooks & Startup/Shutdown Protocol）**：
    - **首次載入精準辨識**：多個模組重複呼叫 `load()` 請求載入相同動態庫時，載入器透過全域規範路徑弱引用快取共享控制區塊。只有第一次進入進程（0 -> 1）時 `lib.is_first_loaded()` 會傳回 `true`；後續重複載入（N -> N+1）傳回 `false`。
    - **全域啟始單次保證**：呼叫 `lib.initialize_once<InitFn>("ork_plugin_init", args...)`，僅在首次載入時執行初始化（避免型別重複註冊或資源衝突），重複載入時自動安全略過。
-   - **卸載前收尾保證 (Pre-Unload Hook)**：透過 `lib.register_shutdown_symbol("ork_plugin_shutdown")` 或 `lib.add_cleanup_hook(...)` 註冊收尾邏輯。保證嚴格在所有物件銷毀、引用計數歸零（1 -> 0）、且在 `FreeLibrary` / `dlclose` 解除映射前的一瞬間安全觸發！
+   - **模組終端收尾最後執行保證 (Terminal Shutdown Guarantee)**：透過 `lib.register_shutdown_symbol("ork_plugin_shutdown")`、`lib.add_shutdown_hook(...)` 或非同步 `register_async_shutdown_symbol` 註冊收尾邏輯。不論註冊時機為何，系統嚴格保證在所有通用清理回呼（`add_cleanup_hook`）全數執行完成之後、且在 `FreeLibrary` / `dlclose` 解除映射前的一瞬間最後觸發，徹底杜絕外掛提前銷毀導致的 UAF 崩潰！
 
 #### 實戰範例：
 ```cpp

@@ -302,7 +302,34 @@ public:
   void set_async_shutdown_timeout(std::chrono::milliseconds timeout) noexcept;
 
   /**
-   * @brief 依據符號名稱自動註冊無參數同步收尾函式（void()）為卸載前回呼
+   * @brief 註冊在所有通用清理回呼 (cleanup hooks) 執行完畢後、物理卸載前執行的模組最終同步收尾回呼
+   *
+   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
+   * 與 add_cleanup_hook() 不同，本函式註冊的回呼享有生命週期終端保證。
+   * 不論註冊的先後順序為何，系統嚴格保證在所有通用清理掛鉤（add_cleanup_hook / add_async_cleanup_hook）
+   * 全數執行完成之後、且在物理卸載（FreeLibrary / dlclose）前一刻才觸發。
+   *
+   * @param hook 模組終端收尾回呼閉包
+   */
+  void add_shutdown_hook(std::function<void()> hook);
+
+  /**
+   * @brief 註冊模組最終非同步善後收尾回呼 (Terminal Async Shutdown Hook with Handshake)
+   *
+   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
+   * 享有生命週期終端保證，嚴格在所有通用清理掛鉤完成後才觸發，並等待其非同步握手結束後才物理卸載。
+   *
+   * @param hook 接受 ReadyToUnloadCallback 的非同步收尾函式
+   */
+  void add_async_shutdown_hook(AsyncCleanupHook hook);
+
+  /**
+   * @brief 依據符號名稱自動註冊無參數同步收尾函式（void()）為模組最終卸載前回呼
+   *
+   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
+   * 透過本函式註冊的收尾符號享有生命週期終端保證：
+   * 不論呼叫本函式與其他 add_cleanup_hook() 的先後順序為何，該收尾符號必定在所有通用清理掛鉤
+   * 全數執行完成之後、且在 FreeLibrary / dlclose 前一刻最後被觸發！
    *
    * @param symbol_name 收尾函式符號名稱（例如 "ork_plugin_shutdown"）
    * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
@@ -310,9 +337,11 @@ public:
   bool register_shutdown_symbol(std::string_view symbol_name);
 
   /**
-   * @brief 依據符號名稱自動註冊純 C 簽章的非同步收尾函式
+   * @brief 依據符號名稱自動註冊純 C 簽章的模組最終非同步收尾函式
    *
+   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
    * 符號簽章需為：void (*)(void (*on_ready_cb)(void *user_data), void *user_data)
+   * 享有生命週期終端保證：不論註冊順序為何，必定在所有通用清理掛鉤完成後才觸發善後握手協定。
    *
    * @param symbol_name 非同步收尾符號名稱（例如 "ork_plugin_async_shutdown"）
    * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
