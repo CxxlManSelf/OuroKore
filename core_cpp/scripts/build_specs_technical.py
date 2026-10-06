@@ -492,7 +492,43 @@ End Interface
 37. `ork_clear_object_payload_for_testing`
     - **符號規格**：`Function ork_clear_object_payload_for_testing(id: UInt64) -> Int32`
     - **說明**：白盒測試特權：直接置空目標物件之實體記憶體 Payload 模擬冷脫水態。
+
+---
+
+### 💾 類別 D：Base 模組 Heap 追蹤與清空檢驗介面 (`heap_api.h`)
+
+38. `ork_heap_allocate`
+    - **符號規格**：`Function ork_heap_allocate(size: UInt64, file: CString, line: Int32) -> RawPointer`
+    - **說明**：配置記憶體並依編譯期方案記錄檔名與行號。
+39. `ork_heap_allocate_aligned`
+    - **符號規格**：`Function ork_heap_allocate_aligned(size: UInt64, alignment: UInt64, file: CString, line: Int32) -> RawPointer`
+    - **說明**：配置滿足特定對齊之記憶體。
+40. `ork_heap_deallocate`
+    - **符號規格**：`Function ork_heap_deallocate(ptr: RawPointer) -> Void`
+    - **說明**：釋放受管記憶體並扣減統計計數。
+41. `ork_heap_deallocate_aligned`
+    - **符號規格**：`Function ork_heap_deallocate_aligned(ptr: RawPointer, alignment: UInt64) -> Void`
+    - **說明**：釋放對齊受管記憶體。
+42. `ork_heap_is_clean`
+    - **符號規格**：`Function ork_heap_is_clean() -> Int32`
+    - **說明**：查詢當前模組 Heap 是否已完全歸零（1 為清空，0 為有洩漏）。
+43. `ork_heap_get_active_allocations`
+    - **符號規格**：`Function ork_heap_get_active_allocations() -> UInt64`
+    - **說明**：取得當前存活配置區塊數。
+44. `ork_heap_get_active_bytes`
+    - **符號規格**：`Function ork_heap_get_active_bytes() -> UInt64`
+    - **說明**：取得當前存活佔用位元組數。
+45. `ork_heap_dump_leaks`
+    - **符號規格**：`Function ork_heap_dump_leaks(out_buf: MutablePointer<Char>, buf_size: UInt64) -> Int32`
+    - **說明**：輸出格式化 UTF-8 洩漏報告字串至緩衝區。
+46. `ork_heap_assert_clean`
+    - **符號規格**：`Function ork_heap_assert_clean(context_name: CString) -> Int32`
+    - **說明**：斷言 Heap 必須清空（成功傳回 0，有洩漏傳回 -1）。
+47. `ork_heap_reset`
+    - **符號規格**：`Function ork_heap_reset() -> Void`
+    - **說明**：重設 HeapTracker 統計數據與記錄。
 ''', encoding="utf-8")
+
 
     # =========================================================================
     # 04_concurrency_and_locks.md

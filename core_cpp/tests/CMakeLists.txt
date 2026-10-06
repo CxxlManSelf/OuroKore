@@ -52,3 +52,14 @@ target_link_libraries(test_proxy ourokore_core ourokore_base)
 add_executable(base_tree_tests base_tree_tests.cpp)
 target_link_libraries(base_tree_tests ourokore_base)
 
+add_executable(base_heap_tests base_heap_tests.cpp)
+target_link_libraries(base_heap_tests ourokore_base)
+
+add_library(test_tracked_plugin MODULE test_tracked_plugin.cpp)
+target_link_libraries(test_tracked_plugin PRIVATE ourokore_base)
+set_target_properties(test_tracked_plugin PROPERTIES 
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+)
+add_dependencies(base_heap_tests test_tracked_plugin)
+

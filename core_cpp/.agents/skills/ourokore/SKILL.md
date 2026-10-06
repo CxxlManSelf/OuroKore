@@ -83,6 +83,24 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 > 9. **非同步善後握手協定 (Async Shutdown Handshake Invariant)**：
 >    若外掛具有冗長善後（資料落盤、關閉連線、釋放大型 GPU 資源），必須透過 `lib.add_async_cleanup_hook` 或 `lib.register_async_shutdown_symbol` 註冊。主程式發起關閉（`reset()`）時**0ms 立即返回繼續運作（零卡頓）**；外掛於背景執行緒執行善後完畢後調用 `on_ready()` 握手通知 DynamicLibrary 背景等待線程被喚醒，確認外掛徹底停工後才呼叫 `FreeLibrary` 物理卸載 DLL，兼顧主程式極致流暢與外掛安全收尾。
 
+### 2.0.4 外掛 Heap 取代與卸載前清空檢驗規範 (Plugin Heap Tracking & Zero-Leak Invariant)
+> ⚠️ **外掛 Heap 取代與卸載前清空檢驗鐵律**：
+> 為防範外掛模組在卸載前遺留記憶體洩漏或懸垂指針，OuroKore 在 `ourokore_base` 提供雙軌並行的 Heap 追蹤與清空檢驗系統：
+> 1. **全域運算子透明重載 (Global Overload Mode)**：
+>    - 在外掛 MODULE 動態庫的任一核心 `.cpp` 檔中呼叫巨集 `ORK_ENABLE_PLUGIN_HEAP_TRACKING()`（包含 `<ourokore/base/PluginHeap.hpp>`）。
+>    - 該外掛模組內部所有的 `new`、`delete`、`new[]`、`delete[]` 以及 STL 容器（如 `std::vector`、`std::string` 等）的堆配置，將 100% 透明重定向至 `HeapTracker`，無需改動任何業務代碼。
+> 2. **顯式追蹤介面 (Explicit Tracked Mode)**：
+>    - 透過 `ORK_NEW(Type, ...)` 與 `ORK_DELETE(ptr)`（包含 `<ourokore/base/TrackedNewDelete.hpp>`），自動於編譯期捕捉 `__FILE__` 與 `__LINE__` 來源位置。
+>    - 陣列可使用 `ORK_NEW_ARRAY(Type, count)` 與 `ORK_DELETE_ARRAY(ptr, count)`。
+>    - STL 容器可選用 `ork::TrackedAllocator<T>`。
+> 3. **外掛結束前清空判定與洩漏診斷 (Zero-Leak Verification)**：
+>    - 外掛在 `PluginShutdown()` 或被卸載前，可呼叫 `ork::PluginHeap::is_clean()` 查詢 Heap 是否歸零。
+>    - 呼叫 `ork::PluginHeap::assert_clean("PluginName")`：若未清空立即印出完整診斷清單並報錯。
+>    - 呼叫 `ork::PluginHeap::dump_leaks_to_string("PluginName")`：產出包含位址、位元組大小、來源檔案與行號的 100% UTF-8 詳細報告。
+>    - 亦可使用 RAII 守衛 `ork::PluginHeapGuard guard("PluginName");` 於作用域結束時自動警示。
+> 4. **跨語言純 C ABI 支援**：
+>    - 包含 `<ourokore/base/heap_api.h>`，提供 `ork_heap_allocate`、`ork_heap_deallocate`、`ork_heap_is_clean`、`ork_heap_dump_leaks` 與 `ork_heap_assert_clean` 等純 C ABI 函式。
+
 ### 2.1 主程式 Entry Point (HostContext)
 ```cpp
 #include <ourokore/host/HostContext.hpp>

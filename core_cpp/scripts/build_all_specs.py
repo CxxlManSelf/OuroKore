@@ -6,6 +6,7 @@ from pathlib import Path
 from build_specs_manual import generate_manual_specs
 from build_specs_technical import generate_technical_specs
 from build_specs_readme import generate_specs_readme
+from build_app_skill import generate_app_skill
 
 def main():
     script_dir = Path(__file__).resolve().parent
@@ -17,7 +18,9 @@ def main():
     generate_manual_specs(specs_dir)
     generate_technical_specs(specs_dir)
     generate_specs_readme(specs_dir)
-    print("🎉 全套 specs/ 文件生成成功！路徑:", specs_dir)
+    generate_app_skill(root_dir)
+    print("🎉 全套 specs/ 文件與應用端 Skill 生成成功！路徑:", specs_dir)
+
 
 if __name__ == "__main__":
     main()

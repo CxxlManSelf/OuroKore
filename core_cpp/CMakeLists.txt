@@ -13,7 +13,16 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Heap 追蹤策略設定: A (預設: Debug詳細/Release完全關閉), B (Debug詳細/Release輕量無鎖原子計數)
+set(OUROKORE_HEAP_POLICY "A" CACHE STRING "Heap tracking policy: A (Debug detailed / Release disabled), B (Debug detailed / Release atomic count)")
+if(OUROKORE_HEAP_POLICY STREQUAL "A" OR OUROKORE_HEAP_POLICY STREQUAL "a")
+    add_compile_definitions(ORK_HEAP_POLICY=1)
+elseif(OUROKORE_HEAP_POLICY STREQUAL "B" OR OUROKORE_HEAP_POLICY STREQUAL "b")
+    add_compile_definitions(ORK_HEAP_POLICY=2)
+endif()
+
 add_subdirectory(base)
+
 add_subdirectory(core)
 add_subdirectory(tests)
 

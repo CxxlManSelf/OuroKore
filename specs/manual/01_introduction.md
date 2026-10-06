@@ -48,26 +48,3 @@ OuroKore 嚴格劃分三大權限層級：
 1. **主程式宿主層（Host Application）**：透過 `HostContext` 獨佔進程生命週期、執行緒池注入、自動脫水策略與特權維護功能。
 2. **組件與插件層（Component / Plugin）**：僅能使用受管物件、安全指標、Handle 拓撲與讀寫鎖，物理隔絕所有破壞性特權。
 3. **底層純 C ABI（Cross-Language FFI）**：所有底層操作以純整數狀態碼、HandleID 與 C 函式指標封裝，100% 杜絕 C++ 例外跨動態庫逃逸，為未來綁定 C#、Rust、Python 提供完備基礎。
-
-### 4. 基礎模組與通用設施 (Base Foundation & Utilities)
-除了核心物件圖託管外，`ourokore_base` 模組提供了一套現代、高效能且零依賴上層核心的基礎工具庫：
-* **現代樹狀容器與文字 DSL (Tree & TreeIO)**：單一容器雙模態統合（保序 vector + 雜湊 map），資料純度推導形態（物件 `{}` 與陣列 `()`），百萬層顯式堆疊防爆棧。
-* **動態模組載入器 (DynamicLibrary)**：禁絕手動卸載、生命週期反向錨定、弱引用晉升與非同步離棧延遲卸載。
-* **現代編譯期雜湊 (Hash.hpp)**：C++20 `constexpr` FNV-1a（TypeID 唯一標準）、CRC32、MurmurHash3、HashCombine 與字面量。
-* **並行排程與同步設施 (ThreadPool, Semaphore, Event, ThreadSafeQueue)**：固定與動態彈性伸縮執行緒池、MPMC 阻塞佇列、計數信號量與跨平台事件原語。
-* **全域 UTF-8 標準輔助 (utf8.hpp)**：零拷貝字串視圖轉換與 Windows Unicode `W` 邊界隔離。
-
----
-
-## 📚 使用手冊章節導引 (Manual Navigation)
-
-本使用手冊由淺入深分為以下章節：
-1. **[01. 系統概述與架構哲學 (Introduction)](01_introduction.md)**：系統願景、核心心智模型與架構原則。
-2. **[02. 5 分鐘快速上手 (Quickstart)](02_quickstart.md)**：從零建立宿主、受管物件、存檔與文字 DSL。
-3. **[03. 領域物件設計與型別系統 (Domain Object Design)](03_domain_object_design.md)**：`Subclass` 樣板、TypeID 墓碑長存、安全向上/向下轉型與 X-Macro 安全 Proxy。
-4. **[04. 智慧 Handle 系統與拓撲關係 (Handles & Topology)](04_handles_and_topology.md)**：`OwningHandle`、`UnboundHandle`、`OuroPtr` 防逃逸成員指標呼叫與背景循環回收。
-5. **[05. 脫水換頁與儲存驅動 (Dehydration & Storage)](05_dehydration_and_storage.md)**：四態生命週期、LRU 自動換頁、透明按需復水與儲存驅動實作。
-6. **[06. 宿主生命週期與特權控制 (Host Lifecycle)](06_host_lifecycle.md)**：`HostContext` 特權獨佔、優雅關閉、背景執行緒排空與自救脫水調度。
-7. **[07. API 規格參考手冊 (API Reference)](07_api_reference.md)**：全體公開類別、樣板、方法與函式介面速查。
-8. **[08. 樹狀結構容器與文字 DSL 指南 (Tree & TreeIO)](08_tree_and_dsl.md)**：階層容器、雙模態統合、非遞迴狀態機反序列化與緊湊格式。
-9. **[09. 基礎工具庫指南 (Base Foundation & Utilities)](09_base_utilities.md)**：動態庫載入、編譯期雜湊、並行執行緒池、同步原語與全域 UTF-8 工具。

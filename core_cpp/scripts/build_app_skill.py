@@ -1,4 +1,15 @@
----
+# -*- coding: utf-8 -*-
+"""
+生成與同步應用端專用 AI 技能手冊 (skills/ourokore-app/SKILL.md)
+"""
+from pathlib import Path
+
+def generate_app_skill(root_dir: Path):
+    app_skill_dir = root_dir / "skills" / "ourokore-app"
+    app_skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file = app_skill_dir / "SKILL.md"
+
+    content = '''---
 name: ourokore-app
 description: "OuroKore 應用端與第三方外掛開發指南、領域物件設計、記憶體 Heap 追蹤清空檢驗與生命週期安全錨定最佳實踐。"
 ---
@@ -139,3 +150,11 @@ private:
 1. **外掛 Target 宣告鐵律**：CMake 中必須使用 `add_library(<name> MODULE ...)`，嚴禁宣告為 `SHARED`。
 2. **生命週期反向錨定**：透過 `lib.bind_lifecycle(raw_ptr, deleter_fn)` 或自訂 Deleter 閉包持有 `DynamicLibrary`。
 3. **主程式放棄 initial handle**：主程式完成工廠建構後必須放棄 `load()` 回傳的 `DynamicLibrary` 句柄（隨作用域結束或呼叫 `reset()`），使得 DLL 的存活權杖全權交給產生的物件持有；最後一個物件析構時動態庫自動安全卸載。
+'''
+    skill_file.write_text(content, encoding="utf-8")
+    print("✅ 應用端 AI 技能檔 ../skills/ourokore-app/SKILL.md 生成完畢！")
+
+if __name__ == "__main__":
+    script_dir = Path(__file__).resolve().parent
+    root_dir = script_dir.parent.parent
+    generate_app_skill(root_dir)
