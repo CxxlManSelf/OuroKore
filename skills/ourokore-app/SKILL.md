@@ -139,10 +139,3 @@ private:
 1. **外掛 Target 宣告鐵律**：CMake 中必須使用 `add_library(<name> MODULE ...)`，嚴禁宣告為 `SHARED`。
 2. **生命週期反向錨定**：透過 `lib.bind_lifecycle(raw_ptr, deleter_fn)` 或自訂 Deleter 閉包持有 `DynamicLibrary`。
 3. **主程式放棄 initial handle**：主程式完成工廠建構後必須放棄 `load()` 回傳的 `DynamicLibrary` 句柄（隨作用域結束或呼叫 `reset()`），使得 DLL 的存活權杖全權交給產生的物件持有；最後一個物件析構時動態庫自動安全卸載。
-4. **模組唯一善後收尾與常駐模式 (Terminal Shutdown & Resident Mode)**：
-   - 透過 `lib.register_shutdown_symbol("PluginShutdown")` 或 `lib.set_shutdown_hook(...)` 註冊全域唯一的模組收尾入口。
-   - **拒絕卸載轉常駐**：若外掛因業務理由（如背景任務運作中）回傳 `false`（或非 0），系統自動將其轉為常駐模式（Resident Mode），絕不調用 `FreeLibrary`、絕不觸發 `post_unload_hook`，且全域路徑登錄長存；後續任何代碼再次 `load()` 該路徑時 100% 無縫重用常駐模組！
-   - **主程式非同步離棧卸載**：呼叫 `lib.enable_deferred_unload(true)` 可讓卸載管線自動由獨立背景執行緒接管，兼具主程式 0ms 零卡頓與無崩潰自毀。
-5. **跨外掛共享註冊表 (Cross-Plugin Registry Sharing)**：
-   - 全域路徑註冊表由 `ourokore_base.dll` 集中託管。
-   - 若外掛 A 透過 `DynamicLibrary::load("PluginB.dll")` 呼叫外掛 B，全進程 100% 共享同一張註冊表，直接精準命中既有存活實例或常駐模組，絕不重複 LoadLibrary！

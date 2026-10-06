@@ -203,12 +203,84 @@ End Procedure
 2. **雙重防護原則**：
    - **編譯期權杖防禦 (Passkey Pattern)**：底層救援函式強制要求合法構造樣板專屬權杖，外部任何外掛業務程式碼無法直接實例化，杜絕第三方插件主動發起全域記憶體調度。
    - **執行期情境驗證**：核心在觸發脫水自救前，校驗當前 HandleID 是否正處於合法預留或脫水重建狀態，非合法情境之調用一律拒絕。
+
+
+---
+
+## 🧩 5. 動態模組架構與生命週期反向錨定規範 (Life-Bound Retention RFC)
+
+在微核心與外掛（Plugin / MODULE）架構中，動態庫載入器必須保證執行期代碼段與虛擬函式表（vtable）的絕對有效性。
+
+### 5.1 禁絕手動卸載定理 (No Manual Unload Invariant)
+* **定理**：載入器介面**嚴禁提供任何手動卸載函式**（如 `Unload()`）。
+* **公理**：在多執行緒與非同步任務圖中，任何執行緒無法預知其他執行緒是否仍有閉包正在執行外掛虛擬函式。提前手動卸載動態庫必然引發作業系統將代碼段解除映射（Unmap），導致記憶體訪問違規（Access Violation / SIGSEGV）。
+
+### 5.2 生命週期反向錨定模型 (Life-Bound Retention Model)
+動態模組之卸載完全由受管物件之生命週期計數自然驅動：
+
+```text
+Structure ModuleControlBlock:
+    system_handle: NativeModuleHandle
+    use_count: AtomicUInt64
+    is_first_loaded: Boolean
+    is_permanent_resident: Boolean
+    cleanup_hooks: List<Function>
+    terminal_shutdown_hook: Nullable<Function>
+    post_unload_hooks: List<Function(String)>
+End Structure
+
+Procedure RetainModule(block):
+    block.use_count.FetchAdd(1)
+End Procedure
+
+Procedure ReleaseModule(block):
+    If block.use_count.FetchSub(1) == 1 Then
+        TriggerModuleUnloadWorkflow(block)
+    End If
+End Procedure
+```
+
+* **弱引用晉升機制 (Weak Dynamic Module)**：
+  提供無所有權之弱觀察者。呼叫端可在放棄初始強引用後，隨時透過原子性 `Lock()` 嘗試晉升；若模組已卸載則安全回傳無效句柄，杜絕懸空指標。
+
+---
+
+## 🤝 6. 外掛非同步善後握手協定與終端常駐模式 (Async Handshake & Resident RFC)
+
+### 6.1 主執行緒 0ms 延遲非同步握手協定 (Async Shutdown Handshake)
+為解決外掛在卸載收尾時執行耗時 I/O（磁碟落盤、GPU 緩衝區釋放、網路關閉）導致主執行緒卡頓之問題，核心定義非同步握手狀態機：
+
+```text
+[主程式執行緒]                               [背景卸載等待線程]                         [外掛動態庫]
+      │                                             │                                       │
+釋放最後引用 (Release)                              │                                       │
+      │ ─── 移交背景線程 (0ms 立即返回繼續運作) ──> │                                       │
+      │                                             │ ─── 調用非同步收尾函式(附帶 Token) ──>│
+      │                                             │                                       │ 執行耗時落盤與善後...
+      │                                             │ ─── 進入條件變數阻塞等待 ────         │
+      │                                             │                             │         │
+      │                                             │ <── 呼叫 Token.OnReady() ───│ 善後完畢，主動握手喚醒！
+      │                                             │     (握手成功，喚醒背景線程)           │ (代碼段安全終止)
+      │                                             │                                       
+      │                                             │ 物理調用 FreeLibrary / dlclose
+      │                                             │ 觸發 PostUnloadHooks 通知主程式
+```
+
+### 6.2 外掛終端收尾保證 (Terminal Shutdown Guarantee)
+外掛可註冊終端收尾回呼（Terminal Shutdown Symbol），保證於外掛所屬的所有活體物件全部釋放完畢後**最後執行一次**。
+
+### 6.3 外掛拒絕卸載轉為常駐模式 (Permanent Resident Mode)
+* 若外掛之終端收尾函式執行後傳回**非零代碼**，核心將其識別為「外掛主動拒絕卸載」。
+* 核心立即將其標記為 `is_permanent_resident = True`，取消物理卸載調用，使該動態庫安全常駐於記憶體直至進程終止，杜絕外掛因全局註冊回呼無法清理而崩潰。
+
+### 6.4 離棧延遲卸載防自毀保護 (Deferred Unload Defense)
+若模組內部的某個回呼自身釋放了該模組的最後一個引用計數，核心強制將 `FreeLibrary` 操作延遲至非同步背景離棧執行緒執行，防止模組在呼叫棧仍在該動態庫內部時物理卸載自身的代碼段導致致命崩潰。
 ''', encoding="utf-8")
 
     # =========================================================================
     # 02_binary_protocols.md
     # =========================================================================
-    (tech_dir / "02_binary_protocols.md").write_text('''# 02. 二進位串流與藍圖打包協議 (Binary Protocols & Wire Format RFC)
+    (tech_dir / "02_binary_protocols.md").write_text(r'''# 02. 二進位串流與藍圖打包協議 (Binary Protocols & Wire Format RFC)
 
 本文件詳細定義 OuroKore 的**實體二進位資料串流佈局（Binary Wire Format）**。
 任何第三方工具、其他程式語言（C#、Rust、Go、Python）實現的 OuroKore 引擎或解析器，只要嚴格遵循本規格，即可與 C++ 實現版本產生的二進位藍圖或脫水存檔 **100% 互通與雙向讀寫**。
@@ -336,6 +408,87 @@ End Interface
 
 * **Key-Value 格式**：儲存驅動以 `HandleID (UInt64)` 為唯一 Key，以本規範定義的兩段式二進位串流為 Value。
 * **跨語言相容性**：無論底層介質採用本機檔案（File Storage）、記憶體（InMemoryStorage）、SQLite 或分散式 KV 資料庫，其儲存的資料二進位 Payload 均完全相同，可直接被不同語言之 OuroKore 核心交換讀取。
+
+
+---
+
+## 🌲 5. 樹狀結構階層與文字 DSL 串流協議 (Hierarchical Tree & Text DSL Wire Format RFC)
+
+本節定義 OuroKore 階層式容器 `TreeNode` 與文字 DSL 串流 `TreeIO` 的資料交換規範。
+
+### 5.1 資料純度自動推導雙模態 (Data-Driven Morphism)
+樹節點本身不儲存形態列舉，形態完全由子節點結構純度於執行期自動推導：
+* **物件模式（Object Mode，DSL 界定符 `{}`）**：子節點全體均為具名節點（`child_count == named_child_count`）。
+* **陣列模式（Array Mode，DSL 界定符 `()`）**：混入任何無名（匿名）節點（`child_count > named_child_count`）。
+
+### 5.2 四大正交界定符與零等號哲學 (Orthogonal Delimiters)
+文字 DSL 採用四個完全正交之語法 Token，等號 `=` 僅為可選裝飾符號：
+* `[節點名稱]`：名稱標記。
+* `"字串內容"`：Payload 資料（支援 0~255 二進位位元組與轉義字元 `\"`、`\\`、`\n`、`\xHH`）。
+* `{具名成員}`：物件區塊。
+* `(列表元素)`：陣列區塊。
+
+#### 三種緊湊傳輸編碼模式 (CompactMode Wire Styles)：
+1. **模式 1：標準縮排換行 (CompactMode::None)**：含標準縮排、空白與換行，供人類閱讀。
+2. **模式 2：含等號緊湊 (CompactMode::WithEqual)**：`[Key]="Value"{[Child]="1"}`。
+3. **模式 3：極致無等號緊湊 (CompactMode::WithoutEqual)**：`[Key]"Value"{[Child]"1"}`。
+   - 規範保證：連續具名空節點（如 `[A][B]`）、匿名空元素、物件陣列 `( { [id]"1" } )` 均 100% 精準對稱還原，單元素容器（如 `("Item")`）反序列化時拓撲身分永不降級脫殼。
+
+### 5.3 註解語法與界定符遮蔽
+狀態機原生支援三種風格註解：
+* `// 單行註解`（跳至行尾）
+* `/* 區塊註解 */`（跳至閉合符 `*/`）
+* `# 腳本註解`（跳至行尾）
+* **遮蔽保證**：註解內部包含的引號與括號均被狀態機嚴格忽略，不得觸發任何狀態轉移。
+
+### 5.4 顯式堆疊非遞迴 FSM 反序列化演算法 (Non-recursive FSM Deserialization)
+反序列化演算法以堆積（Heap）顯式堆疊 `Stack<ParseFrame>` 驅動，呼叫棧（Call Stack）深度恆為 $O(1)$，數學證明巨深文字 DSL 免疫呼叫堆疊溢位（Stack Overflow）：
+
+```text
+Structure ParseFrame:
+    current_node: NodeHandle
+    state: ParserState
+    accumulated_name: String
+    accumulated_data: String
+End Structure
+
+Function DeserializeFromString(dsl_text: String) -> NodeHandle:
+    Let root = CreateRootNode()
+    Let stack = DynamicStack<ParseFrame>()
+    stack.Push(ParseFrame(root, STATE_SEEK_NODE))
+    
+    Let cursor = 0
+    While cursor < dsl_text.Length Do
+        Let ch = dsl_text[cursor]
+        
+        // 略過空白字元與三種註解
+        If IsCommentOrWhitespace(ch, dsl_text, cursor) Then
+            cursor = SkipCommentOrWhitespace(dsl_text, cursor)
+            Continue
+        End If
+        
+        // 狀態機基於 stack.Top() 轉移：
+        Match stack.Top().state With
+            Case STATE_SEEK_NODE:
+                If ch == '[' Then
+                    stack.Top().state = STATE_READ_NAME
+                Else If ch == '{' Or ch == '(' Then
+                    Let child = stack.Top().current_node.AddChild()
+                    stack.Push(ParseFrame(child, STATE_SEEK_NODE))
+                Else If ch == '}' Or ch == ')' Then
+                    stack.Pop() // 顯式出棧，零遞迴返回！
+                End If
+            Case STATE_READ_NAME:
+                // 解析至閉合中括號 ']' 並填入 accumulated_name
+            Case STATE_READ_DATA:
+                // 解析至閉合雙引號 '"' 並填入 accumulated_data
+        End Match
+        cursor = cursor + 1
+    End While
+    
+    Return root
+End Function
+```
 ''', encoding="utf-8")
 
     # =========================================================================
@@ -533,40 +686,110 @@ End Interface
     # =========================================================================
     # 04_concurrency_and_locks.md
     # =========================================================================
-    (tech_dir / "04_concurrency_and_locks.md").write_text('''# 04. 併發模型、鎖階層規範與防死鎖設計 (Concurrency & Locks RFC)
+    (tech_dir / "04_concurrency_and_locks.md").write_text(r'''# 04. 併發模型、鎖階層規範與防死鎖設計 (Concurrency & Locks RFC)
 
-本文件定義 OuroKore 系統中多執行緒併發存取、全域單向鎖偏序與任務排程器的防死鎖規範。
+本文件定義 OuroKore 系統中多執行緒併發存取、全域單向鎖偏序、樹狀結構不可重入鎖遍歷以及任務排程器的完整防死鎖規範。
 
 ---
 
-## 🚦 1. 全域單向鎖偏序規範 (Lock Partial Ordering Invariants)
+## 🚦 1. 全域單向鎖偏序五層架構 (Complete 5-Tier Lock Partial Ordering Hierarchy)
 
 為杜絕跨執行緒併發存取引發的循環等待死鎖，任何語言實現之 OuroKore 核心必須嚴格遵守以下單向鎖順序：
 
 ```
-[ 層級 1：全域註冊表讀寫鎖 (Registry Mutex) ]
-                     │
-                     ▼
+[ 層級 1：全域註冊表讀寫鎖 (Global Registry Mutex) ]
+                       │
+                       ▼
   [ 層級 2：ControlBlock 物件互斥鎖 (Object Mutex) ]
-                     │
-                     ▼
-   [ 層級 3：佇列與排程器互斥鎖 (Queue / Worker Mutex) ]
+                       │
+                       ▼
+ [ 層級 3：樹狀結構拓撲讀寫鎖 (Tree Topology Mutex - shared_mutex) ]
+                       │
+                       ▼
+  [ 層級 4：樹節點 Payload 資料鎖 (Tree Data Mutex) ]
+                       │
+                       ▼
+    [ 層級 5：佇列與排程器互斥鎖 (Queue / Worker Mutex) ]
 ```
 
-### 鐵律防線：
-1. **嚴禁逆向取鎖**：禁止在持有層級 2（物件鎖）的情況下，嘗試索取層級 1（全域註冊表鎖）；禁止在持有子物件獨占鎖的情況下，逆向索取父物件的獨占鎖。
+### 鐵律防線與死鎖數學反證：
+1. **嚴禁逆向取鎖 (No Inverted Lock Acquisition)**：
+   - 禁止在持有層級 2（物件鎖）時索取層級 1（全域註冊表鎖）。
+   - 禁止在持有層級 4（資料鎖）時索取層級 3（拓撲鎖）。
+   - 禁止在持有子物件鎖時逆向索取父物件鎖。
 2. **領域物件終結器無鎖調用防線 (Finalizer Outside Locks)**：
-   - 核心在調用領域物件的釋放/終結邏輯（Destructor / Finalizer / Dispose）或執行釋放回呼期間，**絕對不可持有任何全域註冊表鎖或佇列鎖**。
-   - 目的：防範物件在終結邏輯中遞迴存取其他物件或觸發連鎖清理而造成自死鎖。
+   - 核心在調用領域物件的釋放/終結邏輯（Destructor / Dispose）或執行自訂清理回呼期間，**絕對不可持有任何全域註冊表鎖或佇列鎖**。
+   - 目的：防範物件在終結邏輯中遞迴存取其他物件引發連鎖自我死鎖。
 
 ---
 
-## 🧵 2. 執行緒池 Worker 辨識與防遞迴等待死鎖
+## 🔒 2. 樹狀結構不可重入鎖與防死鎖遍歷兩階段範式 (Tree Traversal & Deadlock Prevention RFC)
 
-在高效能非同步執行緒池（`FixedThreadPool` / `DynamicThreadPool`）中：
-1. **工作執行緒識別標記**：每個被執行緒池管理的工作線程必須具備執行緒在地標記（Thread-Local Flag: `IsWorker = True`）。
-2. **等待排空防呆保護 (Wait Idle Invariant)**：
-   - 若某個 Worker 執行緒在其承擔的任務內部呼叫了等待整個執行緒池排空（`WaitIdle`）之操作，內部必須立即判定此為自我死鎖行為並主動 Fail-Fast 拋出異常，杜絕死鎖擴散至整個進程。
+### 2.1 整樹共享讀寫鎖架構
+* 樹狀結構中，根節點（Root）與其所有子孫節點（Descendants）**共享同一個樹級讀寫鎖（`shared_mutex`）**。
+* 此鎖為**不可重入鎖（Non-recursive Mutex）**，以取得最高之硬體級讀寫併發效能。
+
+### 2.2 遍歷期間拓撲不可變鐵律
+> **高壓線禁忌**：在持共享讀鎖（Shared Read Lock）遍歷樹節點期間，**絕對禁止調用任何拓撲異動介面**（如 `AddChild()`、`RemoveChild()`、`PushElement()`、`ClearChildren()` 等）。因為拓撲修改需索取獨占寫鎖（Unique Write Lock），當前執行緒若嘗試索取將立即引發不可重入死鎖！
+
+### 2.3 兩階段延遲操作演算法 (Two-Phase Deferred Mutation Algorithm)
+若業務邏輯需要依據遍歷結果動態新增或修剪節點，必須嚴格採用兩階段演算法：
+
+```text
+Procedure PruneTreeSafely(root):
+    Let to_remove = List<NodeHandle>()
+    
+    // 【第一階段：持讀鎖安全收集目標節點】
+    AcquireSharedReadLock(root.GetTreeMutex())
+    For Each child In root.Elements Do
+        If child.GetData() == "過期項目" Then
+            to_remove.Append(child) // 僅收集句柄，絕不在此調用 RemoveChild！
+        End If
+    End For
+    ReleaseSharedReadLock(root.GetTreeMutex()) // 讀鎖在此安全解構釋放！
+
+    // 【第二階段：無鎖或依需索取寫鎖批次執行拓撲異動】
+    For Each target In to_remove Do
+        root.RemoveChild(target) // 安全！內部獨占寫鎖不會與讀鎖衝突
+    End For
+End Procedure
+```
+
+---
+
+## 🧵 3. 非同步執行緒池 (ThreadPool) 任務排程模型
+
+### 3.1 工作執行緒識別與自死鎖防呆 (Worker Thread Identification)
+1. **Thread-Local 識別標記**：每個被執行緒池管理的工作線程必須具備執行緒在地標記（`IsWorker = True`）。
+2. **等待排空自死鎖防呆 (Wait Idle Invariant)**：
+   - 若某個 Worker 執行緒在其承擔的任務內部呼叫了等待整個執行緒池排空（`WaitForAll` / `WaitIdle`）之操作，內部必須立即判定此為自我死鎖行為並主動 Fail-Fast 拋出異常，杜絕死鎖擴散至整個進程。
+
+### 3.2 彈性動態線程池之伸縮狀態機 (Dynamic Thread Scaling)
+動態執行緒池（`DynamicThreadPool`）具備自適應工作量自動擴充與縮容能力：
+* **擴容條件**：當新任務抵達且當前排隊任務數 > 0，且當前線程數 < `max_threads` 時，立即生成新 Worker 線程。
+* **縮容條件**：當工作線程等待任務超過指定之閒置逾時（`idle_timeout`），且當前線程數 > `min_threads` 時，Worker 線程自動終止解構退出。
+
+---
+
+## 📦 4. 執行緒安全佇列與同步原語規格 (Concurrency Primitives RFC)
+
+1. **執行緒安全阻塞佇列 (`ThreadSafeQueue<T>`)**：
+   - 內部由互斥鎖與條件變數（Condition Variable）保護。
+   - `Push(item)`：入隊後發出信號喚醒至少一個等待者。
+   - `TryPop(item)`：非阻塞提取，若為空立即回傳 `False`。
+   - `WaitAndPop()`：阻塞直到隊列有元素或超時返回。
+2. **計數信號量 (`Semaphore`)**：
+   - 維護原子計數值，支援跨執行緒之資源配額控制與限流。
+3. **條件事件 (`Event`)**：
+   - 支援手動重置（Manual Reset，一次喚醒所有等待執行緒）與自動重置（Auto Reset，一次僅喚醒單一執行緒）兩種模式。
+
+---
+
+## 🤝 5. 外掛卸載背景等待執行緒與主執行緒零卡頓握手模型
+
+主程式在釋放外掛最後引用時，將收尾等待交棒給背景工作執行緒，背景線程以條件變數等待外掛調用 `on_ready_to_unload()` 握手信號：
+* 主程式執行緒耗時為 0ms，完全免疫外掛的卸載卡頓。
+* 背景執行緒在收到握手或達到逾時限制後，才執行作業系統級的動態庫卸載。
 ''', encoding="utf-8")
 
     print("✅ specs/technical/ 全套 4 份高標準技術手冊已依據中性語言 RFC 規範重新生成完畢！")

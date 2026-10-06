@@ -59,6 +59,21 @@ OuroKore 嚴格劃分三大權限層級：
 1. **主程式宿主層（Host Application）**：透過 `HostContext` 獨佔進程生命週期、執行緒池注入、自動脫水策略與特權維護功能。
 2. **組件與插件層（Component / Plugin）**：僅能使用受管物件、安全指標、Handle 拓撲與讀寫鎖，物理隔絕所有破壞性特權。
 3. **底層純 C ABI（Cross-Language FFI）**：所有底層操作以純整數狀態碼、HandleID 與 C 函式指標封裝，100% 杜絕 C++ 例外跨動態庫逃逸，為未來綁定 C#、Rust、Python 提供完備基礎。
+
+---
+
+## 📚 使用手冊導引索引 (Manual Index)
+
+1. [01. 系統概述與架構哲學](01_introduction.md) - 心智模型、四大基石與三層邊界隔離哲學
+2. [02. 5 分鐘快速上手](02_quickstart.md) - 宿主初始化、自訂領域物件、屬性存取與存檔
+3. [03. 領域物件設計規範](03_domain_object_design.md) - Getter/Setter、OuroReadLock/OuroWriteLock、原子標髒
+4. [04. Handle 拓撲管理系統](04_handles_and_topology.md) - OwningHandle、UnboundHandle、OwningContainerHandle、OuroPtr
+5. [05. 自動換頁脫水與儲存驅動](05_dehydration_and_storage.md) - 記憶體脫水、透明按需復水、LRU 策略配置
+6. [06. 宿主生命週期與特權管理](06_host_lifecycle.md) - HostContext 獨佔特權、插件隔離防護、優雅退出
+7. [07. 樹狀結構容器與文字 DSL 指南](07_tree_and_dsl.md) - TreeNode 雙模態容器、顯式堆疊走訪與正交無等號 DSL
+8. [08. 基礎工具庫指南](08_base_utilities.md) - DynamicLibrary 生命週期反向錨定、constexpr Hash、並行同步與 UTF-8
+9. [09. 外掛 Heap 追蹤與記憶體防禦指南](09_heap_and_memory.md) - 編譯期 A/B 方案、全域重載、外掛結束前洩漏檢驗與純 C ABI
+10. [10. 公開 C++ API 參照手冊](10_api_reference.md) - 完整公開 API 清單與核心型別定義（終端速查字典附錄）
 ''', encoding="utf-8")
 
     # 02_quickstart.md
@@ -788,199 +803,8 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
 * 插件若嘗試在無效的 `HostContext` 上調用任何特權方法，核心立即拋出 `std::runtime_error` 越權異常，徹底隔絕特權穿透！
 ''', encoding="utf-8")
 
-    # 07_api_reference.md
-    (manual_dir / "07_api_reference.md").write_text('''# 07. 公開 C++ API 參照手冊 (API Reference)
-
-本手冊彙整 OuroKore 面向應用開發者與宿主主程式之所有公開核心類別與全域介面。
-
----
-
-## 🏛️ 1. 宿主專屬類別：`ork::HostContext`
-* **標頭檔**：`ourokore/host/HostContext.hpp`
-* **方法**：
-  * `bool IsValid() const noexcept`：檢查是否具備合法宿主主控權。
-  * `void Shutdown()`：優雅終止核心背景任務與執行緒池。
-  * `void FlushStorage()`：同步排空並等待所有藍圖磁碟寫入與銷毀落盤。
-  * `void FlushDeferredDeletions()`：同步排空延遲物理銷毀隊列。
-  * `void CollectCycles()`：同步觸發一輪循環參照檢測與孤島解開。
-  * `void SetDeferredDeleteMode(bool sync)`：設定非同步延遲銷毀或即時同步模式。
-  * `void SetAutoDehydrator(std::shared_ptr<IAutoDehydrator>)`：設定全域自動脫水模組。
-  * `std::shared_ptr<IAutoDehydrator> GetAutoDehydrator() const`：取得當前自動脫水模組。
-  * `void SetStorageDriver(std::shared_ptr<IStorageDriver>)`：設定儲存驅動。
-  * `std::shared_ptr<IStorageDriver> GetStorageDriver() const`：取得當前儲存驅動。
-  * `size_t TriggerDehydrationRescue(size_t bytes_needed)`：緊急脫水指定位元組數。
-  * `void SetObjectModuleLoader(HandleID id, const DynamicLibrary &loader)`：綁定動態庫載入器至受管物件控制區塊（脫水長存，Payload 銷毀即刻解錨）。
-  * `DynamicLibrary GetObjectModuleLoader(HandleID id) const`：取得物件綁定之動態庫載入器。
-  * `std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const`：取得專職模組綁定介面（最小特權原則，委派給外掛工廠）。
-
----
-
-## 📦 2. 領域物件基底與 CRTP 樣板：`ork::OuroObject` / `ork::Subclass`
-* **標頭檔**：`ourokore/component/OuroObject.hpp`
-* **類別基底 `ork::OuroObject`**：
-  * 所有託管物件之抽象基類，嚴禁外部 `new` 或值拷貝。
-  * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
-  * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
-  * `ork_type_id_t GetTypeID() const`：取得物件當前之 64 位元 TypeID（支援多型與繼承階層查詢）。
-  * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
-  * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
-* **樣板基底 `ork::Subclass<Derived, Base = ork::OuroObject>`**：
-  * **所有領域物件強制繼承之 CRTP 基底**（免巨集自動型別系統）。
-  * `static constexpr const char* StaticTypeName()`：自動在編譯期萃取類別名稱。
-  * `static TypeID StaticTypeID()`：自動以 FNV-1a 計算並向核心註冊繼承關係樹。
-  * 支援帶參數建構子完美轉發：`Subclass(args...)` 直接初始化父類別。
-
----
-
-## 🔗 3. 智慧 Handle 系統
-* **標頭檔**：`ourokore/component/Handles.hpp`
-* **類別**：
-  * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
-  * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
-  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
-  * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator()(Fn&&, Args&&...)`, `Invoke(...)`, `operator bool()`, `IsAlive()`, `GetTargetID()`, `Release()`。
-    * `template <typename U> bool Is() const`：判定物件是否屬於或繼承自型別 `U`（純記憶體查詢，脫水狀態零 I/O 保證）。
-    * `template <typename U> OuroPtr<U> As() const &`：向下/向上安全轉型（左值增持根引用）。
-    * `template <typename U> OuroPtr<U> As() &&`：右值移動轉型（**零引用計數開銷**轉移所有權）。
-    * `ork_type_id_t GetTypeID() const`：取得目標物件 TypeID。
-    * `dynamic_pointer_cast<U>(ptr)` / `static_pointer_cast<U>(ptr)`：STL 風格轉型支援。
-
----
-
-## 🔒 4. 併發同步守衛
-* **標頭檔**：`ourokore/component/OuroObject.hpp`
-* **類別**：
-  * `OuroReadLock`：共享讀鎖 RAII 守衛。
-  * `OuroWriteLock`：獨占寫鎖 RAII 守衛，**解構時自動原子標記 Dirty**。
-
----
-
-## 🏭 5. 物件工廠與持久化介面
-* **標頭檔**：`ourokore/component/OuroCore.hpp`
-* **函式**：
-  * `CreateObject<T>(args...)`：建立受管領域物件（自動通報脫水模組登記）。
-  * `CreatePermanentObject<T>(args...)`：建立永久常駐物件（不參與脫水換頁）。
-  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新。
-  * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
-  * `Dehydrate(HandleID id)`：依 ID 脫水（若 root_count > 0 則安全略過傳回 false）。
-  * `Dehydrate(OuroPtr<T> &&ptr)`：右值移動消耗脫水（清空原指標，防止懸空）。
-  * `DehydrateAsync(HandleID id)` / `DehydrateAsync(OuroPtr<T> &&ptr)`：非同步背景脫水。
-  * `Rehydrate<T>(HandleID id)` / `Rehydrate<T>(const OuroPtr<T> &ptr)`：顯式手動復水，回傳全新 `OuroPtr<T>`。
-  * `RehydrateAsync<T>(HandleID id)` / `RehydrateAsync<T>(const OuroPtr<T> &ptr)`：非同步背景顯式復水。
-  * `IsAlive(HandleID id)`：查詢物件是否存活（純 ControlBlock 查詢，零 I/O 保證）。
-  * `GetStorageState(HandleID id)`：查詢物件當前 StorageState（純 ControlBlock 查詢，零 I/O 保證）。
-  * `GetRootEdgeCount(HandleID id)`：查詢目標當前活躍根邊緣數量。
-  * `SaveBatch(...)` / `LoadBatch(...)`：多核心平行批次操作。
-
----
-
-## 🧩 6. 跨平台動態庫與插件載入器：`ork::DynamicLibrary`
-* **標頭檔**：`ourokore/base/DynamicLibrary.hpp`
-* **設計哲學與卸載核心原則**：
-  * **禁絕手動卸載 (No Manual Unload)**：載入器不提供手動 `unload()` 介面，杜絕因提前手動卸載導致正在執行的物件虛擬函式表 (vtable) 與代碼段失效崩潰。
-  * **生命週期反向錨定與自動卸載 (Life-Bound Retention & Auto Unload)**：設計期望應用端將動態庫「所產生的物件」與動態庫建立生命週期綁定（透過 `bind_lifecycle()` 或在工廠 Deleter 閉包中捕捉 `DynamicLibrary` 實例）。當該動態庫產生的所有物件全部解構銷毀後，底層動態庫才會在引用計數歸零時自動且安全地卸載（`FreeLibrary` / `dlclose`）。
-  * ⚠️ **關鍵約束注意（load 回傳值之生命週期綁定）**：`ork::DynamicLibrary::load()` 的回傳值本身「已經將其綁定（持有一份引用計數）」。如果不放棄該回傳值（例如長存於全域或成員變數、或外層未離開作用域/未重設），動態庫是絕對不會被卸載的！因此，若希望依賴產生物件全部解構後自動卸載 DLL，呼叫端在完成物件構造與綁定後，必須主動放棄/釋放 `load()` 傳回的初始句柄（例如讓其隨工廠作用域自然解構，或呼叫 `reset()` 放棄持有）。
-* **方法**：
-  * `static DynamicLibrary load(std::string_view utf8_path, LibraryLoadFlags flags = Default)`：自 UTF-8 路徑載入動態庫（Windows 內部使用 Unicode `LoadLibraryW`，杜絕本地 ANSI/CP950 亂碼）。回傳之句柄已持有動態庫引用。
-  * `static DynamicLibrary load(const std::filesystem::path &path, ...)`：自檔案路徑載入動態庫。
-  * `void reset() noexcept`：放棄當前持有的動態庫句柄（扣減引用計數），使存活權杖全權移交給綁定物件。
-  * `bool is_loaded() const noexcept`：查詢動態庫是否載入成功。
-  * `const std::string &get_last_error() const noexcept`：取得 UTF-8 格式的系統錯誤訊息。
-  * `std::string get_path_utf8() const noexcept`：取得載入函式庫之 UTF-8 規範路徑。
-  * `size_t use_count() const noexcept`：取得當前動態庫的存活引用計數（含句柄變數與綁定物件）。
-  * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析動態庫導出符號並智慧推導函式指標型別。
-  * `template <typename T, typename DeleterT> std::shared_ptr<T> bind_lifecycle(T *raw_ptr, DeleterT deleter)`：將自訂裸指標與動態庫存活權杖綁定，確保指標銷毀前動態庫永不卸載。
-  * `std::shared_ptr<const void> create_lifetime_token() const noexcept`：產生純生命週期存活權杖（Pure Lifetime Token），無須綁定單一裸指標，任何容器、樹狀結構（如整棵樹的所有節點）或非同步任務均可共享持有，只要任一節點存活即保證 DLL 絕對不被物理卸載。
-  * `static std::filesystem::path format_filename(std::string_view base_name)`：依作業系統格式化動態庫檔名（Windows `.dll`、Linux `.so`、macOS `.dylib`）。
-  * `bool is_first_loaded() const noexcept`：查詢本次 `load()` 取得的實例是否為動態庫於進程中的首次載入（0 -> 1）。若為 false 代表先前已由其他模組載入並存活中。
-  * `void set_shutdown_hook(std::function<bool()> hook)`：設定模組唯一的善後收尾回呼。傳回 `true` 允許物理卸載；傳回 `false` 拒絕卸載轉為常駐模式。
-  * `bool register_shutdown_symbol(std::string_view symbol_name)`：依據符號名稱自動解析收尾函式並註冊（支援 `bool()` / `int()` / `void()`）。
-  * `void add_post_unload_hook(std::function<void()> hook)`：註冊在動態函式庫物理卸載（FreeLibrary / dlclose）完成後執行的通知回呼（Post-Unload Hook）。僅在外掛同意卸載且成功物理卸載後才觸發。
-  * `void enable_deferred_unload(bool enable = true) noexcept`：啟用非同步離棧延遲卸載模式。卸載動作自動移交獨立背景執行緒執行，達成主程式零卡頓與無崩潰卸載。
-  * `bool is_deferred_unload_enabled() const noexcept`：查詢當前是否啟用了非同步離棧延遲卸載模式。
-  * `template <typename FuncT, typename... Args> bool initialize_once(std::string_view symbol_name, Args &&...args)`：僅在首次載入（0 -> 1）時執行指定的符號初始化函式，重複載入時自動安全略過。
-  * `WeakDynamicLibrary to_weak() const noexcept`：建立並取得該動態庫之弱引用觀察者（不增加強引用計數，不阻止自動卸載）。
-
----
-
-## 👁️ 6.1 動態庫弱引用觀察者：`ork::WeakDynamicLibrary`
-* **標頭檔**：`ourokore/base/DynamicLibrary.hpp`
-* **設計目的**：提供類似 `std::weak_ptr` 的無所有權觀察與晉升機制。當主程式為配合自動卸載而呼叫 `DynamicLibrary::reset()` 放棄初始強引用後，若日後需要再次建立物件或監控模組狀態，可透過本類別之 `lock()` 安全晉升重獲強引用（無須重新 LoadLibrary）；若所有受管物件均已解構且 DLL 已卸載，`lock()` 則安全傳回無效實例。
-* **方法**：
-  * `WeakDynamicLibrary(const DynamicLibrary &lib) noexcept`：從強引用 DynamicLibrary 構造弱引用觀察者。
-  * `DynamicLibrary lock() const noexcept`：嘗試將弱引用晉升為強引用。若動態庫仍存活傳回有效實例；若已卸載則傳回無效實例。
-  * `bool expired() const noexcept`：查詢動態庫是否已經卸載或過期。
-  * `size_t use_count() const noexcept`：查詢當前存活之強引用計數（所有綁定活體物件與強引用總數）。
-  * `std::weak_ptr<const void> create_weak_lifetime_token() const noexcept`：產生對應於本動態庫的弱引用權杖。
-  * `void reset() noexcept`：重設弱引用為空狀態。
-  * `explicit operator bool() const noexcept`：等同於 `!expired()`。
-
----
-
-## 🌐 7. 全域 UTF-8 零拷貝輔助工具：`ork::utf8`
-* **標頭檔**：`ourokore/base/utf8.hpp`
-* **函式與工具**：
-  * `ork::utf8::as_view(str)`：將 `std::string`、`std::u8string`、`std::string_view`、`std::u8string_view`、`const char*`、`const char8_t*` 零拷貝轉為 `std::string_view`。
-  * `ork::utf8::to_string(str)`：將各類字串統一轉為 `std::string`。
-  * `ork::utf8::to_u8string(view)`：將字串視圖轉為 C++20 原生 `std::u8string`。
-  * `ork::utf8::is_string_like_v<T>`：編譯期型別特徵萃取，判斷是否為字串相關型別。
-
----
-
-## ⚙️ 8. 現代高效能雜湊工具模組：`ork::base::Hash`
-* **標頭檔**：`ourokore/base/Hash.hpp`
-* **設計哲學**：相容 C++20 `constexpr` 編譯期常數計算、現代雜湊演算法、字面量運算子支援。
-* **演算法與函式**：
-  * `ork::base::Fnv1a64(data)`：FNV-1a 64-bit 雜湊演算法（全域 TypeID 與字串 ID 唯一標準）。
-  * `ork::base::Fnv1a32(data)`：FNV-1a 32-bit 雜湊演算法。
-  * `ork::base::Crc32(data)`：CRC32 (IEEE 802.3) 校驗碼（資料完整性與防竄改驗證）。
-  * `ork::base::MurmurHash3(data, seed)`：MurmurHash3 32-bit 高品質雜湊演算法。
-  * `ork::base::HashCombine(seed, v1, v2, ...)`：Boost / Container 標準變參組合雜湊。
-  * 使用者自訂字面量（`using namespace ork::base::literals;`）：
-    * `""_fnv64`：編譯期直接計算為 64 位元常數整數。
-    * `""_fnv32`：編譯期直接計算為 32 位元常數整數。
-    * `""_crc32`：編譯期直接計算為 CRC32 常數校驗碼。
-
----
-
-## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
-* **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
-* **設計哲學**：
-  * **單一容器雙模態統合（Unified Dual-Mode）**：全體子節點統一由連續記憶體 `std::vector` 儲存（享有 CPU 快取極速預讀），具名字節點由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址。**下標與名稱存取 100% 互通**，存取到的為同一節點實體。
-  * **形態由資料自動推導（Data-Driven Morphism）**：依據子節點結構純度自動判定——全具名者自動判定為物件模式（大括號 `{}`），混入匿名元素者自動判定為陣列模式（小括號 `()`）。
-  * **CRTP 自定義衍生節點擴充（Extensible CRTP Hierarchy）**：支援繼承 `TreeNodeBase<Derived>` 定義強型別領域節點，序列化與反序列化自適應萃取衍生型別，零成本零強制轉型。
-  * **極致執行緒安全**：結構拓撲鎖（`m_mutex`）與資料 Payload 鎖（`m_dataMutex`）獨立讀寫分離，高頻資料更新不阻礙樹結構遍歷。
-  * **防遞迴析構爆棧**：內建顯式堆疊迭代析構，巨型深樹解構時由堆積迴圈安全釋放，徹底杜絕遞迴析構引發呼叫堆疊溢位（Stack Overflow）與行程退出 UAF。
-  * **非遞迴顯式堆疊反序列化**：反序列化全程採用 Heap 顯式堆疊非遞迴狀態機，Call Stack 深度恆為 $O(1)$，巨深巢狀文字 DSL 免疫 Stack Overflow。
-  * **正交界定符與無等號緊湊支援**：四大正交界定符 `[名稱]`、`"資料"`、`{物件}`、`(陣列)`，等號 `=` 為純無視裝飾符號。支援極致緊湊無等號模式（`WithoutEqual`），連續具名空節點、匿名空元素、物件陣列 `( { [a]="1" } )` 100% 精確對稱還原，單元素容器拓撲絕不脫殼降級。
-* **核心類別與方法**：
-  * **樣板基底 `TreeNodeBase<Derived>`**：
-    * `CreateRoot(name)` / `CreateArray(name)`：建立樹之根節點。
-    * `bool IsObject() / bool IsArray()`：純資料內容驅動判定（`m_elements.size() > m_nameMap.size()` 為陣列）。
-    * `NodePtr PushElement()` / `bool PushElement(element)`：向尾端追加匿名元素。
-    * `size_t ElementCount()` / `size_t ChildCount()` / `size_t Size()`：取得子節點總數（$O(1)$）。
-    * `NodePtr GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取元素（$O(1)$）。
-    * `NodePtr FindChildByName(name)` / `operator[](const std::u8string &name)`：按名稱尋找子節點（$O(1)$）。
-    * `bool HasChild(name)`：查詢子節點存在性。
-    * `NodePtr AddChild(name)`（相容別名 `AddBackChild`）：新增具名或匿名子節點（$O(1)$）。
-    * `NodePtr InsertBefore(child, name)` / `NodePtr InsertAfter(child, name)`：指定位置插入子節點。
-    * `bool RemoveElementAt(index)` / `bool RemoveChild(child)` / `bool RemoveChildByName(name)`：移除子節點。
-    * `void ClearChildren()` / `ClearElements()`：清空所有子項目。
-    * `auto begin() / end()` / `rbegin() / rend()` / `Reversed()` / `GetTreeMutex()`：支援配合樹級讀寫鎖進行標準 STL 迭代器與 range-for 安全走訪（支援 `for (auto &c : node->Reversed())` 零成本反向視圖）。⚠️ **關鍵防禦鐵律**：走訪期間僅供純資料使用（`GetData` / `GetName`），**絕對禁止在此期間執行節點拓撲修改（如 `AddChild` / `RemoveChild`）**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）！
-    * `DetachFromParent()`：安全斷開與父節點之雙向弱關聯並自立為新樹（配發專屬獨立鎖）。
-  * **具體節點 `TreeNode<T>`（`StringTreeNode` 預設 `T = std::string`）**：
-    * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：安全存取節點資料（受資料讀寫鎖保護）。
-  * **文字 DSL 串流工具 `TreeIO`**：
-    * `CompactMode` 列舉：`None`（標準美化縮排換行）、`WithEqual`（保留等號緊湊 `="`）、`WithoutEqual`（不保留等號極致緊湊 `"`）。
-    * `static void Serialize<Node = StringTreeNode>(ostream, root, data_to_string, indent_width, mode)`：輸出文字 DSL 至串流，支援應用端自訂 CRTP 衍生節點與 3 種緊湊模式。
-    * `static void SerializeCompact<Node = StringTreeNode>(ostream, root, mode)`：緊湊序列化便捷函式。
-    * `static std::string SerializeToString<Node = StringTreeNode>(root, ...)`：直接輸出文字 DSL 字串（支援 CompactMode 列舉、布林緊湊旗標或自訂縮排與 data_to_string 轉發）。
-    * `static std::shared_ptr<NodeType> Deserialize<NodeType = StringTreeNode>(istream, data_handler)`：寬容型狀態機自輸入串流反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針；handler 支援值轉換或 `(node, str) -> void` 節點現地賦值）。
-    * `static std::shared_ptr<NodeType> DeserializeFromString<NodeType = StringTreeNode>(string_view, data_handler)`：自文字字串反序列化（支援 CRTP 節點替換與資料型別自適應，精準回傳應用端節點智慧指針）。
-''', encoding="utf-8")
-
-    # 08_tree_and_dsl.md
-    (manual_dir / "08_tree_and_dsl.md").write_text(r'''# 08. 樹狀結構容器與文字 DSL 指南 (Tree & TreeIO)
+    # 07_tree_and_dsl.md
+    (manual_dir / "07_tree_and_dsl.md").write_text(r'''# 07. 樹狀結構容器與文字 DSL 指南 (Tree & TreeIO)
 
 本章節介紹 OuroKore 基礎工具庫（`ourokore_base`）中的現代高效能階層容器 `TreeNode<T>` 與文字 DSL 串流工具 `TreeIO`。
 
@@ -1215,21 +1039,519 @@ void PruneTreeSafely(const StringTreeNode::NodePtr &root) {
     }
 }
 ```
+''', encoding="utf-8")
+
+    # 08_base_utilities.md
+    (manual_dir / "08_base_utilities.md").write_text(r'''# 08. 基礎工具庫指南 (Base Foundation & Utilities)
+
+本章節介紹 OuroKore 基礎模組（`ourokore_base`）中提供的通用現代基礎設施與工具庫。這些工具零依賴上層核心邏輯（`ourokore_core`），遵循現代 ISO C++20 標準，具備高效能、跨平台與極致執行緒安全特性。
 
 ---
 
-## 8. 外掛 Heap 追蹤與清空檢驗 (Heap Tracker & Plugin Heap)
+## 🧭 基礎工具庫總覽
 
-為防範外掛（Plugin / MODULE）在結束或卸載前遺留記憶體洩漏，OuroKore 提供雙軌並行的 Heap 追蹤與檢驗系統，並支援在編譯期彈性選擇 **方案 A** 或 **方案 B**。
+`ourokore_base` 模組包含以下關鍵子系統：
 
-### 8.1 編譯期方案選擇 (Compile-Time Policy)
+```
++-----------------------------------------------------------------------------------+
+|                           ourokore_base 基礎工具庫                                |
++-----------------------------------------+-----------------------------------------+
+| 1. 動態模組載入器 (DynamicLibrary)       | 2. 現代編譯期雜湊模組 (Hash)            |
+|    - 生命週期反向錨定 (Life-Bound)      |    - C++20 constexpr 編譯期計算         |
+|    - 弱引用晉升 (WeakDynamicLibrary)    |    - FNV-1a (TypeID 唯一標準)           |
+|    - 純存活權杖 (LifetimeToken)         |    - CRC32 / MurmurHash3 / HashCombine  |
+|    - 後置卸載通知與非同步離棧延遲卸載   |    - 使用者自訂字面量 (_fnv64, _crc32)  |
++-----------------------------------------+-----------------------------------------+
+| 3. 並行與多執行緒排程 (Concurrency)     | 4. 全域文字與字串標準 (UTF-8)            |
+|    - 固定執行緒池 (FixedThreadPool)     |    - 跨平台零拷貝視圖轉換 (as_view)     |
+|    - 動態彈性伸縮池 (DynamicThreadPool) |    - to_string / to_u8string            |
+|    - 執行緒安全佇列 (ThreadSafeQueue)   |    - Windows Unicode W 邊界隔離         |
+|    - 計數信號量與事件 (Semaphore/Event) |                                         |
++-----------------------------------------+-----------------------------------------+
+| 5. 樹狀結構容器與文字 DSL (Tree & TreeIO) ── 詳見《07. 樹狀結構容器與文字 DSL 指南》|
++-----------------------------------------------------------------------------------+
+```
+
+---
+
+## 🧩 1. 動態模組載入器 (DynamicLibrary & WeakDynamicLibrary)
+
+* **標頭檔**：`<ourokore/base/DynamicLibrary.hpp>`
+* **命名空間**：`ork`（相容於 `ork::base::DynamicLibrary` 別名）
+* **目標情境**：動態擴充外掛（Plugin / Component）、熱載入邏輯模組、跨平台符號解析、跨模組生命週期自動安全管理。
+
+---
+
+### 1.1 核心設計哲學：生命週期反向錨定與禁絕手動卸載
+
+傳統動態庫載入器通常提供顯式的 `unload()` 函式，但在多執行緒或複雜物件圖中，提前手動卸載動態庫是導致致命崩潰（Access Violation / SIGSEGV）的首要元兇——當外部執行緒或背景佇列仍在執行物件的虛擬函式時，其虛擬函式表（vtable）與程式碼段已被作業系統解除映射（Unmap），立即引發 UAF。
+
+OuroKore 徹底顛覆手動卸載思維，確立以下三大鐵律：
+1. **禁絕手動卸載 (No Manual Unload)**：`DynamicLibrary` 刻意不提供任何手動 `unload()` 介面。
+2. **生命週期反向錨定 (Life-Bound Retention)**：應用端將動態庫「所產生的物件」與動態庫建立生命週期綁定（透過 `bind_lifecycle()`、工廠 Deleter 閉包或存活權杖）。**只有當由該動態庫產生的所有活體物件全部解構銷毀後，底層動態庫才會在引用計數歸零時自動且安全地由底層卸載（`FreeLibrary` / `dlclose`）**。
+3. ⚠️ **關鍵約束：`load()` 回傳值之生命週期持有與放棄**：
+   `DynamicLibrary::load()` 的回傳值本身「持有一份動態庫引用（use_count >= 1）」。
+   **若呼叫端長存此回傳值變數（例如存為全域變數、類別長存成員，或未離開作用域/未呼叫 `reset()`），動態庫就永遠不會被卸載！**
+   應用端若希望實現「物件全數銷毀後 DLL 自動卸載」，必須在完成物件建立與綁定後，主動呼叫 `lib.reset()` 或讓局部句柄離開作用域，將存活權杖全權移交給受管物件持有。
+
+---
+
+### 1.2 多重載入快取與首度載入單次初始化 (Cache & Initialization)
+
+當進程內多個子系統或模組在不同時機請求載入同一個動態庫時，`DynamicLibrary` 內部會以標準化絕對路徑進行弱引用快取共享。
+
+* **`is_first_loaded()`**：查詢當前實例是否為動態庫於進程中的**首次載入（引用計數 0 -> 1）**。
+  * 若傳回 `true`：代表該庫剛被載入進程，呼叫端應執行模組級全域初始化。
+  * 若傳回 `false`：代表此庫先前已由其他模組載入且仍在記憶體中存活（引用計數 1 -> 2），呼叫端應避免重複初始化以防止狀態衝突。
+* **`initialize_once<FuncT>(symbol_name, args...)`**：便捷的單次初始化樣板函式。**僅在 `is_first_loaded() == true` 時呼叫指定符號函式**；若為重複載入則自動安全略過並回傳 `false`。
+
+```cpp
+auto lib = ork::DynamicLibrary::load("plugins/physics_engine.dll");
+if (lib.is_loaded()) {
+    // 僅在首次載入進程時執行一次 PhysicsInit(gravity=9.8f)；若已被其他模組載入過則自動略過
+    lib.initialize_once<void(float)>("PhysicsInit", 9.8f);
+}
+```
+
+---
+
+### 1.3 兩階段卸載回呼系統 (Two-Stage Unload Hooks)
+
+為了在動態庫生命週期走向終結時進行安全清理與狀態通知，`DynamicLibrary` 提供了兩階段、不同時機的卸載掛鉤：
+
+```
+主程式執行緒 (Main Thread)        DynamicLibrary 背景等待執行緒         外掛 DLL (Plugin)
+        │                                  │                                   │
+  1. 釋放最後引用 (如 lib.reset())         │                                   │
+        │ ── 觸發卸載 (非同步交棒) ───────> │                                   │
+  2. 立即返回繼續主程式工作！              │ ── 調用非同步善後函式 ──────────> │ 3. 執行冗長善後...
+     (主程式 0ms 延遲、完全零卡頓)          │    (附帶 on_ready_to_unload 回呼) │    - 快取與資料落盤
+        │                                  │                                   │    - 釋放 GPU/緩衝區
+        │                                  │ ── 背景阻塞等待握手通知 ────      │    - 關閉連線或背景執行緒
+        │                                  │                            │      │
+        │                                  │ <── 呼叫 on_ready_to_unload() ────│ 4. 善後徹底完畢！
+        │                                  │     (握手喚醒背景線程)            │    (外掛不再執行任何代碼)
+        │                                  │                                  
+        │                                  │ 5. 收到確認，呼叫 FreeLibrary() 物理卸載 DLL
+        │                                  │ 6. 觸發 post_unload_hooks 通知主程式
+```
+
+#### 1. 第一階段：卸載前收尾與非同步握手協定 (Pre-Unload & Async Handshake)
+* **同步收尾：`add_cleanup_hook(std::function<void()> hook)`**：註冊在動態庫卸載前執行的同步收尾回呼（保證代碼段與 vtable 依然完整有效，LIFO 順序執行）。
+* **同步符號：`register_shutdown_symbol(std::string_view symbol_name)`**：依據符號名稱自動註冊無參 `void()` 函式為收尾回呼。
+* 🌟 **非同步握手收尾：`add_async_cleanup_hook(AsyncCleanupHook hook)`**：
+  * **設計目的**：解決外掛 shutdown 冗長善後導致主程式卡頓問題。
+  * **握手運作**：主程式觸發卸載後**立即返回繼續運行（0ms 延遲）**；`DynamicLibrary` 在背景等待執行緒中調用 hook，外掛在完成所有耗時工作後主動呼叫傳入的 `on_ready_to_unload()`。背景執行緒收到通知被喚醒後，才執行 `FreeLibrary` 物理卸載 DLL！
+* 🌟 **純 C 非同步符號：`register_async_shutdown_symbol(std::string_view symbol_name)`**：
+  * 支援跨語言 C ABI：外掛導出 `void PluginAsyncShutdown(void (*on_ready)(void*), void* user_data)`。
+* **逾時保護：`set_async_shutdown_timeout(std::chrono::milliseconds timeout)`**：設定非同步善後最大等待逾時（預設 30 秒），防範外掛死鎖。
+
+#### 2. 第二階段：卸載完成通知 (Post-Unload Hook)
+* **`add_post_unload_hook(std::function<void()> hook)`**：註冊在動態庫完成作業系統物理卸載後執行的通知回呼。
+  * **目的**：宿主被動接收「外掛已完全死透、資源已全數釋放」事件，無需輪詢。
+  * **高壓警戒**：此時動態庫程式碼段已解除映射，回呼閉包內部**絕對嚴禁**存取動態庫中的任何指標或呼叫其函式！
+
+```cpp
+auto lib = ork::DynamicLibrary::load("plugins/render_system.dll");
+
+// 1. 【同步模式】註冊卸載前收尾：在 FreeLibrary 前同步清理
+lib.add_cleanup_hook([]() {
+    std::cout << "[Pre-Unload] 正在清理外掛內部 GPU 緩衝區..." << std::endl;
+});
+lib.register_shutdown_symbol("RenderShutdown");
+
+// 2. 🌟【非同步握手模式】註冊非同步善後（主程式 0ms 立即返回，外掛背景耗時善後完畢後握手卸載）
+lib.add_async_cleanup_hook([](ork::DynamicLibrary::ReadyToUnloadCallback on_ready) {
+    std::thread([on_ready = std::move(on_ready)]() {
+        std::cout << "[外掛背景] 正在非同步落盤大型存檔與中斷網絡...
+";
+        std::this_thread::sleep_for(std::chrono::milliseconds(200)); // 耗時善後
+        std::cout << "[外掛背景] 善後全數完畢！通知 DynamicLibrary 可以 FreeLibrary 了。
+";
+        
+        // 握手確認：外掛保證絕不再執行任何代碼，喚醒卸載等待線程
+        on_ready();
+    }).detach();
+});
+
+// 3. 註冊卸載後通知：僅更新宿主狀態，絕不碰觸外掛代碼
+lib.add_post_unload_hook([]() {
+    std::cout << "[Post-Unload] 渲染插件已完全從記憶體卸載！宿主切換為軟體渲染模式。" << std::endl;
+});
+```
+
+---
+
+### 1.4 非同步離棧延遲卸載防護 (Deferred Stack-Decoupled Unload)
+
+#### 崩潰陷阱：自解構呼叫棧陷阱 (Self-Unload Stack Trap)
+考慮以下極端但常見的場景：
+外掛定義了一個類別 `class PluginNode`，其虛擬解構式 `virtual ~PluginNode()` 編譯在外掛 DLL 內部代碼段中。當應用端銷毀最後一個 `PluginNode` 實例時：
+1. 呼叫 `PluginNode` 的虛擬解構函式（此時當前執行緒的 Call Stack 頂層正處於 DLL 內部代碼段）。
+2. 在該解構函式內部或 Deleter 中，最後一個動態庫引用歸零，觸發同步呼叫 `FreeLibrary(hDll)`。
+3. **作業系統立即將 DLL 代碼段從記憶體中抹除！**
+4. 呼叫棧嘗試從虛擬解構函式返回至呼叫端——但返回位址所在的代碼段已經消失，瞬間引發不可挽回的 `0xC0000005: Access Violation` 崩潰！
+
+#### 解決方案：`enable_deferred_unload(true)`
+* **用法**：呼叫 `lib.enable_deferred_unload(true);` 啟用離棧延遲卸載保護。
+* **機制**：當最後一個引用歸零時，動態庫卸載動作會自動移交給**獨立的背景執行緒**執行，確保當前物件的解構呼叫棧完全退出後才卸載代碼段，達成 100% 絕對安全的自毀與卸載。
+
+```cpp
+auto lib = ork::DynamicLibrary::load("plugins/node_system.dll");
+
+// 啟用非同步離棧卸載防護
+lib.enable_deferred_unload(true);
+
+// 即使最後一個節點在外掛自身的代碼段中觸發解構，呼叫棧也能全身而退！
+```
+
+---
+
+### 1.5 純生命週期存活權杖 (Pure Lifetime Token)
+
+在傳統模式中，我們透過 `bind_lifecycle(raw_ptr, deleter)` 綁定單一裸指標。但對於複雜的樹狀結構（如 `TreeNodeBase` 百萬節點群）、非同步工作任務（Worker Tasks）或會話物件（Sessions），沒有單一裸指標適合承擔整個 DLL 的生命週期。
+
+* **`create_lifetime_token()`**：產生一個型別擦除的純權杖（`std::shared_ptr<const void>`）。
+* **特性**：
+  * 該 Token 內部持有一份動態庫存活引用。
+  * 樹狀結構的所有節點或多個非同步閉包均可複製並持有此 Token。
+  * 只要宇宙中尚有任一節點存活，DLL 代碼段便長存有效；最後一個節點解構使 Token 計數歸零時，自動觸發底層動態庫安全卸載。
+
+```cpp
+auto lib = ork::DynamicLibrary::load("plugins/tree_module.dll");
+
+// 產生純存活權杖
+std::shared_ptr<const void> token = lib.create_lifetime_token();
+
+// 宿主主動放棄強引用
+lib.reset();
+
+// 建立樹節點，所有節點共享持有此 Token
+struct MyNode {
+    std::string name;
+    std::shared_ptr<const void> dll_token;
+};
+
+auto root = std::make_shared<MyNode>("Root", token);
+auto child1 = std::make_shared<MyNode>("Child1", token);
+
+// 即使 root 被釋放，只要 child1 仍存活，DLL 就絕不會被卸載！
+root.reset();
+assert(child1 != nullptr); // DLL 依然存活
+
+// 當最後一個節點釋放，DLL 安全自動卸載
+child1.reset();
+```
+
+---
+
+### 1.6 弱引用觀察與晉升重獲 (WeakDynamicLibrary)
+
+當主程式為了實現自動卸載而呼叫 `lib.reset()` 或讓局部變數離開作用域時，主程式原本的 `DynamicLibrary` 變數已歸零。如果日後主程式又需要使用該動態庫（例如再次解析符號、創建物件或檢查外掛存活狀態），該怎麼辦？
+
+`WeakDynamicLibrary` 提供了類似 `std::weak_ptr` 的無所有權觀察與安全重獲機制：
+
+```cpp
+auto lib = ork::DynamicLibrary::load("plugins/ai_module.dll");
+
+// 1. 取得弱引用觀察者（不增加強引用計數，不阻止自動卸載）
+ork::WeakDynamicLibrary weak_lib = lib.to_weak();
+
+// 2. 建立業務物件並綁定生命週期
+auto entity = lib.bind_lifecycle(CreateRawAI(), &DestroyRawAI);
+
+// 3. 宿主主動放棄強引用句柄
+lib.reset();
+assert(!lib.is_loaded()); // 宿主句柄為空
+
+// 4. 此時 entity 依然存活，DLL 尚未卸載
+assert(!weak_lib.expired());
+assert(weak_lib.use_count() == 1); // entity 仍持有 1 份
+
+// 5. 核心：日後主程式再次需要使用時，透過 lock() 零開銷安全晉升重獲強引用！
+if (auto locked = weak_lib.lock()) {
+    // 成功重獲有效 DynamicLibrary（無需調用作業系統 LoadLibrary，零 I/O）
+    auto fn = locked.get_symbol<void(*)()>("GlobalAIStep");
+    if (fn) fn();
+}
+
+// 6. 業務物件全數解構
+entity.reset();
+
+// 7. DLL 已物理卸載，弱引用安全過期
+assert(weak_lib.expired());
+auto failed_lock = weak_lib.lock();
+assert(!failed_lock.is_loaded()); // 安全傳回無效實例，絕不崩潰
+```
+
+---
+
+### 1.7 跨平台檔名格式化與載入旗標
+
+* **`format_filename(base_name)`**：依據當前作業系統規範自動產生動態庫檔名：
+  * Windows：`"my_plugin.dll"`
+  * Linux：`"libmy_plugin.so"`
+  * macOS：`"libmy_plugin.dylib"`
+* **`LibraryLoadFlags` 載入旗標**：
+  * `LibraryLoadFlags::ResolveNow`：立即解析所有符號（POSIX: `RTLD_NOW`，Windows 預設）。
+  * `LibraryLoadFlags::ResolveLazy`：延遲按需解析符號（POSIX: `RTLD_LAZY`）。
+  * `LibraryLoadFlags::ScopeLocal`：符號私有隔離，不外洩給其他模組（POSIX: `RTLD_LOCAL`，預設）。
+  * `LibraryLoadFlags::ScopeGlobal`：符號全域可見（POSIX: `RTLD_GLOBAL`）。
+  * `LibraryLoadFlags::SearchDllDir`：Windows 專用，優先搜尋 DLL 所在目錄與其相依項。
+* **全域 UTF-8 路徑支援**：
+  * `load("路徑/插件.dll")` 內部一律轉換為 Unicode UTF-16 呼叫 `LoadLibraryW`，徹底解決多語系與繁體中文路徑亂碼失敗問題。
+  * `get_path_utf8()` 保證傳回 100% 規範化的 UTF-8 絕對路徑。
+
+
+## ⚙️ 2. 現代編譯期雜湊模組 (Hash.hpp)
+
+* **標頭檔**：`<ourokore/base/Hash.hpp>`
+* **命名空間**：`ork::base`，字面量命名空間：`ork::base::literals`
+* **目標情境**：型別識別碼（TypeID）、字串鍵雜湊比對、封包校驗、資料完整性驗證。
+
+### 特性與演算法
+
+1. **C++20 constexpr 編譯期零開銷**：
+   - 演算法全面支援編譯期求值，零執行期開銷。
+2. **演算法矩陣**：
+   * **FNV-1a (64-bit / 32-bit)**：OuroKore 系統中 `TypeID` 與全域識別碼的唯一標準演算法，計算速度極快、分佈優良。
+   * **CRC32 (IEEE 802.3)**：標準循環冗餘校驗，廣泛用於二進位串流、藍圖存檔與通訊封包防竄改檢查。
+   * **MurmurHash3 (32-bit)**：高品質通用雜湊演算法，具備極強的雪崩效應（Avalanche Effect），適合哈希表尋址。
+   * **HashCombine**：變參雜湊組合函式，適用於多欄位複合鍵雜湊。
+
+### 範例程式碼
+
+```cpp
+#include <ourokore/base/Hash.hpp>
+#include <iostream>
+#include <cassert>
+
+using namespace ork::base::literals;
+
+void HashDemo() {
+    // 1. 編譯期常數計算（使用字面量運算子）
+    constexpr uint64_t type_id = "PlayerCharacter"_fnv64;
+    constexpr uint32_t type_id32 = "PlayerCharacter"_fnv32;
+    constexpr uint32_t crc = "BLUEPRINT_HEADER"_crc32;
+
+    // 2. 執行期字串與記憶體區塊雜湊
+    std::string player_name = "Arthur";
+    uint64_t name_hash = ork::base::Fnv1a64(player_name);
+    assert(name_hash == "Arthur"_fnv64);
+
+    // 3. CRC32 資料完整性校驗
+    const uint8_t payload[] = {0x01, 0x02, 0x03, 0x04};
+    uint32_t checksum = ork::base::Crc32(payload);
+
+    // 4. MurmurHash3 (32-bit) 帶種子雜湊
+    uint32_t seed = 0x9747b28c;
+    uint32_t murmur = ork::base::MurmurHash3("SampleKey", seed);
+
+    // 5. 複合屬性鍵組合 (HashCombine)
+    size_t combined = 0;
+    ork::base::HashCombine(combined, type_id, name_hash, checksum);
+    std::cout << "複合雜湊值: " << combined << std::endl;
+}
+```
+
+---
+
+## ⚡ 3. 並行與多執行緒排程 (ThreadPool, Queue, Semaphore, Event)
+
+* **標頭檔**：
+  * `<ourokore/base/ThreadPool.hpp>`
+  * `<ourokore/base/ThreadSafeQueue.hpp>`
+  * `<ourokore/base/Semaphore.hpp>`
+* **命名空間**：`ork::base`
+
+### 3.1 固定數量執行緒池：`FixedThreadPool`
+
+建立恆定數量的 Worker 執行緒，適用於 CPU 密集型運算或任務數量穩定之場景。
+
+* **核心特性**：
+  * 支援 `submit`：提交任務並回傳 `std::future<ReturnType>`，支援任意函式與參數完美轉發。
+  * 支援 `submit_detached`：Fire-and-Forget 任務排程，避免 `packaged_task` 內部堆積配置。
+  * `wait_idle()`：阻塞等待直到所有排隊任務與執行中任務全數完成。
+  * **Worker 防自我死鎖**：Worker 執行緒內部調用 `wait_idle()` 時自動安全略過，防止自我等待死鎖。
+  * RAII 優雅關閉：解構時自動呼叫 `stop()` 並等待所有已排隊任務處理完畢。
+
+```cpp
+#include <ourokore/base/ThreadPool.hpp>
+#include <iostream>
+
+void TestFixedPool() {
+    // 建立 4 個 Worker 的固定執行緒池（傳入 0 則預設為 CPU 核心數）
+    ork::base::FixedThreadPool pool(4);
+
+    // 1. 提交有回傳值的任務 (Future)
+    std::future<int> result = pool.submit([](int a, int b) {
+        return a + b;
+    }, 10, 20);
+
+    std::cout << "計算結果: " << result.get() << std::endl; // 輸出 30
+
+    // 2. 提交 Fire-and-Forget 輕量任務
+    pool.submit_detached([]() {
+        std::cout << "背景日誌處理完成" << std::endl;
+    });
+
+    // 3. 等待所有任務執行完畢
+    pool.wait_idle();
+}
+```
+
+### 3.2 彈性動態伸縮執行緒池：`DynamicThreadPool`
+
+依據即時任務負載量自動增減 Worker 執行緒，兼顧尖峰並發能力與離峰資源節能。
+
+* **動態擴展**：當排隊任務數超過目前空閒 Worker 且未達 `max_threads` 時，即刻動態生成新 Worker。
+* **空閒縮容回收**：Worker 空閒等待超過指定逾時時間（`idle_timeout`，預設 3000ms）時，自動終止並回收執行緒，直至保留核心常駐數量（`min_threads`）。
+
+```cpp
+#include <ourokore/base/ThreadPool.hpp>
+
+void TestDynamicPool() {
+    // min_threads=2, max_threads=8, idle_timeout=2000ms
+    ork::base::DynamicThreadPool dynamic_pool(2, 8, std::chrono::milliseconds(2000));
+
+    for (int i = 0; i < 20; ++i) {
+        dynamic_pool.submit_detached([i]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        });
+    }
+
+    // 負載突增時，Worker 數量動態擴增至最高 8 個
+    std::cout << "當前 Worker 數: " << dynamic_pool.get_current_worker_count() << std::endl;
+
+    dynamic_pool.wait_idle();
+    // 待任務清空且逾時 2 秒後，Worker 數量自動縮容回核心 2 個
+}
+```
+
+### 3.3 執行緒安全阻塞佇列：`ThreadSafeQueue<T>`
+
+多生產者-多消費者（MPMC）阻塞佇列，具備逾時取出與優雅關閉喚醒。
+
+* `bool push(T item)` / `template <typename... Args> bool emplace(Args&&... args)`：推入元素，成功回傳 true；若佇列已停止則回傳 false。
+* `bool pop(T &out_val)`：阻塞等待取出隊首元素。若佇列已停止且為空則傳回 false。
+* `bool pop_for(T &out_val, rel_time)`：在指定逾時內等待取出隊首元素。
+* `bool try_pop(T &out_val)`：非阻塞立即取出。
+* `void stop()`：停止佇列並喚醒所有等待中的執行緒。
+* `void clear()`：清空佇列，**於鎖外安全析構殘留元素**，避免持有鎖時解構複雜物件引發死鎖。
+
+```cpp
+#include <ourokore/base/ThreadSafeQueue.hpp>
+
+ork::base::ThreadSafeQueue<std::string> message_queue;
+
+// 生產者執行緒
+message_queue.push("Task #1");
+
+// 消費者執行緒
+std::string msg;
+if (message_queue.pop_for(msg, std::chrono::milliseconds(500))) {
+    std::cout << "收到訊息: " << msg << std::endl;
+}
+```
+
+### 3.4 計數信號量：`Semaphore`
+
+跨平台計數信號量，支援阻塞獲取、逾時獲取與批次釋放。
+
+* `acquire()`：阻塞等待可用資源計數大於 0 並遞減。
+* `try_acquire()`：非阻塞嘗試獲取。
+* `try_acquire_for(rel_time)`：逾時等待獲取。
+* `release(ptrdiff_t update = 1)`：釋放並增加資源計數。
+* `available()`：查詢目前可用資源快照。
+
+```cpp
+#include <ourokore/base/Semaphore.hpp>
+
+ork::base::Semaphore sem(0); // 初始可用計數為 0
+
+std::thread worker([&sem]() {
+    sem.acquire(); // 阻塞等待信號
+    std::cout << "Worker 開始執行" << std::endl;
+});
+
+// 主執行緒通知 Worker
+sem.release();
+worker.join();
+```
+
+### 3.5 事件通知同步原語：`Event`
+
+跨平台事件通知原語，支援自動重設（`AutoReset`）與手動廣播（`ManualReset`）。
+
+* **`EventResetMode::AutoReset`**：單一等待執行緒被喚醒後，自動重設為未觸發狀態（類似 Windows Auto-Reset Event）。
+* **`EventResetMode::ManualReset`**：所有等待執行緒均被喚醒，需顯式呼叫 `reset()` 才會回到未觸發狀態（廣播模式）。
+* 方法：`set()`, `reset()`, `wait()`, `wait_for(rel_time)`, `is_set()`。
+
+```cpp
+#include <ourokore/base/Semaphore.hpp>
+
+// 建立手動重設廣播事件
+ork::base::Event ready_event(ork::base::EventResetMode::ManualReset, false);
+
+// 多個 Worker 執行緒等待初始化完成
+// worker: ready_event.wait();
+
+// 主執行緒廣播完成通知
+ready_event.set();
+```
+
+---
+
+## 🌐 4. 全域 UTF-8 零拷貝文字轉換輔助 (utf8.hpp)
+
+* **標頭檔**：`<ourokore/base/utf8.hpp>`
+* **命名空間**：`ork::utf8`
+
+依據 OuroKore 全域字串規範（UTF-8 Standard Invariant），系統內部一律使用 UTF-8 編碼。`utf8.hpp` 提供方便的零拷貝轉換與概念萃取：
+
+* `ork::utf8::as_view(str)`：將 `std::string`、`std::u8string`、`std::string_view`、`std::u8string_view`、`const char*`、`const char8_t*` 零拷貝轉為 `std::string_view`。
+* `ork::utf8::to_string(str)`：統一轉換為標準 `std::string`。
+* `ork::utf8::to_u8string(view)`：轉換為 C++20 原生 `std::u8string`。
+* `ork::utf8::is_string_like_v<T>`：編譯期萃取，判斷是否為類字串型別。
+
+---
+
+## 🌳 5. 現代樹狀結構容器與文字 DSL 串流 (Tree & TreeIO)
+
+適用於階層資料、設定檔、屬性樹、文字 DSL 串流存取與遊戲腳本配置。
+詳細深入指南請參閱專章：
+👉 **[08. 樹狀結構容器與文字 DSL 指南 (Tree & TreeIO)](07_tree_and_dsl.md)**
+''', encoding="utf-8")
+
+    # 09_heap_and_memory.md
+    (manual_dir / "09_heap_and_memory.md").write_text(r'''# 09. 外掛 Heap 追蹤與記憶體防禦指南 (Heap Tracker & Plugin Heap)
+
+本章節介紹 OuroKore 基礎模組（`ourokore_base`）中的外掛 Heap 追蹤與記憶體洩漏防禦設施（`HeapTracker`、`PluginHeap`、`TrackedNewDelete` 與 `heap_api.h`）。
+
+---
+
+## 🧭 1. 設計哲學與心智模型
+
+1. **外掛動態庫（MODULE）記憶體洩漏與 CRT 邊界防禦**：
+   - 在微核心與外掛架構中，動態載入的外掛模組（`MODULE` / DLL）在生命週期結束或熱重載卸載前，若遺留任何未釋放的堆配置（Heap Allocation），其程式碼段與虛擬函式表卸載後將引發嚴重的記憶體洩漏甚至懸空崩潰。
+   - OuroKore 提供雙軌並行的 Heap 追蹤與檢驗系統，支援在編譯期彈性選擇 **方案 A** 或 **方案 B**。
+
+2. **防重入分配器保護 (RawSystemAllocator Guard)**：
+   - 追蹤器內部維護配置記錄表時，其本身的容器（如雜湊表或陣列）嚴格使用 `RawSystemAllocator`（直接繞過重載的 `operator new`，直通底層系統 API），徹底杜絕內部記帳容器觸發遞迴死鎖與爆棧。
+
+3. **C++17 對齊記憶體原生相容**：
+   - 追蹤器全面相容 C++17 對齊配置要求（Windows 平台調用 `_aligned_malloc` / `_aligned_free`，POSIX 平台調用 `posix_memalign` / `free`）。
+
+---
+
+## ⚙️ 2. 編譯期雙策略選擇 (Compile-Time Policy)
 
 | 方案 | 識別巨集 | Debug 行為 | Release 行為 | 適用情境 |
 | :--- | :--- | :--- | :--- | :--- |
-| **方案 A (預設)** | `ORK_HEAP_POLICY_A` | 詳細診斷 (記錄檔名/行號/序號) | 完全關閉 (零開銷直通，無鎖無記帳) | 追求發布版極致原生速度 |
+| **方案 A (預設)** | `ORK_HEAP_POLICY_A` | 詳細診斷 (記錄檔名/行號/序號) | 完全關閉 (零開銷直通系統 malloc，無鎖無記帳) | 追求發布版極致原生速度 |
 | **方案 B** | `ORK_HEAP_POLICY_B` | 詳細診斷 (記錄檔名/行號/序號) | 輕量原子無鎖計數 (記錄區塊與大小) | 發布版仍需驗收 Heap 是否清空 |
 
-#### CMake 編譯指定方式：
+### CMake 編譯指定方式：
 ```bash
 # 選擇方案 A (Debug 詳細 / Release 零開銷關閉)
 cmake -B build -DOUROKORE_HEAP_POLICY=A
@@ -1244,7 +1566,9 @@ cmake -B build -DOUROKORE_HEAP_POLICY=B
 #include <ourokore/base/HeapTracker.hpp>
 ```
 
-### 8.2 全域透明運算子重載 (Global Overload Mode)
+---
+
+## 🚀 3. 全域透明運算子重載 (Global Overload Mode)
 
 在外掛 MODULE 動態庫的任一主實作檔（如 `PluginMain.cpp`）中宣告：
 ```cpp
@@ -1255,7 +1579,9 @@ ORK_ENABLE_PLUGIN_HEAP_TRACKING()
 ```
 * **效果**：該外掛模組內部所有的 `new`、`delete` 以及 STL 容器（如 `std::vector`、`std::string` 等）之堆配置全部透明導向受管追蹤，業務程式碼無需修改任何一行。在方案 A 的 Release 組態下自動展開為空實作，零額外開銷。
 
-### 8.3 顯式受管 new / delete 巨集 (Explicit Tracked Mode)
+---
+
+## 🔍 4. 顯式受管 new / delete 巨集 (Explicit Tracked Mode)
 
 若需在原始碼中精確標記檔案與行號位置：
 ```cpp
@@ -1273,7 +1599,9 @@ ORK_DELETE_ARRAY(buffer, 256);
 std::vector<int, ork::TrackedAllocator<int>> my_vec;
 ```
 
-### 8.4 外掛結束前清空判定與洩漏診斷 (Zero-Leak Verification)
+---
+
+## 🛡️ 5. 外掛結束前清空判定與洩漏診斷 (Zero-Leak Verification)
 
 外掛在 `PluginShutdown()` 或 DLL 卸載前檢驗 Heap 狀態：
 ```cpp
@@ -1297,20 +1625,260 @@ ork::PluginHeap::assert_clean("MyPlugin");
 }
 ```
 
-### 8.5 跨語言純 C ABI (`ourokore/base/heap_api.h`)
+---
 
-底層提供純 C ABI，供 C#、Rust、Python 進行記憶體檢查與 FFI 對接：
+## 🌐 6. 跨語言純 C ABI (`ourokore/base/heap_api.h`)
+
+底層提供純 C ABI，供 C#、Rust、Python 進行記憶體檢查與 FFI 對接，保證跨語言邊界零例外外洩：
 * `ork_heap_allocate(size, file, line)` / `ork_heap_deallocate(ptr)`
 * `ork_heap_is_clean()` -> 傳回 `1`（已清空）或 `0`（未清空）
 * `ork_heap_get_active_allocations()` / `ork_heap_get_active_bytes()`
 * `ork_heap_dump_leaks(out_buf, buf_size)`
 * `ork_heap_assert_clean(context_name)`
+
+---
+
+## ⚠️ 7. 外掛開發避坑指南與高壓線禁忌
+
+1. **嚴格禁止跨動態庫混用配置與釋放**：
+   - 由外掛模組內部配置之記憶體，必須由該模組自行釋放，嚴禁在宿主或其他外掛中以標準 `free`/`delete` 釋放，以防不同 CRT 實例導致堆損壞。
+2. **動態庫卸載前必須 100% 驗收清空**：
+   - 配合 `DynamicLibrary` 的生命週期反向錨定或兩階段卸載掛鉤，在外掛退出前務必調用 `PluginHeap::is_clean()` 或 `PluginHeap::assert_clean()`，確保零洩漏再允許卸載。
+3. **CMake 構建規範**：
+   - 動態外掛必須以 `add_library(<name> MODULE ...)` 構建，嚴禁宣告為 `SHARED`，確保獨立動態加載與乾淨卸載能力。
 ''', encoding="utf-8")
 
-    print("✅ specs/manual/ 全套 8 份說明書手冊生成完畢！")
+    # 10_api_reference.md (永遠排在最後一本作為終端字典附錄)
+    (manual_dir / "10_api_reference.md").write_text(r'''# 10. 公開 C++ API 參照手冊 (API Reference)
+
+本手冊彙整 OuroKore 面向應用開發者、外掛實作者與宿主主程式之所有公開核心類別、工具與介面，作為全套手冊之終端速查字典附錄。
+
+---
+
+## 🏛️ 1. 宿主專屬類別：`ork::HostContext`
+* **標頭檔**：`ourokore/host/HostContext.hpp`
+* **方法**：
+  * `bool IsValid() const noexcept`：檢查是否具備合法宿主主控權。
+  * `void Shutdown()`：優雅終止核心背景任務與執行緒池。
+  * `void FlushStorage()`：同步排空並等待所有藍圖磁碟寫入與銷毀落盤。
+  * `void FlushDeferredDeletions()`：同步排空延遲物理銷毀隊列。
+  * `void CollectCycles()`：同步觸發一輪循環參照檢測與孤島解開。
+  * `void SetDeferredDeleteMode(bool sync)`：設定非同步延遲銷毀或即時同步模式。
+  * `void SetAutoDehydrator(std::shared_ptr<IAutoDehydrator>)`：設定全域自動脫水模組。
+  * `std::shared_ptr<IAutoDehydrator> GetAutoDehydrator() const`：取得當前自動脫水模組。
+  * `void SetStorageDriver(std::shared_ptr<IStorageDriver>)`：設定儲存驅動。
+  * `std::shared_ptr<IStorageDriver> GetStorageDriver() const`：取得當前儲存驅動。
+  * `size_t TriggerDehydrationRescue(size_t bytes_needed)`：緊急脫水指定位元組數。
+  * `void SetObjectModuleLoader(HandleID id, const DynamicLibrary &loader)`：綁定動態庫載入器至受管物件控制區塊（脫水長存，Payload 銷毀即刻解錨）。
+  * `DynamicLibrary GetObjectModuleLoader(HandleID id) const`：取得物件綁定之動態庫載入器。
+  * `std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const`：取得專職模組綁定介面（最小特權原則，委派給外掛工廠）。
+
+---
+
+## 📦 2. 領域物件基底與 CRTP 樣板：`ork::OuroObject` / `ork::Subclass`
+* **標頭檔**：`ourokore/component/OuroObject.hpp`
+* **類別基底 `ork::OuroObject`**：
+  * 所有託管物件之抽象基類，嚴禁外部 `new` 或值拷貝。
+  * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
+  * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
+  * `ork_type_id_t GetTypeID() const`：取得物件當前之 64 位元 TypeID（支援多型與繼承階層查詢）。
+  * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
+  * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
+* **樣板基底 `ork::Subclass<Derived, Base = ork::OuroObject>`**：
+  * **所有領域物件強制繼承之 CRTP 基底**（免巨集自動型別系統）。
+  * `static constexpr const char* StaticTypeName()`：自動在編譯期萃取類別名稱。
+  * `static TypeID StaticTypeID()`：自動以 FNV-1a 計算並向核心註冊繼承關係樹。
+  * 支援帶參數建構子完美轉發：`Subclass(args...)` 直接初始化父類別。
+
+---
+
+## 🔗 3. 智慧 Handle 系統
+* **標頭檔**：`ourokore/component/Handles.hpp`
+* **類別**：
+  * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
+  * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
+  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
+  * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator()(Fn&&, Args&&...)`, `Invoke(...)`, `operator bool()`, `IsAlive()`, `GetTargetID()`, `Release()`。
+    * `template <typename U> bool Is() const`：判定物件是否屬於或繼承自型別 `U`（純記憶體查詢，脫水狀態零 I/O 保證）。
+    * `template <typename U> OuroPtr<U> As() const &`：向下/向上安全轉型（左值增持根引用）。
+    * `template <typename U> OuroPtr<U> As() &&`：右值移動轉型（**零引用計數開銷**轉移所有權）。
+    * `ork_type_id_t GetTypeID() const`：取得目標物件 TypeID。
+    * `dynamic_pointer_cast<U>(ptr)` / `static_pointer_cast<U>(ptr)`：STL 風格轉型支援。
+
+---
+
+## 🔒 4. 併發同步守衛
+* **標頭檔**：`ourokore/component/OuroObject.hpp`
+* **類別**：
+  * `OuroReadLock`：共享讀鎖 RAII 守衛。
+  * `OuroWriteLock`：獨占寫鎖 RAII 守衛，**解構時自動原子標記 Dirty**。
+
+---
+
+## 🏭 5. 物件工廠與持久化介面
+* **標頭檔**：`ourokore/component/OuroCore.hpp`
+* **函式**：
+  * `CreateObject<T>(args...)`：建立受管領域物件（自動通報脫水模組登記）。
+  * `CreatePermanentObject<T>(args...)`：建立永久常駐物件（不參與脫水換頁）。
+  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新。
+  * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
+  * `Dehydrate(HandleID id)`：依 ID 脫水（若 root_count > 0 則安全略過傳回 false）。
+  * `Dehydrate(OuroPtr<T> &&ptr)`：右值移動消耗脫水（清空原指標，防止懸空）。
+  * `DehydrateAsync(HandleID id)` / `DehydrateAsync(OuroPtr<T> &&ptr)`：非同步背景脫水。
+  * `Rehydrate<T>(HandleID id)` / `Rehydrate<T>(const OuroPtr<T> &ptr)`：顯式手動復水，回傳全新 `OuroPtr<T>`。
+  * `RehydrateAsync<T>(HandleID id)` / `RehydrateAsync<T>(const OuroPtr<T> &ptr)`：非同步背景顯式復水。
+  * `IsAlive(HandleID id)`：查詢物件是否存活（純 ControlBlock 查詢，零 I/O 保證）。
+  * `GetStorageState(HandleID id)`：查詢物件當前 StorageState（純 ControlBlock 查詢，零 I/O 保證）。
+  * `GetRootEdgeCount(HandleID id)`：查詢目標當前活躍根邊緣數量。
+  * `SaveBatch(...)` / `LoadBatch(...)`：多核心平行批次操作。
+
+---
+
+## 🧩 6. 跨平台動態庫與插件載入器：`ork::DynamicLibrary`
+* **標頭檔**：`ourokore/base/DynamicLibrary.hpp`
+* **設計哲學與卸載原則**：
+  * **禁絕手動卸載 (No Manual Unload)**：動態庫不提供手動 `unload()`，杜絕野指針與 vtable 懸空崩溃。
+  * **生命週期反向錨定 (Life-Bound Retention)**：物件全數銷毀後自動安全卸載。呼叫端若長存 `load()` 回傳之初始句柄則永遠不卸載，完成綁定後應主動 `reset()` 或移交權杖。
+* **方法**：
+  * `static DynamicLibrary load(std::string_view utf8_path, LibraryLoadFlags flags = Default)`：自 UTF-8 路徑載入動態庫。
+  * `void reset() noexcept`：放棄句柄持有（扣減引用計數）。
+  * `bool is_loaded() const noexcept`：查詢是否載入成功。
+  * `const std::string &get_last_error() const noexcept`：取得 UTF-8 系統錯誤訊息。
+  * `std::string get_path_utf8() const noexcept`：取得規範路徑。
+  * `size_t use_count() const noexcept`：取得存活引用計數。
+  * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析導出符號。
+  * `bool is_first_loaded() const noexcept`：查詢是否為進程內首次載入（0 -> 1）。
+  * `template <typename FuncT, typename... Args> bool initialize_once(std::string_view symbol, Args&&... args)`：首次載入單次初始化。
+  * `std::shared_ptr<const void> create_lifetime_token() const noexcept`：建立純生命週期權杖（輕量保活）。
+  * `void add_cleanup_hook(std::function<void()> hook)`：註冊同步收尾回呼（LIFO 順序執行）。
+  * `bool register_shutdown_symbol(std::string_view symbol)`：註冊符號為同步收尾回呼。
+  * `bool register_terminal_shutdown_symbol(std::string_view symbol)`：註冊符號為外掛終端收尾回呼（最後執行；若外掛回傳非零則拒絕卸載轉為常駐模式）。
+  * `void add_async_cleanup_hook(AsyncCleanupHook hook)`：註冊非同步握手收尾回呼（主程式 0ms 立即返回，外掛善後完畢主動調用 `on_ready()` 喚醒物理卸載）。
+  * `void add_post_unload_hook(std::function<void(std::string_view)> hook)`：註冊 DLL 物理卸載後全域通知。
+  * `void enable_deferred_unload(bool enable = true)`：啟用非同步離棧延遲卸載防護（杜絕呼叫棧內自毀引發崩潰）。
+
+* **類別 `ork::WeakDynamicLibrary`**：
+  * `DynamicLibrary lock() const noexcept`：嘗試晉升為強引用。
+  * `bool expired() const noexcept`：查詢動態庫是否已卸載。
+  * `size_t use_count() const noexcept`：查詢存活強引用總數。
+
+---
+
+## 🌐 7. 全域 UTF-8 零拷貝輔助工具：`ork::utf8`
+* **標頭檔**：`ourokore/base/utf8.hpp`
+* **函式**：
+  * `as_view(str)`：將各類字串零拷貝轉換為 `std::string_view`。
+  * `to_string(str)`：統一轉換為 `std::string`。
+  * `to_u8string(view)`：轉換為 C++20 原生 `std::u8string`。
+  * `is_string_like_v<T>`：編譯期型別特徵萃取，判斷是否為字串型別。
+
+---
+
+## ⚙️ 8. 現代高效能雜湊工具模組：`ork::base::Hash`
+* **標頭檔**：`ourokore/base/Hash.hpp`
+* **演算法與運算子**：
+  * `Fnv1a64(data)`：FNV-1a 64-bit 雜湊（全域 TypeID 與字串 ID 唯一標準）。
+  * `Fnv1a32(data)`：FNV-1a 32-bit 雜湊。
+  * `Crc32(data)`：CRC32 (IEEE 802.3) 校驗碼。
+  * `MurmurHash3(data, seed)`：MurmurHash3 32-bit 高品質雜湊。
+  * `HashCombine(seed, v1, v2, ...)`：變參組合雜湊。
+  * 使用者自訂字面量（`using namespace ork::base::literals;`）：
+    * `""_fnv64`：編譯期計算 64 位元常數。
+    * `""_fnv32`：編譯期計算 32 位元常數。
+    * `""_crc32`：編譯期計算 CRC32 校驗碼。
+
+---
+
+## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
+* **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
+* **樣板基底 `TreeNodeBase<Derived>` 方法**：
+  * `CreateRoot(name)` / `CreateArray(name)`：建立樹之根節點。
+  * `bool IsObject()` / `bool IsArray()`：內容結構純度自動推導。
+  * `PushElement()` / `ElementCount()` / `Size()`：子元素管理（$O(1)$）。
+  * `GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取（$O(1)$）。
+  * `FindChildByName(name)` / `operator[](const std::u8string &name)`：名稱尋址（$O(1)$）。
+  * `AddChild(name)` / `InsertBefore()` / `InsertAfter()`：子節點插入與新增。
+  * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除。
+  * `Reversed()`：零拷貝反向走訪視圖糖衣。
+  * `GetTreeMutex()`：取得樹級讀寫鎖（整棵樹共享同一個鎖）。
+  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
+  * `DetachFromParent()`：斷開父節點雙向弱關聯自立為新樹。
+* **具體節點 `TreeNode<T>`（`StringTreeNode`）方法**：
+  * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：資料鎖保護之存取。
+* **文字 DSL 串流 `TreeIO`**：
+  * `Serialize(ostream, root, ...)` / `SerializeCompact(...)` / `SerializeToString(...)`
+  * `Deserialize(istream, ...)` / `DeserializeFromString(...)`
+  * 緊湊模式列舉：`CompactMode::None` / `CompactMode::WithEqual` / `CompactMode::WithoutEqual`。
+
+---
+
+## ⚡ 10. 並行排程與同步設施：`ork::base::concurrency`
+* **標頭檔**：
+  * `<ourokore/base/FixedThreadPool.hpp>`
+  * `<ourokore/base/DynamicThreadPool.hpp>`
+  * `<ourokore/base/ThreadSafeQueue.hpp>`
+  * `<ourokore/base/Semaphore.hpp>`
+  * `<ourokore/base/Event.hpp>`
+* **固定執行緒池 `ork::base::FixedThreadPool`**：
+  * `explicit FixedThreadPool(size_t thread_count = hardware_concurrency())`
+  * `template <typename F, typename... Args> auto Submit(F&&, Args&&...) -> std::future<...>`：非同步提交任務並取得 Future。
+  * `void WaitForAll()`：同步阻塞等待當前佇列與執行中之任務全數完成。
+  * `void Shutdown()`：優雅等待排隊任務完成後關閉執行緒池。
+  * `size_t GetWorkerCount() const` / `size_t GetActiveCount() const` / `size_t GetPendingCount() const`
+* **動態彈性伸縮池 `ork::base::DynamicThreadPool`**：
+  * `DynamicThreadPool(min_threads, max_threads, idle_timeout)`
+  * `Submit(F&&, Args&&...)`：自適應工作量自動擴充執行緒，閒置逾時自動縮容銷毀。
+* **執行緒安全佇列 `ork::base::ThreadSafeQueue<T>`**：
+  * `void Push(T item)` / `void Push(T&& item)`：執行緒安全寫入元素並喚醒等待者。
+  * `bool TryPop(T &item)`：非阻塞嘗試取出元素（佇列為空時立即返回 false）。
+  * `T WaitAndPop()` / `bool WaitAndPop(T &item, duration timeout)`：阻塞或限時等待取出元素。
+  * `bool Empty() const` / `size_t Size() const` / `void Clear()`
+* **計數信號量 `ork::base::Semaphore`**：
+  * `explicit Semaphore(ptrdiff_t initial_count)`
+  * `void Acquire()` / `void Release(ptrdiff_t update = 1)` / `bool TryAcquire()` / `bool TryAcquireFor(timeout)`
+* **同步事件 `ork::base::Event`**：
+  * `explicit Event(bool manual_reset = false, bool initially_signaled = false)`
+  * `void Signal()` / `void Reset()` / `void Wait()` / `bool WaitFor(timeout)` / `bool IsSignaled() const`
+
+---
+
+## 🛡️ 11. 外掛 Heap 追蹤與記憶體防禦：`ork::base::HeapTracker` / `ork::PluginHeap`
+* **標頭檔**：
+  * `<ourokore/base/HeapTracker.hpp>`
+  * `<ourokore/base/PluginHeap.hpp>`
+  * `<ourokore/base/TrackedNewDelete.hpp>`
+  * `<ourokore/base/heap_api.h>`
+* **編譯期雙策略**：
+  * `ORK_HEAP_POLICY_A`：Debug 詳細診斷 / Release 零開銷關閉（原生速度）。
+  * `ORK_HEAP_POLICY_B`：Debug 詳細診斷 / Release 輕量無鎖原子計數（發布版仍可清空驗收）。
+* **全域透明重載巨集**：
+  * `ORK_ENABLE_PLUGIN_HEAP_TRACKING()`：一行透明攔截外掛模組內所有 `new`/`delete` 及 STL 容器配置。
+* **顯式巨集與 STL 配置器**：
+  * `ORK_NEW(Type, args...)` / `ORK_DELETE(ptr)`：編譯期自動捕捉 `__FILE__` 與 `__LINE__`。
+  * `ORK_NEW_ARRAY(Type, count)` / `ORK_DELETE_ARRAY(ptr, count)`
+  * `TrackedAllocator<T>`：相容 STL 容器之受管分配器。
+* **清空判定與洩漏診斷**：
+  * `bool PluginHeap::is_clean()`：查詢當前模組是否 100% 清空。
+  * `std::string PluginHeap::dump_leaks_to_string(context_name)`：輸出格式化 UTF-8 洩漏診斷清單。
+  * `void PluginHeap::assert_clean(context_name)`：未清空立即印出報告並拋出例外。
+  * `PluginHeapGuard`：RAII 作用域洩漏檢測守衛。
+* **純 C ABI 介面**：
+  * `ork_heap_allocate(size, file, line)` / `ork_heap_deallocate(ptr)`
+  * `ork_heap_is_clean()` / `ork_heap_dump_leaks(buf, len)` / `ork_heap_assert_clean(name)`
+
+---
+
+## 🌐 12. 底層純 C ABI（Cross-Language FFI）分類索引
+所有底層操作保證跨 DLL 邊界零例外逃逸，完整清單與參數規格請參見《[03. 純 C ABI 規格與記憶體佈局規範](../technical/03_c_abi_and_memory.md)》：
+* **類別 A：物件生命週期與工廠**（`ork_create_object`、`ork_retain_object`、`ork_release_object`、`ork_acquire_object_pointer`、`ork_release_object_pointer`）
+* **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）
+* **類別 C：宿主全域特權**（`ork_host_initialize`、`ork_host_shutdown`、`ork_host_set_storage_driver`、`ork_host_trigger_dehydration_rescue` 等）
+* **類別 D：外掛 Heap 記憶體檢查**（`ork_heap_allocate`、`ork_heap_deallocate`、`ork_heap_is_clean`、`ork_heap_dump_leaks`、`ork_heap_assert_clean`）
+''', encoding="utf-8")
+
+    print("✅ specs/manual/ 全套 10 份說明書手冊生成完畢（API Reference 永遠置於末位）！")
 
 if __name__ == "__main__":
     import sys
     specs_dir = Path(__file__).resolve().parent.parent.parent / "specs"
     generate_manual_specs(specs_dir)
-

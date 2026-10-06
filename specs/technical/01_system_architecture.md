@@ -187,3 +187,75 @@ End Procedure
 2. **雙重防護原則**：
    - **編譯期權杖防禦 (Passkey Pattern)**：底層救援函式強制要求合法構造樣板專屬權杖，外部任何外掛業務程式碼無法直接實例化，杜絕第三方插件主動發起全域記憶體調度。
    - **執行期情境驗證**：核心在觸發脫水自救前，校驗當前 HandleID 是否正處於合法預留或脫水重建狀態，非合法情境之調用一律拒絕。
+
+
+---
+
+## 🧩 5. 動態模組架構與生命週期反向錨定規範 (Life-Bound Retention RFC)
+
+在微核心與外掛（Plugin / MODULE）架構中，動態庫載入器必須保證執行期代碼段與虛擬函式表（vtable）的絕對有效性。
+
+### 5.1 禁絕手動卸載定理 (No Manual Unload Invariant)
+* **定理**：載入器介面**嚴禁提供任何手動卸載函式**（如 `Unload()`）。
+* **公理**：在多執行緒與非同步任務圖中，任何執行緒無法預知其他執行緒是否仍有閉包正在執行外掛虛擬函式。提前手動卸載動態庫必然引發作業系統將代碼段解除映射（Unmap），導致記憶體訪問違規（Access Violation / SIGSEGV）。
+
+### 5.2 生命週期反向錨定模型 (Life-Bound Retention Model)
+動態模組之卸載完全由受管物件之生命週期計數自然驅動：
+
+```text
+Structure ModuleControlBlock:
+    system_handle: NativeModuleHandle
+    use_count: AtomicUInt64
+    is_first_loaded: Boolean
+    is_permanent_resident: Boolean
+    cleanup_hooks: List<Function>
+    terminal_shutdown_hook: Nullable<Function>
+    post_unload_hooks: List<Function(String)>
+End Structure
+
+Procedure RetainModule(block):
+    block.use_count.FetchAdd(1)
+End Procedure
+
+Procedure ReleaseModule(block):
+    If block.use_count.FetchSub(1) == 1 Then
+        TriggerModuleUnloadWorkflow(block)
+    End If
+End Procedure
+```
+
+* **弱引用晉升機制 (Weak Dynamic Module)**：
+  提供無所有權之弱觀察者。呼叫端可在放棄初始強引用後，隨時透過原子性 `Lock()` 嘗試晉升；若模組已卸載則安全回傳無效句柄，杜絕懸空指標。
+
+---
+
+## 🤝 6. 外掛非同步善後握手協定與終端常駐模式 (Async Handshake & Resident RFC)
+
+### 6.1 主執行緒 0ms 延遲非同步握手協定 (Async Shutdown Handshake)
+為解決外掛在卸載收尾時執行耗時 I/O（磁碟落盤、GPU 緩衝區釋放、網路關閉）導致主執行緒卡頓之問題，核心定義非同步握手狀態機：
+
+```text
+[主程式執行緒]                               [背景卸載等待線程]                         [外掛動態庫]
+      │                                             │                                       │
+釋放最後引用 (Release)                              │                                       │
+      │ ─── 移交背景線程 (0ms 立即返回繼續運作) ──> │                                       │
+      │                                             │ ─── 調用非同步收尾函式(附帶 Token) ──>│
+      │                                             │                                       │ 執行耗時落盤與善後...
+      │                                             │ ─── 進入條件變數阻塞等待 ────         │
+      │                                             │                             │         │
+      │                                             │ <── 呼叫 Token.OnReady() ───│ 善後完畢，主動握手喚醒！
+      │                                             │     (握手成功，喚醒背景線程)           │ (代碼段安全終止)
+      │                                             │                                       
+      │                                             │ 物理調用 FreeLibrary / dlclose
+      │                                             │ 觸發 PostUnloadHooks 通知主程式
+```
+
+### 6.2 外掛終端收尾保證 (Terminal Shutdown Guarantee)
+外掛可註冊終端收尾回呼（Terminal Shutdown Symbol），保證於外掛所屬的所有活體物件全部釋放完畢後**最後執行一次**。
+
+### 6.3 外掛拒絕卸載轉為常駐模式 (Permanent Resident Mode)
+* 若外掛之終端收尾函式執行後傳回**非零代碼**，核心將其識別為「外掛主動拒絕卸載」。
+* 核心立即將其標記為 `is_permanent_resident = True`，取消物理卸載調用，使該動態庫安全常駐於記憶體直至進程終止，杜絕外掛因全局註冊回呼無法清理而崩潰。
+
+### 6.4 離棧延遲卸載防自毀保護 (Deferred Unload Defense)
+若模組內部的某個回呼自身釋放了該模組的最後一個引用計數，核心強制將 `FreeLibrary` 操作延遲至非同步背景離棧執行緒執行，防止模組在呼叫棧仍在該動態庫內部時物理卸載自身的代碼段導致致命崩潰。

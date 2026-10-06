@@ -32,9 +32,11 @@ def check_c_abi_specs(specs_dir: Path, expected_apis: set):
     return len(missing) == 0, missing
 
 def check_manual_api_coverage(specs_dir: Path):
-    target_file = specs_dir / "manual" / "07_api_reference.md"
-    if not target_file.exists():
-        return False, [f"Missing file: {target_file}"]
+    manual_dir = specs_dir / "manual"
+    api_ref_files = list(manual_dir.glob("*_api_reference.md"))
+    if not api_ref_files:
+        return False, ["Missing file: *_api_reference.md in manual/"]
+    target_file = sorted(api_ref_files)[-1]
     
     content = target_file.read_text(encoding="utf-8")
     essential_types = [
@@ -104,7 +106,7 @@ def main():
     # 2. 檢驗使用說明書核心類別覆蓋率
     ok, missing_types = check_manual_api_coverage(specs_dir)
     if ok:
-        print("  ✅ [PASS] 核心受管類別均已完整收錄於 manual/07_api_reference.md")
+        print("  ✅ [PASS] 核心受管類別均已完整收錄於說明書終端手冊 manual/*_api_reference.md")
     else:
         print(f"  ❌ [FAIL] 說明書 API 手冊缺失關鍵類別: {missing_types}")
         has_error = True

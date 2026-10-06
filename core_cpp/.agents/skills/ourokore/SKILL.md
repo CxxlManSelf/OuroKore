@@ -427,7 +427,7 @@ ork::base::Event event(ork::base::EventResetMode::AutoReset, false);
      │ (通過)
      ▼
 [檢查規格連動]
-  1. API 簽名變更？ ───> 更新 `specs/manual/07_api_reference.md`
+  1. API 簽名變更？ ───> 更新 `specs/manual/*_api_reference.md`（終端手冊，目前為 `10_api_reference.md`）
   2. C ABI / 導出函式變更？ ───> 更新 `specs/technical/03_c_abi_and_memory.md`
   3. 二進位串流/藍圖格式變更？ ───> 更新 `specs/technical/02_binary_protocols.md`
   4. 拓撲或架構演算法變更？ ───> 更新 `specs/technical/01_system_architecture.md`

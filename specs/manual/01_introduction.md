@@ -48,3 +48,18 @@ OuroKore 嚴格劃分三大權限層級：
 1. **主程式宿主層（Host Application）**：透過 `HostContext` 獨佔進程生命週期、執行緒池注入、自動脫水策略與特權維護功能。
 2. **組件與插件層（Component / Plugin）**：僅能使用受管物件、安全指標、Handle 拓撲與讀寫鎖，物理隔絕所有破壞性特權。
 3. **底層純 C ABI（Cross-Language FFI）**：所有底層操作以純整數狀態碼、HandleID 與 C 函式指標封裝，100% 杜絕 C++ 例外跨動態庫逃逸，為未來綁定 C#、Rust、Python 提供完備基礎。
+
+---
+
+## 📚 使用手冊導引索引 (Manual Index)
+
+1. [01. 系統概述與架構哲學](01_introduction.md) - 心智模型、四大基石與三層邊界隔離哲學
+2. [02. 5 分鐘快速上手](02_quickstart.md) - 宿主初始化、自訂領域物件、屬性存取與存檔
+3. [03. 領域物件設計規範](03_domain_object_design.md) - Getter/Setter、OuroReadLock/OuroWriteLock、原子標髒
+4. [04. Handle 拓撲管理系統](04_handles_and_topology.md) - OwningHandle、UnboundHandle、OwningContainerHandle、OuroPtr
+5. [05. 自動換頁脫水與儲存驅動](05_dehydration_and_storage.md) - 記憶體脫水、透明按需復水、LRU 策略配置
+6. [06. 宿主生命週期與特權管理](06_host_lifecycle.md) - HostContext 獨佔特權、插件隔離防護、優雅退出
+7. [07. 樹狀結構容器與文字 DSL 指南](07_tree_and_dsl.md) - TreeNode 雙模態容器、顯式堆疊走訪與正交無等號 DSL
+8. [08. 基礎工具庫指南](08_base_utilities.md) - DynamicLibrary 生命週期反向錨定、constexpr Hash、並行同步與 UTF-8
+9. [09. 外掛 Heap 追蹤與記憶體防禦指南](09_heap_and_memory.md) - 編譯期 A/B 方案、全域重載、外掛結束前洩漏檢驗與純 C ABI
+10. [10. 公開 C++ API 參照手冊](10_api_reference.md) - 完整公開 API 清單與核心型別定義（終端速查字典附錄）

@@ -126,3 +126,84 @@ End Interface
 
 * **Key-Value 格式**：儲存驅動以 `HandleID (UInt64)` 為唯一 Key，以本規範定義的兩段式二進位串流為 Value。
 * **跨語言相容性**：無論底層介質採用本機檔案（File Storage）、記憶體（InMemoryStorage）、SQLite 或分散式 KV 資料庫，其儲存的資料二進位 Payload 均完全相同，可直接被不同語言之 OuroKore 核心交換讀取。
+
+
+---
+
+## 🌲 5. 樹狀結構階層與文字 DSL 串流協議 (Hierarchical Tree & Text DSL Wire Format RFC)
+
+本節定義 OuroKore 階層式容器 `TreeNode` 與文字 DSL 串流 `TreeIO` 的資料交換規範。
+
+### 5.1 資料純度自動推導雙模態 (Data-Driven Morphism)
+樹節點本身不儲存形態列舉，形態完全由子節點結構純度於執行期自動推導：
+* **物件模式（Object Mode，DSL 界定符 `{}`）**：子節點全體均為具名節點（`child_count == named_child_count`）。
+* **陣列模式（Array Mode，DSL 界定符 `()`）**：混入任何無名（匿名）節點（`child_count > named_child_count`）。
+
+### 5.2 四大正交界定符與零等號哲學 (Orthogonal Delimiters)
+文字 DSL 採用四個完全正交之語法 Token，等號 `=` 僅為可選裝飾符號：
+* `[節點名稱]`：名稱標記。
+* `"字串內容"`：Payload 資料（支援 0~255 二進位位元組與轉義字元 `\"`、`\\`、`\n`、`\xHH`）。
+* `{具名成員}`：物件區塊。
+* `(列表元素)`：陣列區塊。
+
+#### 三種緊湊傳輸編碼模式 (CompactMode Wire Styles)：
+1. **模式 1：標準縮排換行 (CompactMode::None)**：含標準縮排、空白與換行，供人類閱讀。
+2. **模式 2：含等號緊湊 (CompactMode::WithEqual)**：`[Key]="Value"{[Child]="1"}`。
+3. **模式 3：極致無等號緊湊 (CompactMode::WithoutEqual)**：`[Key]"Value"{[Child]"1"}`。
+   - 規範保證：連續具名空節點（如 `[A][B]`）、匿名空元素、物件陣列 `( { [id]"1" } )` 均 100% 精準對稱還原，單元素容器（如 `("Item")`）反序列化時拓撲身分永不降級脫殼。
+
+### 5.3 註解語法與界定符遮蔽
+狀態機原生支援三種風格註解：
+* `// 單行註解`（跳至行尾）
+* `/* 區塊註解 */`（跳至閉合符 `*/`）
+* `# 腳本註解`（跳至行尾）
+* **遮蔽保證**：註解內部包含的引號與括號均被狀態機嚴格忽略，不得觸發任何狀態轉移。
+
+### 5.4 顯式堆疊非遞迴 FSM 反序列化演算法 (Non-recursive FSM Deserialization)
+反序列化演算法以堆積（Heap）顯式堆疊 `Stack<ParseFrame>` 驅動，呼叫棧（Call Stack）深度恆為 $O(1)$，數學證明巨深文字 DSL 免疫呼叫堆疊溢位（Stack Overflow）：
+
+```text
+Structure ParseFrame:
+    current_node: NodeHandle
+    state: ParserState
+    accumulated_name: String
+    accumulated_data: String
+End Structure
+
+Function DeserializeFromString(dsl_text: String) -> NodeHandle:
+    Let root = CreateRootNode()
+    Let stack = DynamicStack<ParseFrame>()
+    stack.Push(ParseFrame(root, STATE_SEEK_NODE))
+    
+    Let cursor = 0
+    While cursor < dsl_text.Length Do
+        Let ch = dsl_text[cursor]
+        
+        // 略過空白字元與三種註解
+        If IsCommentOrWhitespace(ch, dsl_text, cursor) Then
+            cursor = SkipCommentOrWhitespace(dsl_text, cursor)
+            Continue
+        End If
+        
+        // 狀態機基於 stack.Top() 轉移：
+        Match stack.Top().state With
+            Case STATE_SEEK_NODE:
+                If ch == '[' Then
+                    stack.Top().state = STATE_READ_NAME
+                Else If ch == '{' Or ch == '(' Then
+                    Let child = stack.Top().current_node.AddChild()
+                    stack.Push(ParseFrame(child, STATE_SEEK_NODE))
+                Else If ch == '}' Or ch == ')' Then
+                    stack.Pop() // 顯式出棧，零遞迴返回！
+                End If
+            Case STATE_READ_NAME:
+                // 解析至閉合中括號 ']' 並填入 accumulated_name
+            Case STATE_READ_DATA:
+                // 解析至閉合雙引號 '"' 並填入 accumulated_data
+        End Match
+        cursor = cursor + 1
+    End While
+    
+    Return root
+End Function
+```
