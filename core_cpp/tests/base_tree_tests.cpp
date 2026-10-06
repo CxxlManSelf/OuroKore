@@ -867,6 +867,137 @@ void TestTagAndAnonymousChildSequence()
   std::cout << " -> 通過！" << std::endl;
 }
 
+// =============================================================================
+// [測試 16] 多型衍生階層模板與 C++20 std::derived_from 強型別支援測試
+// =============================================================================
+class BaseEntity : public TreeNodeBase<BaseEntity>
+{
+public:
+  using Base = TreeNodeBase<BaseEntity>;
+  virtual ~BaseEntity() = default;
+  virtual std::string GetEntityType() const
+  {
+    return "BaseEntity";
+  }
+
+protected:
+  explicit BaseEntity(std::u8string name = u8"") :
+      Base(std::move(name))
+  {
+  }
+
+  template <typename D>
+  friend class TreeNodeBase;
+};
+
+class MonsterEntity : public BaseEntity
+{
+public:
+  int hp = 0;
+  int atk = 0;
+
+  MonsterEntity(std::u8string name, int in_hp, int in_atk) :
+      BaseEntity(std::move(name)), hp(in_hp), atk(in_atk)
+  {
+  }
+
+  std::string GetEntityType() const override
+  {
+    return "Monster";
+  }
+};
+
+class ItemEntity : public BaseEntity
+{
+public:
+  int price = 0;
+
+  // 測試不需要 name 的特殊建構子
+  explicit ItemEntity(int in_price) :
+      BaseEntity(u8""), price(in_price)
+  {
+  }
+
+  std::string GetEntityType() const override
+  {
+    return "Item";
+  }
+};
+
+class NotAnEntity
+{
+};
+
+void TestPolymorphicDerivedNodeTemplate()
+{
+  std::cout << "[測試 16] 多型衍生階層模板與 C++20 std::derived_from 強型別支援測試..." << std::endl;
+
+  // 1. 編譯期 Concept 約束防禦驗證
+  static_assert(std::derived_from<MonsterEntity, BaseEntity>);
+  static_assert(std::derived_from<ItemEntity, BaseEntity>);
+  static_assert(!std::derived_from<NotAnEntity, BaseEntity>);
+
+  // 2. 透過 CreateRoot<MonsterEntity> 建立強型別根節點與轉發參數
+  std::shared_ptr<MonsterEntity> boss = BaseEntity::CreateRoot<MonsterEntity>(u8"BossDragon", 5000, 350);
+  assert(boss != nullptr);
+  assert(boss->GetName() == u8"BossDragon");
+  assert(boss->hp == 5000);
+  assert(boss->atk == 350);
+  assert(boss->GetEntityType() == "Monster");
+
+  // 3. 透過 AddChild<MonsterEntity> 新增具名衍生節點（零手動轉型直出）
+  std::shared_ptr<MonsterEntity> minion = boss->AddChild<MonsterEntity>(u8"Goblin", 100, 15);
+  assert(minion != nullptr);
+  assert(minion->GetName() == u8"Goblin");
+  assert(minion->hp == 100);
+  assert(minion->atk == 15);
+  assert(minion->GetEntityType() == "Monster");
+  assert(boss->ChildCount() == 1);
+
+  // 4. 透過 PushElement<ItemEntity> 原地構造自訂建構子衍生節點
+  std::shared_ptr<ItemEntity> potion = boss->PushElement<ItemEntity>(50);
+  assert(potion != nullptr);
+  assert(potion->price == 50);
+  assert(potion->GetEntityType() == "Item");
+  assert(boss->ChildCount() == 2);
+
+  // 5. 透過 InsertBefore<MonsterEntity> 在 minion 前方插入精英怪
+  std::shared_ptr<MonsterEntity> elite = boss->InsertBefore<MonsterEntity>(minion, u8"OrcWarrior", 500, 60);
+  assert(elite != nullptr);
+  assert(elite->GetName() == u8"OrcWarrior");
+  assert(elite->hp == 500);
+  assert(boss->ChildCount() == 3);
+  assert((*boss)[0] == elite);
+  assert((*boss)[1] == minion);
+  assert((*boss)[2] == potion);
+
+  // 6. 透過 InsertAfter<ItemEntity> 在 potion 後方插入稀有道具
+  std::shared_ptr<ItemEntity> sword = boss->InsertAfter<ItemEntity>(potion, u8"Excalibur", 9999);
+  assert(sword != nullptr);
+  assert(sword->GetName() == u8"Excalibur");
+  assert(sword->price == 9999);
+  assert(boss->ChildCount() == 4);
+  assert((*boss)[3] == sword);
+
+  // 7. 向下相容預設型別呼叫（未指定模板參數時預設為 D = BaseEntity）
+  std::shared_ptr<BaseEntity> default_node = boss->AddChild(u8"NeutralBeacon");
+  assert(default_node != nullptr);
+  assert(default_node->GetName() == u8"NeutralBeacon");
+  assert(default_node->GetEntityType() == "BaseEntity");
+
+  std::shared_ptr<BaseEntity> anon_default = boss->PushElement();
+  assert(anon_default != nullptr);
+  assert(anon_default->GetName().empty());
+
+  // 8. 透過 PushElement 推入既有衍生節點指標
+  auto external_monster = BaseEntity::MakeNode<MonsterEntity>(u8"WanderingGhost", 80, 25);
+  assert(boss->PushElement(external_monster));
+  assert(boss->FindChildByName(u8"WanderingGhost") == external_monster);
+  assert(boss->FindChildByName(u8"WanderingGhost")->GetEntityType() == "Monster");
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
 int main()
 {
   std::cout << "========================================" << std::endl;
@@ -888,9 +1019,10 @@ int main()
   TestConsecutiveEmptyNodes();
   TestArrayOfObjectsSerialization();
   TestTagAndAnonymousChildSequence();
+  TestPolymorphicDerivedNodeTemplate();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 15 項單元測試 100% 成功通過！   " << std::endl;
+  std::cout << "  全數 16 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

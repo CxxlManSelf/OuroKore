@@ -141,11 +141,14 @@
 ## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
 * **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
 * **樣板基底 `TreeNodeBase<Derived>` 方法**：
-  * `CreateRoot(name)` / `CreateArray(name)`：建立樹之根節點（便民別名）。
-  * `PushElement()` / `ElementCount()` / `Size()`：子元素管理（$O(1)$）。
+  * `CreateRoot<SubT = D>(name, args...)` / `CreateArray<SubT = D>(name, args...)`：建立樹之根節點（支援 C++20 `std::derived_from<SubT, D>` 約束與轉發建構參數，直出 `std::shared_ptr<SubT>`）。
+  * `MakeNode<SubT = D>(name, args...)`：底層工廠函式（支援衍生多型與建構鉤子）。
+  * `PushElement<SubT = D>(args...)` / `PushElement(element)`：原地構造匿名元素或推入既有節點指標（$O(1)$）。
+  * `ElementCount()` / `Size()` / `ChildCount()`：子元素數量查詢（$O(1)$）。
   * `GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取（$O(1)$）。
   * `FindChildByName(name)` / `operator[](const std::u8string &name)`：名稱尋址（$O(1)$）。
-  * `AddChild(name)` / `InsertBefore()` / `InsertAfter()`：子節點插入與新增。
+  * `AddChild<SubT = D>(name, args...)` / `AddBackChild<SubT = D>(name, args...)`：新增具名或匿名子節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型）。
+  * `InsertBefore<SubT = D>(child, name, args...)` / `InsertAfter<SubT = D>(child, name, args...)`：指定位置精準插入衍生節點。
   * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除。
   * `Reversed()`：零拷貝反向走訪視圖糖衣。
   * `GetTreeMutex()`：取得樹級讀寫鎖（整棵樹共享同一個鎖）。

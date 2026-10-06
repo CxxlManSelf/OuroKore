@@ -3,6 +3,7 @@
 #include <ourokore/base/export.h>
 
 #include <algorithm>
+#include <concepts>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -133,15 +134,43 @@ public:
     PropagateTreeMutex(std::make_shared<std::shared_mutex>());
   }
 
-  // 工廠方法：建構節點
-  static NodePtr MakeNode(const std::u8string &name = u8"")
+  // 工廠方法：建構節點（支援 D 及其衍生多型型別 SubT 與完美轉發構造參數）
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D>
+  static std::shared_ptr<SubT> MakeNode(const std::u8string &name = u8"", Args &&...args)
   {
-    if (!D::CanCreateChild(name))
+    if constexpr (requires { SubT::CanCreateChild(name); })
     {
-      return nullptr;
+      if (!SubT::CanCreateChild(name))
+      {
+        return nullptr;
+      }
+    }
+    else if constexpr (requires { D::CanCreateChild(name); })
+    {
+      if (!D::CanCreateChild(name))
+      {
+        return nullptr;
+      }
     }
 
-    return std::shared_ptr<D>(new D(name));
+    if constexpr (requires { new SubT(name, std::forward<Args>(args)...); })
+    {
+      return std::shared_ptr<SubT>(new SubT(name, std::forward<Args>(args)...));
+    }
+    else if constexpr (requires { new SubT(std::forward<Args>(args)...); })
+    {
+      std::shared_ptr<SubT> node(new SubT(std::forward<Args>(args)...));
+      node->SetName(name);
+      return node;
+    }
+    else
+    {
+      static_assert(requires { new SubT(name, std::forward<Args>(args)...); } ||
+                    requires { new SubT(std::forward<Args>(args)...); },
+                    "SubT must be constructible either as new SubT(name, args...) or new SubT(args...)");
+      return nullptr;
+    }
   }
 
 public:
@@ -197,9 +226,11 @@ public:
     return true;
   }
 
-  static NodePtr CreateRoot(const std::u8string &name = u8"")
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D>
+  static std::shared_ptr<SubT> CreateRoot(const std::u8string &name = u8"", Args &&...args)
   {
-    NodePtr root = MakeNode(name);
+    std::shared_ptr<SubT> root = MakeNode<SubT>(name, std::forward<Args>(args)...);
     if (root)
     {
       root->m_self = root;
@@ -208,9 +239,11 @@ public:
   }
 
   // 創建陣列根節點（便民別名）
-  static NodePtr CreateArray(const std::u8string &name = u8"")
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D>
+  static std::shared_ptr<SubT> CreateArray(const std::u8string &name = u8"", Args &&...args)
   {
-    return CreateRoot(name);
+    return CreateRoot<SubT>(name, std::forward<Args>(args)...);
   }
 
   // --- 基本屬性 ---
@@ -374,7 +407,9 @@ public:
   /**
    * @brief 新增具名或匿名子節點（追加至容器尾端，O(1)）
    */
-  NodePtr AddChild(const std::u8string &name = u8"")
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D>
+  std::shared_ptr<SubT> AddChild(const std::u8string &name = u8"", Args &&...args)
   {
     std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
@@ -382,7 +417,7 @@ public:
       return nullptr;  // 具名不可重複
     }
 
-    NodePtr new_child = MakeNode(name);
+    std::shared_ptr<SubT> new_child = MakeNode<SubT>(name, std::forward<Args>(args)...);
     if (!new_child)
     {
       return nullptr;
@@ -401,12 +436,16 @@ public:
   }
 
   // 向下相容別名
-  NodePtr AddBackChild(const std::u8string &name = u8"")
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D>
+  std::shared_ptr<SubT> AddBackChild(const std::u8string &name = u8"", Args &&...args)
   {
-    return AddChild(name);
+    return AddChild<SubT>(name, std::forward<Args>(args)...);
   }
 
-  NodePtr InsertBefore(const NodePtr &child_node, const std::u8string &name = u8"")
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D>
+  std::shared_ptr<SubT> InsertBefore(const NodePtr &child_node, const std::u8string &name = u8"", Args &&...args)
   {
     if (!child_node)
     {
@@ -425,7 +464,7 @@ public:
       return nullptr;
     }
 
-    NodePtr new_child = MakeNode(name);
+    std::shared_ptr<SubT> new_child = MakeNode<SubT>(name, std::forward<Args>(args)...);
     if (!new_child)
     {
       return nullptr;
@@ -443,7 +482,9 @@ public:
     return new_child;
   }
 
-  NodePtr InsertAfter(const NodePtr &child_node, const std::u8string &name = u8"")
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D>
+  std::shared_ptr<SubT> InsertAfter(const NodePtr &child_node, const std::u8string &name = u8"", Args &&...args)
   {
     if (!child_node)
     {
@@ -462,7 +503,7 @@ public:
       return nullptr;
     }
 
-    NodePtr new_child = MakeNode(name);
+    std::shared_ptr<SubT> new_child = MakeNode<SubT>(name, std::forward<Args>(args)...);
     if (!new_child)
     {
       return nullptr;
@@ -480,12 +521,23 @@ public:
     return new_child;
   }
 
-  NodePtr PushElement()
+  /**
+   * @brief 原地構造並推入匿名陣列元素（支援衍生型別與完美轉發）
+   */
+  template <typename SubT = D, typename... Args>
+    requires std::derived_from<SubT, D> &&
+             (!(sizeof...(Args) == 1 && (std::is_convertible_v<std::remove_cvref_t<Args>, NodePtr> && ...)))
+  std::shared_ptr<SubT> PushElement(Args &&...args)
   {
-    return AddChild(u8"");
+    return AddChild<SubT>(u8"", std::forward<Args>(args)...);
   }
 
-  bool PushElement(const NodePtr &element)
+  /**
+   * @brief 推入既有子節點指標（支援 D 或其衍生型別 SubT）
+   */
+  template <typename SubT = D>
+    requires std::derived_from<SubT, D>
+  bool PushElement(const std::shared_ptr<SubT> &element)
   {
     if (!element)
     {

@@ -158,8 +158,9 @@ assert((*(*restored)[u8"Inventory"])[0]->GetData() == "草藥");
 
 ---
 
-## 🧬 6. CRTP 自定義衍生領域節點
+## 🧬 6. CRTP 自定義衍生領域節點與多型階層
 
+### 6.1 CRTP 領域節點與反序列化自訂轉化
 應用端可透過 CRTP 繼承 `TreeNodeBase<Derived>` 打造專屬領域實體物件，享有整樹拓撲與型別安全：
 
 ```cpp
@@ -183,6 +184,54 @@ auto hero = TreeIO::DeserializeFromString<HeroNode>(
 
 static_assert(std::is_same_v<decltype(hero), std::shared_ptr<HeroNode>>);
 assert(hero->role_title == "英雄角色");
+```
+
+### 6.2 多型衍生階層模板支援（C++20 Concepts 約束與零轉型直出）
+當領域節點存在進一步繼承階層（例如 `BaseEntity` 衍生出 `MonsterEntity`、`ItemEntity`）時，`TreeNodeBase<D>` 為所有新增與工廠介面（`CreateRoot`、`CreateArray`、`MakeNode`、`AddChild`、`AddBackChild`、`PushElement`、`InsertBefore`、`InsertAfter`）提供了現代化 C++20 模板多載：
+* **嚴格概念約束**：`template <typename SubT = D, typename... Args> requires std::derived_from<SubT, D>`，非衍生類別於編譯期嚴格拒絕。
+* **完美轉發構造**：支援直接轉發建構子參數至 `SubT`，無論是以 `(name, args...)` 或是自訂 `(args...)` 均自動推導相容。
+* **強型別零手動轉型（Zero-Casting）**：直接回傳 `std::shared_ptr<SubT>`，呼叫端無須進行任何 `std::static_pointer_cast` 或 `std::dynamic_pointer_cast` 即可直接存取衍生類別成員。
+* **容器自動向上轉型（Upcasting）**：以 `std::shared_ptr<SubT>` 存入底層容器，享有連續快取友善保序管理。
+* **100% 向後相容**：未指定模板參數時預設為 `SubT = D`，對現有程式碼完全零衝擊。
+
+```cpp
+class BaseEntity : public ork::base::TreeNodeBase<BaseEntity> {
+public:
+    virtual ~BaseEntity() = default;
+    virtual std::string GetType() const { return "BaseEntity"; }
+protected:
+    explicit BaseEntity(std::u8string name = u8"") : Base(std::move(name)) {}
+    template <typename D> friend class TreeNodeBase;
+};
+
+class MonsterEntity : public BaseEntity {
+public:
+    int hp{100};
+    int atk{20};
+    MonsterEntity(std::u8string name, int in_hp, int in_atk)
+        : BaseEntity(std::move(name)), hp(in_hp), atk(in_atk) {}
+    std::string GetType() const override { return "Monster"; }
+};
+
+class ItemEntity : public BaseEntity {
+public:
+    int price{0};
+    explicit ItemEntity(int in_price) : BaseEntity(u8""), price(in_price) {}
+    std::string GetType() const override { return "Item"; }
+};
+
+// 1. 建立根節點
+auto root = BaseEntity::CreateRoot(u8"Dungeon");
+
+// 2. 零轉型直接新增強型別衍生節點 (回傳 std::shared_ptr<MonsterEntity>)
+std::shared_ptr<MonsterEntity> boss = root->AddChild<MonsterEntity>(u8"BossDragon", 5000, 350);
+boss->hp -= 200; // 直接存取衍生屬性，無需型別轉換！
+
+// 3. 原地構造並推入陣列元素
+std::shared_ptr<ItemEntity> potion = root->PushElement<ItemEntity>(50);
+
+// 4. 精準指定位置插入衍生節點
+std::shared_ptr<MonsterEntity> minion = root->InsertBefore<MonsterEntity>(boss, u8"Goblin", 100, 15);
 ```
 
 ---

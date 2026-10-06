@@ -150,6 +150,49 @@ private:
 1. **外掛 Target 宣告鐵律**：CMake 中必須使用 `add_library(<name> MODULE ...)`，嚴禁宣告為 `SHARED`。
 2. **生命週期反向錨定**：透過 `lib.bind_lifecycle(raw_ptr, deleter_fn)` 或自訂 Deleter 閉包持有 `DynamicLibrary`。
 3. **主程式放棄 initial handle**：主程式完成工廠建構後必須放棄 `load()` 回傳的 `DynamicLibrary` 句柄（隨作用域結束或呼叫 `reset()`），使得 DLL 的存活權杖全權交給產生的物件持有；最後一個物件析構時動態庫自動安全卸載。
+
+---
+
+## 🌳 5. 樹狀結構階層容器與多型衍生節點 (Tree & TreeIO)
+
+在 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>` 中，提供了高效能階層容器 `TreeNode<T>` 與文字 DSL 工具：
+
+### 5.1 CRTP 領域節點與多型衍生階層 (C++20 std::derived_from)
+```cpp
+#include <ourokore/base/Tree.hpp>
+
+class BaseEntity : public ork::base::TreeNodeBase<BaseEntity> {
+public:
+    virtual ~BaseEntity() = default;
+    virtual std::string GetType() const { return "BaseEntity"; }
+protected:
+    explicit BaseEntity(std::u8string name = u8"") : TreeNodeBase(std::move(name)) {}
+    template <typename D> friend class TreeNodeBase;
+};
+
+class MonsterEntity : public BaseEntity {
+public:
+    int hp{100};
+    int atk{20};
+    MonsterEntity(std::u8string name, int in_hp, int in_atk)
+        : BaseEntity(std::move(name)), hp(in_hp), atk(in_atk) {}
+    std::string GetType() const override { return "Monster"; }
+};
+
+// 1. 建立根節點
+auto root = BaseEntity::CreateRoot(u8"Scene");
+
+// 2. 零轉型直接新增強型別衍生節點 (C++20 std::derived_from 約束，直出 std::shared_ptr<SubT>)
+std::shared_ptr<MonsterEntity> boss = root->AddChild<MonsterEntity>(u8"BossDragon", 5000, 350);
+boss->hp -= 100; // 直接存取衍生屬性，無需 dynamic_cast！
+
+// 3. 原地構造並推入陣列元素
+std::shared_ptr<MonsterEntity> minion = root->PushElement<MonsterEntity>(u8"Goblin", 100, 15);
+```
+
+### 5.2 整樹走訪黃金法則（死鎖防禦）
+* ⚠️ **高壓線禁忌**：整棵樹共享同一個 `std::shared_mutex`（不可重入）。在持讀鎖走訪期間（`for (auto &child : *node)`），**絕對嚴禁調用 `AddChild`、`RemoveChild`、`PushElement` 等異動結構介面**，否則立即引發不可重入死鎖！
+* 異動需求請遵循「第一階段持讀鎖收集目標 -> 釋放讀鎖 -> 第二階段持寫鎖批次修改」之安全範式。
 '''
     skill_file.write_text(content, encoding="utf-8")
     print("✅ 應用端 AI 技能檔 ../skills/ourokore-app/SKILL.md 生成完畢！")
