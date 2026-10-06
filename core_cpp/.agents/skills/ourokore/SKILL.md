@@ -77,13 +77,15 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 > 6. **純生命週期存活權杖 (Pure Lifetime Token Invariant)**：
 >    若外掛內部為複雜樹狀結構（如 `TreeNodeBase` 百萬節點群）、容器群或非同步任務，不便或無需綁定單一實體物件裸指標時，可透過 `auto token = lib.create_lifetime_token();` 產生型別擦除之純存活權杖（`std::shared_ptr<const void>`）。整棵樹的所有節點均可共同持有此 Token，只要全宇宙尚有任一節點存活，DLL 便絕不被物理卸載；最後一個節點解構時 Token 計數歸零觸發自動卸載。
 > 7. **物理卸載完成通知回呼 (Post-Unload Hook)**：
->    宿主可透過 `lib.add_post_unload_hook(cb)` 註冊在 DLL 物理卸載（`FreeLibrary` / `dlclose`）完成後執行的通知回呼，零輪詢被動接收「外掛已完全死透、資源已全數釋放」事件。
+>    宿主可透過 `lib.add_post_unload_hook(cb)` 註冊在 DLL 物理卸載（`FreeLibrary` / `dlclose`）完成後執行的通知回呼，零輪詢被動接收「外掛已完全死透、資源已全數釋放」事件。⚠️ 僅在外掛同意卸載且真正物理卸載後才觸發；若外掛轉為常駐則絕不調用。
 > 8. **非同步離棧延遲卸載防護 (Deferred Stack-Decoupled Unload)**：
->    呼叫 `lib.enable_deferred_unload(true)` 可開啟離棧保護。當最後一個節點是在外掛自身的虛擬解構函式中解構時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構呼叫棧完全退出後才卸載代碼段，100% 杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
-> 9. **非同步善後握手協定 (Async Shutdown Handshake Invariant)**：
->    若外掛具有冗長善後（資料落盤、關閉連線、釋放大型 GPU 資源），必須透過 `lib.add_async_cleanup_hook` 或 `lib.register_async_shutdown_symbol` 註冊。主程式發起關閉（`reset()`）時**0ms 立即返回繼續運作（零卡頓）**；外掛於背景執行緒執行善後完畢後調用 `on_ready()` 握手通知 DynamicLibrary 背景等待線程被喚醒，確認外掛徹底停工後才呼叫 `FreeLibrary` 物理卸載 DLL，兼顧主程式極致流暢與外掛安全收尾。
-> 10. **模組終端收尾最後執行保證 (Terminal Shutdown Guarantee Invariant)**：
->     外掛模組本身的收尾函式（透過 `register_shutdown_symbol`、`add_shutdown_hook`、`register_async_shutdown_symbol` 或 `add_async_shutdown_hook` 註冊），享有最高層級之「生命週期終端保證」。**不論註冊先後時機為何，系統嚴格保證在所有通用清理掛鉤（`add_cleanup_hook` / `add_async_cleanup_hook`）全數執行完成之後、且在物理卸載（`FreeLibrary` / `dlclose`）前一刻最後被觸發**。這徹底杜絕了外部依賴清理回呼尚未結束前外掛全域狀態即遭提早解構的 Use-After-Free 崩潰。
+>    呼叫 `lib.enable_deferred_unload(true)` 可開啟離棧保護。當最後一個引用歸零時，卸載動作自動移交獨立背景執行緒執行，確保當前物件解構呼叫棧完全退出後才卸載代碼段，兼具主程式零卡頓與 100% 杜絕呼叫棧自毀崩潰 (Self-Unload Stack Trap)。
+> 9. **模組唯一善後收尾與常駐模式規範 (Terminal Shutdown & Resident Mode Invariant)**：
+>    外掛模組的生命週期收尾進入點在架構上唯一存在（透過 `lib.register_shutdown_symbol` 或 `lib.set_shutdown_hook` 註冊）。
+>    - 徹底捨棄複雜且易致系統狀態不一致的通用前置清理（業務清理應由各物件 RAII 自身負責）。
+>    - 引用歸零時，首先執行該唯一善後入口：
+>      - **外掛回傳 `true`（或 `void`）**：同意卸載，路徑自快取除名並呼叫 `FreeLibrary` 物理卸載，隨後觸發 `post_unload_hooks`。
+>      - **外掛回傳 `false`**：外掛因業務理由無法結束，**系統自動將其轉為常駐模式 (Resident Mode)**！絕不調用 `FreeLibrary`、絕不調用 `post_unload_hooks`、絕不提前除名路徑，並將句柄登錄至全域常駐表。後續任何代碼再次呼叫 `load()` 該路徑時，100% 無縫重用常駐模組！
 
 ### 2.0.4 外掛 Heap 取代與卸載前清空檢驗規範 (Plugin Heap Tracking & Zero-Leak Invariant)
 > ⚠️ **外掛 Heap 取代與卸載前清空檢驗鐵律**：

@@ -234,43 +234,35 @@ public:
    */
   [[nodiscard]] bool is_first_loaded() const noexcept;
 
-  using ReadyToUnloadCallback = std::function<void()>;
-  using AsyncCleanupHook = std::function<void(ReadyToUnloadCallback on_ready_to_unload)>;
-
   /**
-   * @brief 註冊在動態函式庫卸載（FreeLibrary / dlclose）前一刻執行的同步收尾回呼 (Pre-Unload Hook)
+   * @brief 設定模組唯一的善後收尾回呼 (Terminal Shutdown Hook)
    *
-   * 所有透過此函式註冊的收尾回呼，將嚴格保證在動態庫引用計數徹底歸零（1 -> 0）、
-   * 且在動態庫代碼段解除映射之前，依反向順序 (LIFO) 執行。
-   * 此時動態庫的實體程式碼段與 vtable 依然完整有效。
+   * 外掛模組在引用計數徹底歸零（1 -> 0）時執行的唯一收尾入口。
    *
-   * @param hook 收尾回呼閉包
+   * @param hook 善後收尾閉包，傳回 bool：
+   *             - true: 善後完畢，允許作業系統進行物理卸載 (FreeLibrary / dlclose)。
+   *             - false: 外掛因業務理由無法結束，轉為【常駐模式 (Resident Mode)】，
+   *                      系統保證絕不物理卸載、絕不調用後置通知，並維持全域路徑登錄長存以備後續再次重用！
    */
-  void add_cleanup_hook(std::function<void()> hook);
+  void set_shutdown_hook(std::function<bool()> hook);
 
   /**
-   * @brief 註冊非同步善後收尾回呼 (Async Cleanup Hook with Handshake)
+   * @brief 依據符號名稱自動註冊模組唯一的善後收尾函式
    *
-   * 【非同步善後握手協定 (Async Shutdown Handshake)】
-   * 主程式非同步觸發外掛 shutdown 後立即返回繼續工作（主程式零卡頓、不等待）。
-   * 外掛在背景執行其冗長的善後工作（資料落盤、關閉網路、釋放大型 GPU/快取資源）後，
-   * 呼叫傳入的 on_ready_to_unload 回呼。此時外掛保證不再執行任何代碼，
-   * DynamicLibrary 的背景等待執行緒收到通知被喚醒，執行 FreeLibrary 物理卸載 DLL，
-   * 並觸發 post_unload_hooks 通知主程式。
+   * 支援 C 符號簽章：
+   * 1. bool (*)() 或 int (*)()：傳回 false 或非 0 代表外掛拒絕卸載、轉為常駐；傳回 true 或 0 代表允許卸載。
+   * 2. void (*)()：無回傳值收尾，預設允許卸載。
    *
-   * @param hook 接受 ReadyToUnloadCallback 的非同步收尾函式
+   * @param symbol_name 收尾函式符號名稱（例如 "ork_plugin_shutdown"）
+   * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
    */
-  void add_async_cleanup_hook(AsyncCleanupHook hook);
+  bool register_shutdown_symbol(std::string_view symbol_name);
 
   /**
-   * @brief 註冊在動態函式庫卸載（FreeLibrary / dlclose）完成後執行的通知回呼 (Post-Unload Hook)
+   * @brief 註冊在動態函式庫物理卸載（FreeLibrary / dlclose）完成後執行的通知回呼 (Post-Unload Hook)
    *
-   * 與 add_cleanup_hook()（於 FreeLibrary 之前執行）不同，此回呼嚴格保證在動態庫引用計數徹底歸零、
-   * 且底層作業系統實體動態庫已經完全物理卸載出記憶體之後執行。
-   *
-   * ⚠️ 注意事項：
-   * 回呼執行時，動態庫代碼段已被作業系統解除映射（Unmap），因此傳入的 hook 閉包內部
-   * 絕不可呼叫已卸載動態庫的任何函式或存取其虛擬函式表，通常用於通知宿主「插件資源已完全釋放/可更新狀態」。
+   * ⚠️ 僅在外掛同意卸載且作業系統成功物理卸載動態庫後才觸發。
+   * 若外掛回覆拒絕卸載轉為常駐，此回呼絕對不會被執行！
    *
    * @param hook 卸載完成通知回呼閉包
    */
@@ -279,12 +271,8 @@ public:
   /**
    * @brief 啟用或停用非同步離棧延遲卸載模式 (Deferred Stack-Decoupled Unload)
    *
-   * 當由受管物件或生命週期權杖（Lifetime Token）的解構觸發動態庫最後一次引用歸零時，
-   * 呼叫棧頂層可能仍殘留有動態庫內部的解構子代碼（例如外掛節點自己的虛擬解構函式）。
-   * 若直接在當前執行緒同步調用 FreeLibrary，會引發在自身呼叫棧中解除映射代碼段的崩潰 (Self-Unload Stack Trap)。
-   *
-   * 啟用非同步離棧卸載後，當最後一個引用歸零時，動態庫卸載動作將自動移交至獨立的背景執行緒執行，
-   * 確保當前物件的解構呼叫棧完全退出後才執行物理卸載，達成 100% 絕對安全的自毀與卸載。
+   * 啟用後，當最後一個引用歸零時，動態庫的收尾與物理卸載動作將自動移交至獨立的背景執行緒執行，
+   * 確保主程式與呼叫棧完全退出後才卸載代碼段，達成 100% 零卡頓與無崩潰卸載。
    *
    * @param enable 是否啟用非同步離棧卸載（預設為 true）
    */
@@ -294,59 +282,6 @@ public:
    * @brief 查詢當前是否啟用了非同步離棧延遲卸載模式
    */
   [[nodiscard]] bool is_deferred_unload_enabled() const noexcept;
-
-  /**
-   * @brief 設定非同步善後最大等待逾時時間（防範不良外掛無限期卡住未通知）
-   * @param timeout 逾時時間，若為 0 則表示無限等待
-   */
-  void set_async_shutdown_timeout(std::chrono::milliseconds timeout) noexcept;
-
-  /**
-   * @brief 註冊在所有通用清理回呼 (cleanup hooks) 執行完畢後、物理卸載前執行的模組最終同步收尾回呼
-   *
-   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
-   * 與 add_cleanup_hook() 不同，本函式註冊的回呼享有生命週期終端保證。
-   * 不論註冊的先後順序為何，系統嚴格保證在所有通用清理掛鉤（add_cleanup_hook / add_async_cleanup_hook）
-   * 全數執行完成之後、且在物理卸載（FreeLibrary / dlclose）前一刻才觸發。
-   *
-   * @param hook 模組終端收尾回呼閉包
-   */
-  void add_shutdown_hook(std::function<void()> hook);
-
-  /**
-   * @brief 註冊模組最終非同步善後收尾回呼 (Terminal Async Shutdown Hook with Handshake)
-   *
-   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
-   * 享有生命週期終端保證，嚴格在所有通用清理掛鉤完成後才觸發，並等待其非同步握手結束後才物理卸載。
-   *
-   * @param hook 接受 ReadyToUnloadCallback 的非同步收尾函式
-   */
-  void add_async_shutdown_hook(AsyncCleanupHook hook);
-
-  /**
-   * @brief 依據符號名稱自動註冊無參數同步收尾函式（void()）為模組最終卸載前回呼
-   *
-   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
-   * 透過本函式註冊的收尾符號享有生命週期終端保證：
-   * 不論呼叫本函式與其他 add_cleanup_hook() 的先後順序為何，該收尾符號必定在所有通用清理掛鉤
-   * 全數執行完成之後、且在 FreeLibrary / dlclose 前一刻最後被觸發！
-   *
-   * @param symbol_name 收尾函式符號名稱（例如 "ork_plugin_shutdown"）
-   * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
-   */
-  bool register_shutdown_symbol(std::string_view symbol_name);
-
-  /**
-   * @brief 依據符號名稱自動註冊純 C 簽章的模組最終非同步收尾函式
-   *
-   * 【模組收尾最後執行保證 (Terminal Shutdown Guarantee)】
-   * 符號簽章需為：void (*)(void (*on_ready_cb)(void *user_data), void *user_data)
-   * 享有生命週期終端保證：不論註冊順序為何，必定在所有通用清理掛鉤完成後才觸發善後握手協定。
-   *
-   * @param symbol_name 非同步收尾符號名稱（例如 "ork_plugin_async_shutdown"）
-   * @return 若成功找到符號並註冊傳回 true；若找不到符號或庫未載入傳回 false
-   */
-  bool register_async_shutdown_symbol(std::string_view symbol_name);
 
   /**
    * @brief 僅在首次載入（0 -> 1）時執行指定的符號初始化函式

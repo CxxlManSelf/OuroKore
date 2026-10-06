@@ -354,8 +354,8 @@ int main(int argc, char *argv[])
     assert(get_init_cnt != nullptr);
     assert(get_init_cnt() == 1);
 
-    // 註冊 Host 端收尾閉包與外掛 DLL 內部收尾函式
-    lib_first.add_cleanup_hook([&host_cleanup_counter]() {
+    // 註冊 Host 端物理卸載通知回呼與外掛 DLL 內部收尾函式
+    lib_first.add_post_unload_hook([&host_cleanup_counter]() {
       host_cleanup_counter++;
     });
     bool reg_shutdown_ok = lib_first.register_shutdown_symbol("PluginShutdown");
@@ -507,167 +507,81 @@ int main(int argc, char *argv[])
     std::cout << "  ✅ 非同步離棧延遲卸載與後置通知成功完成，100% 杜絕呼叫棧自毀崩潰！" << std::endl;
   }
 
-  // 13. 測試：核心驗證 —— 外掛非同步善後握手協定 (Async Shutdown Handshake)
-  // 驗證流程：
-  // 1. 主程式觸發 shutdown（如 reset 放棄持有），主程式線程立即返回（零卡頓、不等待）。
-  // 2. 外掛在背景執行冗長的善後工作（例如落盤、資源釋放）。善後期間 DLL 絕不被提前卸載。
-  // 3. 外掛善後徹底結束後，呼叫 on_ready_to_unload()。
-  // 4. DynamicLibrary 的背景等待線程被通知喚醒，安全呼叫 FreeLibrary() 卸載 DLL 並觸發 post_unload_hook！
+  // 13. 測試：核心驗證 —— 模組唯一善後收尾函式 (Terminal Shutdown Hook)
   {
-    std::cout << "[Test 13] 核心驗證：外掛非同步善後握手協定 (Async Shutdown Handshake)..." << std::endl;
+    std::cout << "[Test 13] 核心驗證：模組唯一善後收尾 (Terminal Shutdown Hook)..." << std::endl;
     auto lib = ork::DynamicLibrary::load(plugin_path);
     assert(lib.is_loaded());
-    auto weak_lib = lib.to_weak();
 
-    std::atomic<bool> plugin_cleanup_started{false};
-    std::atomic<bool> plugin_cleanup_finished{false};
-    std::atomic<bool> host_post_unload_called{false};
+    bool shutdown_called = false;
+    bool post_unload_called = false;
 
-    // 註冊非同步善後收尾 hook
-    lib.add_async_cleanup_hook([&](ork::DynamicLibrary::ReadyToUnloadCallback on_ready) {
-      plugin_cleanup_started.store(true);
-      // 外掛在自己的背景執行緒中進行冗長善後（如寫入快取、磁碟落盤、網路中斷等）
-      std::thread([on_ready = std::move(on_ready), &plugin_cleanup_finished]() mutable {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 模擬耗時善後 50ms
-        plugin_cleanup_finished.store(true);
-        // 善後徹底完畢，外掛確認絕不再執行任何代碼，非同步通知 DynamicLibrary 可以卸載！
-        on_ready();
-      }).detach();
+    // 設定模組唯一善後 hook
+    lib.set_shutdown_hook([&]() -> bool {
+      shutdown_called = true;
+      return true; // 同意卸載
     });
 
-    // 註冊卸載完成後置通知
     lib.add_post_unload_hook([&]() {
-      host_post_unload_called.store(true);
+      post_unload_called = true;
     });
 
-    auto start_time = std::chrono::steady_clock::now();
-
-    // 關鍵時刻：主程式觸發卸載（釋放強引用）
-    std::cout << "  -> 主程式釋放引用句柄 lib.reset()..." << std::endl;
     lib.reset();
 
-    // 💡 關鍵驗證 1：主程式線程完全不被阻塞，立即返回！耗時應遠小於外掛善後的 50ms
-    auto return_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start_time).count();
-    std::cout << "  -> 主程式立即返回！耗時: " << return_duration << " ms（主程式零卡頓！）" << std::endl;
-    assert(return_duration < 30); // 主程式未等待外掛善後
-
-    // 💡 關鍵驗證 2：外掛善後進行期間，DLL 絕未被提前卸載（依然存活中）
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    assert(plugin_cleanup_started.load() == true);
-    assert(host_post_unload_called.load() == false);
-    assert(!weak_lib.expired()); // 握手完成前，DLL 絕不可提前卸載！
-
-    // 等待外掛善後完成與 DynamicLibrary 喚醒卸載
-    int wait_cycles = 0;
-    while (!host_post_unload_called.load() && wait_cycles < 100)
-    {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      wait_cycles++;
-    }
-
-    // 💡 關鍵驗證 3：外掛善後已徹底完成，且 DLL 在收到通知後才被物理卸載
-    assert(plugin_cleanup_finished.load() == true);
-    assert(host_post_unload_called.load() == true);
-    assert(weak_lib.expired());
-    std::cout << "  ✅ [PASS] 外掛非同步善後徹底完成後通知 DynamicLibrary，DLL 安全卸載，握手全流程成功！" << std::endl;
+    assert(shutdown_called == true);
+    assert(post_unload_called == true);
+    std::cout << "  ✅ 模組唯一善後收尾與物理卸載全流程測試通過！" << std::endl;
   }
 
-  // 14. 測試：核心保證 —— 模組收尾最後執行保證 (Terminal Shutdown Guarantee)
+  // 14. 測試：核心保證 —— 外掛拒絕結束轉為常駐模式 (Resident Mode & Delayed Unregister)
   // 驗證重點：
-  // 不論註冊的先後時機為何，模組終端收尾（register_shutdown_symbol / add_shutdown_hook 及
-  // register_async_shutdown_symbol / add_async_shutdown_hook）必定在所有通用清理回呼
-  // （add_cleanup_hook / add_async_cleanup_hook）全數執行完成之後、且在 FreeLibrary 之前最後執行！
+  // 1. 外掛回覆 false 拒絕結束時，絕對不調用 FreeLibrary，代碼段安全留在記憶體！
+  // 2. 絕對不觸發 post_unload_hook！
+  // 3. 註冊路徑不被提前刪除，將原生句柄轉入常駐表！
+  // 4. 未來再次 load() 該路徑時，精準命中既有常駐模組！
   {
-    std::cout << "[Test 14] 核心驗證：模組收尾最後執行保證 (Terminal Shutdown Guarantee)..." << std::endl;
+    std::cout << "[Test 14] 核心驗證：外掛拒絕結束轉常駐 (Resident Mode & Delayed Unregister)..." << std::endl;
     auto lib = ork::DynamicLibrary::load(plugin_path);
     assert(lib.is_loaded());
 
-    std::vector<std::string> execution_order;
+    bool shutdown_invoked = false;
+    bool post_unload_invoked = false;
 
-    auto get_shutdown_cnt = lib.get_symbol<int()>("GetShutdownCallCount");
-    assert(get_shutdown_cnt != nullptr);
-    int initial_shutdown_cnt = get_shutdown_cnt();
-
-    // 14.1 刻意以交錯順序註冊回呼：
-    // 先註冊通用清理 1
-    lib.add_cleanup_hook([&]() {
-      execution_order.push_back("general_cleanup_1");
-      // 💡 關鍵保證：通用清理執行時，PluginShutdown 絕對尚未被執行！
-      assert(get_shutdown_cnt() == initial_shutdown_cnt);
+    // 模擬外掛因業務理由（如背景任務運作中）拒絕結束
+    lib.set_shutdown_hook([&]() -> bool {
+      shutdown_invoked = true;
+      return false; // 💡 拒絕卸載，宣告常駐！
     });
 
-    // 中間註冊模組終端同步收尾符號
-    bool reg_ok = lib.register_shutdown_symbol("PluginShutdown");
-    assert(reg_ok == true);
-
-    // 再註冊自訂終端收尾 hook
-    lib.add_shutdown_hook([&]() {
-      execution_order.push_back("terminal_shutdown_custom");
-    });
-
-    // 後註冊通用清理 2（晚於 shutdown 註冊）
-    lib.add_cleanup_hook([&]() {
-      execution_order.push_back("general_cleanup_2");
-      assert(get_shutdown_cnt() == initial_shutdown_cnt);
-    });
-
-    // 註冊物理卸載後置通知
     lib.add_post_unload_hook([&]() {
-      execution_order.push_back("post_unload");
+      post_unload_invoked = true;
     });
 
-    // 觸發卸載
+    // 釋放引用，觸發收尾管線
     lib.reset();
 
-    // 💡 驗證執行順序：
-    // 通用清理（LIFO）：general_cleanup_2 -> general_cleanup_1
-    // 模組終端收尾（LIFO）：terminal_shutdown_custom -> PluginShutdown
-    // 物理卸載後置：post_unload
-    assert(execution_order.size() == 4);
-    assert(execution_order[0] == "general_cleanup_2");
-    assert(execution_order[1] == "general_cleanup_1");
-    assert(execution_order[2] == "terminal_shutdown_custom");
-    assert(execution_order[3] == "post_unload");
+    // 💡 關鍵驗證 1：善後函式成功被執行
+    assert(shutdown_invoked == true);
 
-    std::cout << "  ✅ 模組同步收尾最後執行保證驗證通過！" << std::endl;
+    // 💡 關鍵驗證 2：因為外掛拒絕卸載，post_unload_hook 絕對不可被觸發！
+    assert(post_unload_invoked == false);
 
-    // 14.2 驗證非同步善後模組收尾最後執行保證
-    auto lib2 = ork::DynamicLibrary::load(plugin_path);
-    assert(lib2.is_loaded());
+    // 💡 關鍵驗證 3：動態庫代碼段依然常駐在記憶體中，再次呼叫 load() 直接重用常駐模組！
+    std::cout << "  -> 外掛已安全轉為常駐，嘗試再次 load() 同一路徑..." << std::endl;
+    auto reloaded_lib = ork::DynamicLibrary::load(plugin_path);
+    assert(reloaded_lib.is_loaded());
+    assert(reloaded_lib.is_first_loaded() == false); // 精準識別為重用既有模組
 
-    std::vector<std::string> async_order;
-    std::atomic<bool> async_done{false};
+    // 驗證常駐模組之導出函式依然能 100% 正常執行
+    auto add_fn = reloaded_lib.get_symbol<AddNumbersFn>("AddNumbers");
+    assert(add_fn != nullptr);
+    assert(add_fn(100, 200) == 300);
 
-    // 先註冊終端非同步收尾
-    lib2.add_async_shutdown_hook([&](ork::DynamicLibrary::ReadyToUnloadCallback on_ready) {
-      async_order.push_back("terminal_async_shutdown");
-      std::thread([on_ready = std::move(on_ready), &async_done]() mutable {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        async_done.store(true);
-        on_ready();
-      }).detach();
-    });
+    // 再次正常釋放（此時同意卸載）
+    reloaded_lib.set_shutdown_hook([]() -> bool { return true; });
+    reloaded_lib.reset();
 
-    // 後註冊通用同步清理
-    lib2.add_cleanup_hook([&]() {
-      async_order.push_back("general_sync_cleanup");
-    });
-
-    lib2.reset();
-
-    int wait_cycles = 0;
-    while (!async_done.load() && wait_cycles < 100)
-    {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      wait_cycles++;
-    }
-
-    assert(async_done.load() == true);
-    assert(async_order.size() == 2);
-    assert(async_order[0] == "general_sync_cleanup");
-    assert(async_order[1] == "terminal_async_shutdown");
-    std::cout << "  ✅ 模組非同步收尾最後執行保證驗證通過！" << std::endl;
+    std::cout << "  ✅ 外掛拒絕結束轉常駐與路徑長存重用驗證 100% 通過！" << std::endl;
   }
 
   std::cout << "============================================================" << std::endl;
