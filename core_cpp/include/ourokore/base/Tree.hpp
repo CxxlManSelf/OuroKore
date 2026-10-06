@@ -226,17 +226,6 @@ public:
     m_name = name;
   }
 
-  // --- 形態判定 (資料驅動：m_elements.size() vs m_nameMap.size()) ---
-  [[nodiscard]] bool IsArray() const noexcept
-  {
-    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
-    return m_elements.size() > m_nameMap.size();
-  }
-
-  [[nodiscard]] bool IsObject() const noexcept
-  {
-    return !IsArray();
-  }
 
   // 取得父節點與自身
   [[nodiscard]] NodePtr GetParent()

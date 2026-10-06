@@ -1,52 +1,55 @@
 # 07. 樹狀結構容器與文字 DSL 指南 (Tree & TreeIO)
 
-本章節介紹 OuroKore 基礎工具庫（`ourokore_base`）中的現代高效能階層容器 `TreeNode<T>` 與文字 DSL 串流工具 `TreeIO`。
+本章節介紹 OuroKore 基礎工具庫（`ourokore_base`）中的現代高效能階層容器 `TreeNode<T>`（`TreeNodeBase<Derived>`）與文字 DSL 串流工具 `TreeIO`。
 
 ---
 
 ## 🧭 1. 設計哲學與心智模型
 
-1. **單一容器雙模態統合（Unified Dual-Mode）**：
-   - 傳統 JSON / XML 解析庫常將「物件（Object/Map）」與「陣列（Array/List）」切分為兩種不相容的容器型別。
-   - OuroKore 徹底終結兩者分裂：所有子節點底層均由連續記憶體 `std::vector` 儲存（享有連續記憶體快取極速讀取與保序特性），具名字節點由 `std::unordered_map` 提供 $O(1)$ 名稱雜湊尋址。
-   - **下標與名稱存取 100% 互通**：`node[0]` 與 `node[u8"HP"]` 存取到的為同一個實體，隨機下標與鍵名存取均為 $O(1)$！
+### 1.1 純粹樹狀結構模型（Pure Tree Model）與物件本體論
+* **節點自身即為物件本體（The Node IS The Object）**：
+  在 CRTP 架構下，衍生類別 `D` 自身就是具備實體記憶體佈局與業務屬性的 C++ 物件。`TreeNodeBase<D>` 是作為**「樹狀拓撲能力注入基底（Tree Topology Mixin）」**，為領域物件賦予父子層級、具名索引、整樹讀寫鎖與防爆棧析構能力。因此在概念上，**物件始終存在且為核心主體**，不存在「物件可有可無」的皮囊容器幻象。
+* **徹底終結「陣列 vs 非陣列」假性劃分**：
+  不論是屬性目錄還是元素清單，在樹的本質上**全都統一為子節點（Children）**。
+  - 底層統一由連續向量（`std::vector`）保序管理，享有快取極速連續讀取。
+  - 具名字節點由雜湊表提供 $O(1)$ 名稱尋址。
+  - 下標存取（`node[0]`）與鍵名存取（`node[u8"HP"]`）100% 互通。
+  - **人體工學便利別名保留**：`CreateArray()`、`PushElement()`、`ElementCount()` 依舊完好保留，供使用者依習慣自由選用。
 
-2. **形態由資料自動推導（Data-Driven Morphism）**：
-   - 容器不需要顯式設定或轉換形態，由子節點結構純度自動判定：
-     * **全具名字節點**：自動推導為物件形態（DSL 輸出使用大括號 `{}`）。
-     * **混入任何無名字節點**：自動推導為陣列形態（DSL 輸出使用小括號 `()`）。
+### 1.2 節點三維度正交模型
+每個樹節點均具備 3 個獨立維度（可任意組合）：
+1. **名稱（Name）**：具名節點（`[Name]`）或 匿名節點。
+2. **資料（Data / Value）**：帶有本體字串資料（`"Data"`）或 無資料。
+3. **子節點（Children）**：擁有子節點區塊（`{ ... }`）或 葉節點。
 
-3. **極致執行緒安全**：
-   - 樹狀結構拓撲鎖（`m_mutex`）與資料 Payload 鎖（`m_dataMutex`）獨立讀寫分離，高頻資料更新絕不阻礙樹結構遍歷。
-
-4. **百萬層深樹顯式堆疊迭代防爆棧析構（Iterative Stack-Overflow Defense）**：
-   - 內建顯式堆疊展平析構機制，巨型深樹解構時將遞迴展開為堆積迴圈以 $O(1)$ 呼叫深度安全釋放，杜絕遞迴爆棧，並提供向後相容之 `AsyncNodeDeletor`。
-
-5. **百萬層深樹顯式堆疊非遞迴反序列化（Non-recursive FSM Deserialization）**：
-   - 反序列化完全由 Heap 上的顯式堆疊 `std::vector<ParseFrame>` 驅動，Call Stack 呼叫深度恆為 $O(1)$，徹底杜絕深層巢狀文字 DSL 引發呼叫堆疊溢位（Stack Overflow）。
+### 1.3 百萬層深樹顯式堆疊迭代防爆棧析構與反序列化
+* **析構防爆棧**：內建顯式堆疊展平析構機制，巨型深樹解構時將遞迴展開為堆積迴圈以 $O(1)$ 呼叫深度安全釋放，杜絕 Stack Overflow。
+* **反序列化防爆棧**：狀態機由 Heap 上的顯式堆疊 `std::vector<ParseFrame>` 驅動，呼叫棧深度恆為 $O(1)$。
 
 ---
 
 ## 📝 2. 文字 DSL 語法與界定符
 
-OuroKore 文字 DSL 採用四個互不干擾的正交界定符：
-* `[名稱]`：節點名稱標記。
-* `"資料"`：節點資料內容（支援 0~255 二進位位元組與完整脫字元轉義 `\"`、`\\`、`\n`、`\xHH`）。
-* `{物件}`：具名子節點群集（大括號）。
-* `(陣列)`：陣列元素清單（小括號）。
+OuroKore 文字 DSL 語法規則極致精簡、自洽且無歧義：
 
-> [!IMPORTANT]
-> **正交界定符與零等號哲學**：
-> 四大界定符 `[]` `""` `{}` `()` 為唯一的語法 Token，等號 `=` 僅為可選裝飾符號。在 `CompactMode::WithoutEqual` 極致緊湊模式下完全省略 `=`（例如 `[Player]"英雄角色"`），連續空節點（如 `[FlagA][FlagB]`）、匿名空元素、物件陣列（如 `( { [id]="1" } { [id]="2" } )`）均 100% 精準對稱序列化與反序列化。單元素匿名容器（如 `("Item")` 或 `{ [Key]="Val" }`）反序列化時完整保留容器拓撲身分，絕不發生單元素脫殼降級為葉節點的 Bug。
+| 語法 Token | 角色 | 語意說明 |
+| :--- | :--- | :--- |
+| `[` ... `]` | 節點名稱標識 | 定義具名節點標記，跳脫字元支援 `\]` 與 `\\` |
+| **`=`** | **具名賦值關鍵字** | **將後續引號內容賦值予該具名節點（具名節點有值時必然使用）** |
+| `"` ... `"` | 節點資料內容 | 原始位元組直接傳遞（0~255 二進位安全），跳脫字元支援 `\\` 與 `\"` |
+| `{` ... `}` | 子節點容器區塊 | 進入 / 退出子節點層級（全面統一為大括號，Allman 風格獨立換行） |
+
+### 賦值運算子 `=` 與純標籤規則
+* **具名賦值**：`[HP] = "100"`（必須有 `=`）。
+* **純標籤（無值節點）**：`[IsAdmin]`（無等號）。
+* **匿名子節點**：直接以引號開頭 `"草藥"`。
+* **無歧義保證**：當出現 `[IsAdmin]` 後緊接 `"草藥"`，狀態機能 100% 確定 `IsAdmin` 為無值標籤完成，而 `"草藥"` 為下一個獨立的匿名子節點！
 
 ### 註解語法原生支援
-文字 DSL 反序列化狀態機原生支援三種風格的註解：
-* **`//` 單行註解**：跳過至行尾。
-* **`/* ... */` 區塊註解**：跳過至閉合符號 `*/`。
-* **`#` 腳本註解**：跳過至行尾。
-
-> [!NOTE]
-> **註解內語法界定符防禦**：即使註解內部包含引號（`"`）、括號（`[` `]` `{}` `()`）或任意文字，狀態機均會將其完整略過，絕不干擾節點解析！
+* **`//` 單行註解**：忽略至行尾。
+* **`/* ... */` 區塊註解**：忽略至閉合符號 `*/`。
+* **`#` 腳本風格單行註解**：忽略至行尾。
+* 狀態機在關鍵標記以外的地方寬容無視所有雜訊；若欲加入說明文字，強烈建議使用註解符號避免干擾。
 
 ---
 
@@ -64,16 +67,19 @@ using ork::base::CompactMode;
 auto player = Tree::CreateRoot(u8"Player");
 player->SetData("英雄角色");
 
-// 2. 建立具名屬性 (AddChild 支援具名或無名)
+// 2. 建立具名屬性
 auto hp = player->AddChild(u8"HP");
 hp->SetData("100");
 
-// 3. 建立陣列清單
-auto inventory = player->AddChild(u8"Inventory");
-inventory->AddChild()->SetData("草藥");
-inventory->AddChild()->SetData("黃金盔甲");
+// 3. 建立純標籤
+player->AddChild(u8"IsActive");
 
-// 4. 互通性驗證
+// 4. 建立子清單 (PushElement 建立匿名子節點)
+auto inventory = player->AddChild(u8"Inventory");
+inventory->PushElement()->SetData("草藥");
+inventory->PushElement()->SetData("黃金盔甲");
+
+// 5. 互通性驗證
 assert(inventory->ElementCount() == 2);
 assert((*inventory)[0]->GetData() == "草藥");     // O(1) 連續向量下標存取
 assert((*player)[0] == hp);                      // 具名節點亦可透過下標 0 存取！
@@ -82,60 +88,79 @@ assert((*player)[u8"HP"] == hp);
 
 ---
 
-## 🗜️ 4. 序列化與 3 種緊湊傳輸模式
+## 🗜️ 4. 序列化與排版模式 (Pretty vs Compact)
 
-`TreeIO` 序列化全面採用顯式堆疊走訪（非遞迴），並提供 3 種格式化輸出：
+`TreeIO` 提供兩種核心序列化模式：
 
+### 4.1 格式化排版模式 (CompactMode::Pretty - Allman 風格)
+大括號 `{` 獨立換行，縮排層次清晰，人類可讀性極高：
+```dsl
+[Player] = "英雄角色"
+{
+  [HP] = "100"
+  [IsActive]
+  [Inventory]
+  {
+    "草藥"
+    "黃金盔甲"
+  }
+}
+```
+呼叫方式：
 ```cpp
-// 模式 1：標準美化縮排模式 (CompactMode::None)
-// 輸出含標準縮排、換行與空格，適合人類閱讀與配置編輯
-TreeIO::Serialize(std::cout, player, CompactMode::None);
+// 格式化輸出至串流
+TreeIO::Serialize(std::cout, player, CompactMode::Pretty);
+```
 
-// 模式 2：保留等號緊湊模式 (CompactMode::WithEqual)
-// 輸出: [Player]="英雄角色"{[HP]="100"[Inventory]("草藥""黃金盔甲")}
-std::string compact_with_eq = TreeIO::SerializeToString(player, CompactMode::WithEqual);
-
-// 模式 3：無等號極致緊湊模式 (CompactMode::WithoutEqual)
-// 輸出: [Player]"英雄角色"{[HP]"100"[Inventory]("草藥""黃金盔甲")}
-std::string compact_no_eq = TreeIO::SerializeToString(player, CompactMode::WithoutEqual);
+### 4.2 緊湊模式 (CompactMode::Compact)
+無縮排與換行，去除所有多餘空白，但**必然保留關鍵字等號 `=`**，體積最小、傳輸效率最高：
+```dsl
+[Player]="英雄角色"{[HP]="100"[IsActive][Inventory]{"草藥""黃金盔甲"}}
+```
+呼叫方式：
+```cpp
+std::string compact_dsl = TreeIO::SerializeToString(player, CompactMode::Compact);
 ```
 
 ---
 
-## 🔄 5. 寬容型反序列化與註解過濾
+## 🔄 5. 寬容型反序列化與二進位安全
 
 寬容型有限狀態機（FSM）自動略過非預期雜訊，並完整支援串流與字串解析：
 
 ```cpp
 std::string dsl_text = R"(
-    // 伺服器遊戲存檔
-    /* 區塊註解：此處包含 [FakeNode] "FakeData" 均被安全忽略 */
-    # 這是腳本註解
-    [Player] = "英雄角色" // 行尾註解
+    // 伺服器角色存檔
+    [Player] = "英雄角色" // 主角摘要
     {
         [HP] = "100" # 生命值
-        [Inventory] = (
+        [IsAdmin]   // 純旗標標籤
+        [Inventory]
+        {
             "草藥"
             /* 暫時排除裝備："生鏽鐵劍" */
             "黃金盔甲"
-        )
+        }
     }
 )";
 
-// 支援從 std::istream (std::istringstream) 或字串視圖直接解析
-std::istringstream iss(dsl_text);
-auto restored = TreeIO::Deserialize(iss); // 或 TreeIO::DeserializeFromString(dsl_text)
+// 支援從 std::istream 或 std::string_view 直接解析
+auto restored = TreeIO::DeserializeFromString(dsl_text);
 
 assert(restored->GetName() == u8"Player");
 assert((*restored)[u8"HP"]->GetData() == "100");
+assert((*restored)[u8"IsAdmin"]->GetData().empty()); // 純標籤無資料
 assert((*(*restored)[u8"Inventory"])[0]->GetData() == "草藥");
 ```
 
+### 二進位安全保證
+字串引號 `""` 內部支援 0~255 全位元組原始數值直接傳遞（二進位安全零膨脹），序列化時僅針對 `\\` 與 `\"` 進行必要跳脫，反序列化時原生支援 `\0`、`\n`、`\r`、`\t` 等常見跳脫字元。
+
 ---
 
-## 🧬 6. CRTP 自定義衍生節點與雙模式 Handler
+## 🧬 6. CRTP 自定義衍生領域節點
 
-應用端可透過 CRTP 繼承 `TreeNodeBase<Derived>` 打造專屬強型別領域節點，反序列化時享有一體化型別自動萃取（精準回傳 `std::shared_ptr<CustomNode>`），並可搭配 In-place Node Setter 回呼：
+應用端可透過 CRTP 繼承 `TreeNodeBase<Derived>` 打造專屬領域實體物件，享有整樹拓撲與型別安全：
 
 ```cpp
 // 1. 定義自訂 CRTP 領域節點
@@ -151,7 +176,6 @@ public:
 // 2. 一鍵反序列化精準轉化為自定義衍生節點（子節點亦為 HeroNode 型別）
 auto hero = TreeIO::DeserializeFromString<HeroNode>(
     dsl_text,
-    // 支援 In-place Node Setter Handler 直接解構並賦值給領域節點欄位：
     [](const std::shared_ptr<HeroNode> &node, const std::string &raw_val) {
         node->role_title = raw_val;
     }

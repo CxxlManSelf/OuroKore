@@ -141,8 +141,7 @@
 ## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
 * **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
 * **樣板基底 `TreeNodeBase<Derived>` 方法**：
-  * `CreateRoot(name)` / `CreateArray(name)`：建立樹之根節點。
-  * `bool IsObject()` / `bool IsArray()`：內容結構純度自動推導。
+  * `CreateRoot(name)` / `CreateArray(name)`：建立樹之根節點（便民別名）。
   * `PushElement()` / `ElementCount()` / `Size()`：子元素管理（$O(1)$）。
   * `GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取（$O(1)$）。
   * `FindChildByName(name)` / `operator[](const std::u8string &name)`：名稱尋址（$O(1)$）。
@@ -157,7 +156,7 @@
 * **文字 DSL 串流 `TreeIO`**：
   * `Serialize(ostream, root, ...)` / `SerializeCompact(...)` / `SerializeToString(...)`
   * `Deserialize(istream, ...)` / `DeserializeFromString(...)`
-  * 緊湊模式列舉：`CompactMode::None` / `CompactMode::WithEqual` / `CompactMode::WithoutEqual`。
+  * 模式列舉：`CompactMode::Pretty`（Allman 風格排版）/ `CompactMode::Compact`（緊湊模式，保留關鍵字等號 `=`）。
 
 ---
 

@@ -21,9 +21,11 @@ namespace ork::base
  */
 enum class CompactMode : uint8_t
 {
-  None = 0,         ///< 沒有緊湊（保留縮排與換行，鍵值賦值使用 " = "）
-  WithEqual = 1,    ///< 保留等號之緊湊模式（無縮排與換行，鍵值賦值使用 "=\""）
-  WithoutEqual = 2  ///< 不保留等號之極致緊湊模式（無縮排與換行，鍵值賦值使用 "\""）
+  Pretty = 0,       ///< 格式化排版模式（Allman 風格：獨立換行與縮排，具名賦值使用 " = "）
+  Compact = 1,      ///< 緊湊模式（無縮排與換行，具名賦值必然保留關鍵字 "="）
+  None = 0,         ///< 向下相容別名：格式化排版
+  WithEqual = 1,    ///< 向下相容別名：緊湊模式
+  WithoutEqual = 1  ///< 向下相容別名：緊湊模式（消除歧義，全面保留關鍵字等號）
 };
 
 namespace detail
@@ -55,11 +57,11 @@ using resolve_node_type_t = typename resolve_node_type<T>::type;
  * @brief 樹狀容器文字 DSL 狀態機序列化與反序列化器
  *
  * 語法規範：
- * 1. 節點名稱：[名稱]，脫字元支援 \] 與 \\。
- * 2. 資料內容："資料"，脫字元支援 \"、\\、\n、\r、\t 與 \xHH，0~255 二進位位元組安全。
- * 3. 物件區塊：{ ... }，內含具名字節點。
- * 4. 陣列區塊：( ... )，內含陣列循序元素（元素可為字串、子物件或子陣列）。
- * 5. 寬容型狀態機：不在當前狀態內的字元或多餘符號（如等號、多餘引號、說明文字）全數安全無視。
+ * 1. 節點名稱：[名稱]，跳脫字元支援 \] 與 \\。
+ * 2. 賦值關鍵字：=，具名節點賦值時必然使用。
+ * 3. 資料內容："資料"，原始位元組直接傳遞（二進位安全），跳脫字元支援 \\ 與 \"。
+ * 4. 容器區塊：{ ... }，Allman 風格換行排版，涵蓋具名與匿名所有子節點。
+ * 5. 寬容型狀態機：不在關鍵標記內的字元、說明文字或雜訊全數安全無視；支援 //, /* *\/, # 註解。
  * 6. 非遞迴走訪：使用顯式堆疊走訪，免疫巨深階層呼叫堆疊溢位 (Stack Overflow)。
  */
 class TreeIO
@@ -104,7 +106,7 @@ public:
     out.reserve(s.size() + 16);
     for (size_t i = 0; i < s.size(); ++i)
     {
-      unsigned char c = static_cast<unsigned char>(s[i]);
+      char c = s[i];
       switch (c)
       {
         case '"':
@@ -113,27 +115,8 @@ public:
         case '\\':
           out += "\\\\";
           break;
-        case '\n':
-          out += "\\n";
-          break;
-        case '\r':
-          out += "\\r";
-          break;
-        case '\t':
-          out += "\\t";
-          break;
         default:
-          if (c < 32 || c == 127)
-          {
-            // 不可見控制字元使用 \xHH 轉義確保 0~255 安全
-            char buf[8];
-            snprintf(buf, sizeof(buf), "\\x%02X", c);
-            out += buf;
-          }
-          else
-          {
-            out.push_back(static_cast<char>(c));
-          }
+          out.push_back(c);
           break;
       }
     }
@@ -251,13 +234,12 @@ public:
     struct Frame
     {
       std::shared_ptr<const Node> node;
-      int state;  // 0: 輸出開始與內容, 1: 關閉物件/陣列區塊
+      int state;  // 0: 輸出開始與內容, 1: 關閉區塊
       int depth;
-      bool is_array_element;
     };
 
     std::vector<Frame> stk;
-    stk.push_back({root, 0, 1, false});
+    stk.push_back({root, 0, 1});
 
     while (!stk.empty())
     {
@@ -269,21 +251,10 @@ public:
         if (f.node)
         {
           std::string indent = is_compact ? "" : MakeIndent(f.depth, indent_width);
-          if (f.node->IsArray())
+          os << indent << '}';
+          if (!is_compact)
           {
-            os << indent << ')';
-            if (!is_compact)
-            {
-              os << '\n';
-            }
-          }
-          else
-          {
-            os << indent << '}';
-            if (!is_compact)
-            {
-              os << '\n';
-            }
+            os << '\n';
           }
         }
         continue;
@@ -306,11 +277,7 @@ public:
         os << indent << '[' << escaped_name << ']';
         if (!escaped_data.empty())
         {
-          if (mode == CompactMode::WithoutEqual)
-          {
-            os << "\"" << escaped_data << "\"";
-          }
-          else if (mode == CompactMode::WithEqual)
+          if (is_compact)
           {
             os << "=\"" << escaped_data << "\"";
           }
@@ -327,7 +294,7 @@ public:
       else
       {
         // 匿名節點：若為純資料葉節點（無子節點）或帶有資料，輸出字串引號 ""
-        // 若為匿名容器節點（ChildCount > 0），則無須輸出 [] 或多餘引號，直接由後續容器括號括起
+        // 若為匿名容器節點（ChildCount > 0 且無資料），則直接由後續容器括號括起，無須輸出空引號
         if (!escaped_data.empty() || f.node->ChildCount() == 0)
         {
           os << indent << "\"" << escaped_data << "\"";
@@ -338,25 +305,16 @@ public:
         }
       }
 
-      // 檢查是否具有子節點或陣列元素 (底層統一為單一容器)
-      bool is_array = f.node->IsArray();
+      // 檢查是否具有子節點
       size_t count = f.node->ChildCount();
-
       if (count > 0)
       {
-        if (is_array)
-        {
-          os << indent << '(';
-        }
-        else
-        {
-          os << indent << '{';
-        }
+        os << indent << '{';
         if (!is_compact)
         {
           os << '\n';
         }
-        stk.push_back({f.node, 1, f.depth, false});
+        stk.push_back({f.node, 1, f.depth});
 
         // 倒序壓棧確保循序輸出 (底層統一為 m_elements)
         for (size_t i = count; i > 0; --i)
@@ -364,7 +322,7 @@ public:
           auto elem = f.node->GetElementAt(i - 1);
           if (elem)
           {
-            stk.push_back({elem, 0, f.depth + 1, is_array});
+            stk.push_back({elem, 0, f.depth + 1});
           }
         }
       }
@@ -611,7 +569,7 @@ public:
       return name;
     };
 
-    // 讀取字串內容至 '"'（支援 \"、\\、\n、\xHH 等 0~255 二進位位元組）
+    // 讀取字串內容至 '"'（原始字節直接讀取，支援 \"、\\、\0、\n、\r、\t 轉義）
     auto read_string = [&]() -> std::string
     {
       std::string content;
@@ -629,6 +587,9 @@ public:
             case '\\':
               content.push_back('\\');
               break;
+            case '0':
+              content.push_back('\0');
+              break;
             case 'n':
               content.push_back('\n');
               break;
@@ -637,30 +598,6 @@ public:
               break;
             case 't':
               content.push_back('\t');
-              break;
-            case 'x':
-            case 'X':
-              // 支援 \xHH 十六進位二進位轉義
-              if (pos + 1 < len)
-              {
-                char h1 = text[pos];
-                char h2 = text[pos + 1];
-                if (std::isxdigit(static_cast<unsigned char>(h1)) && std::isxdigit(static_cast<unsigned char>(h2)))
-                {
-                  pos += 2;
-                  auto hex_val = [](char ch) -> int
-                  {
-                    if (ch >= '0' && ch <= '9') return ch - '0';
-                    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
-                    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
-                    return 0;
-                  };
-                  int val = (hex_val(h1) << 4) | hex_val(h2);
-                  content.push_back(static_cast<char>(val));
-                  break;
-                }
-              }
-              content.push_back('x');
               break;
             default:
               content.push_back(esc);
@@ -689,17 +626,17 @@ public:
       NodePtr current_parent;
       char terminator{'\0'};
       NodePtr active_child{nullptr};
+      bool has_equal{false};
       bool active_child_has_data{false};
     };
 
     std::vector<ParseFrame> parse_stack;
     parse_stack.reserve(64);
-    parse_stack.push_back({root_holder, '\0', nullptr, false});
+    parse_stack.push_back({root_holder, '\0', nullptr, false, false});
 
     while (pos < len && !parse_stack.empty())
     {
       auto &frame = parse_stack.back();
-      bool is_array_mode = (frame.terminator == ')');
 
       int ch = peek();
       if (ch == -1)
@@ -708,7 +645,7 @@ public:
       }
 
       // 遇到容器終止符（'}' 或 ')'）
-      if (frame.terminator != '\0' && ch == frame.terminator)
+      if (frame.terminator != '\0' && (ch == frame.terminator || (frame.terminator == '}' && ch == ')')))
       {
         next();                  // 消耗終止符
         parse_stack.pop_back();  // 顯式彈棧：結束當前層級，零 Call Stack 消耗
@@ -761,7 +698,7 @@ public:
         continue;
       }
 
-      // 1. 遇到節點名稱標記 '['：建立新節點（完全正交，徹底支援有等號/無等號下的連續空節點）
+      // 1. 遇到節點名稱標記 '['：建立具名新節點
       if (ch == '[')
       {
         next();  // 消耗 '['
@@ -769,54 +706,51 @@ public:
         std::u8string name_u8 = ork::utf8::to_u8string(name_s);
 
         frame.active_child = frame.current_parent->AddChild(name_u8);
+        frame.has_equal = false;
         frame.active_child_has_data = false;
         continue;
       }
 
-      // 2. 遇到引號 '"'
+      // 2. 遇到賦值運算子 '='
+      if (ch == '=')
+      {
+        next();  // 消耗 '='
+        if (frame.active_child && !frame.active_child_has_data)
+        {
+          frame.has_equal = true;
+        }
+        continue;
+      }
+
+      // 3. 遇到引號 '"'
       if (ch == '"')
       {
         next();  // 消耗 '"'
         std::string data_s = read_string();
 
-        if (is_array_mode)
+        if (frame.active_child && frame.has_equal && !frame.active_child_has_data)
         {
-          // 在陣列中遇到純引號
-          if (!frame.active_child || frame.active_child_has_data)
-          {
-            // 作為純字串陣列元素
-            NodePtr elem = frame.current_parent->PushElement();
-            if (elem)
-            {
-              apply_data(elem, data_s);
-            }
-            frame.active_child = nullptr;
-            frame.active_child_has_data = false;
-          }
-          else
-          {
-            // 賦值給剛剛建構但尚未賦值的 active_child
-            apply_data(frame.active_child, data_s);
-            frame.active_child_has_data = true;
-          }
+          // 具名節點的資料賦值！
+          apply_data(frame.active_child, data_s);
+          frame.active_child_has_data = true;
+          frame.has_equal = false;
         }
         else
         {
-          // 在物件中：若有 active_child 且尚未有資料，填入資料
-          if (frame.active_child && !frame.active_child_has_data)
+          // 獨立匿名節點！
+          NodePtr anon = frame.current_parent->AddChild(u8"");
+          if (anon)
           {
-            apply_data(frame.active_child, data_s);
-            frame.active_child_has_data = true;
+            apply_data(anon, data_s);
           }
-          else
-          {
-            // 若前面沒有節點名稱或已經有資料，視為「多餘引號」，由寬容狀態機無視！
-          }
+          frame.active_child = anon;
+          frame.active_child_has_data = true;
+          frame.has_equal = false;
         }
         continue;
       }
 
-      // 3. 遇到物件子區塊 '{' 或陣列子區塊 '('：顯式壓棧進入深層，完全非遞迴
+      // 4. 遇到容器開啟符 '{' 或 '('：顯式壓棧進入深層，完全非遞迴
       if (ch == '{' || ch == '(')
       {
         char term = (ch == '{') ? '}' : ')';
@@ -824,35 +758,33 @@ public:
         NodePtr target = frame.active_child;
         if (!target)
         {
-          if (is_array_mode)
+          if (parse_stack.size() == 1 && frame.current_parent == root_holder && !root_adopted_as_container &&
+              root_holder->ChildCount() == 0)
           {
-            // 在陣列中遭遇匿名子容器 ({ 或 ()，代表這是陣列中的匿名子物件或子陣列元素！
-            target = frame.current_parent->PushElement();
+            target = root_holder;
+            root_adopted_as_container = true;
           }
           else
           {
-            target = frame.current_parent;
-            if (frame.current_parent == root_holder)
-            {
-              root_adopted_as_container = true;
-            }
+            target = frame.current_parent->AddChild(u8"");
           }
         }
         frame.active_child = nullptr;
+        frame.has_equal = false;
         frame.active_child_has_data = false;
 
-        parse_stack.push_back({std::move(target), term, nullptr, false});
+        parse_stack.push_back({std::move(target), term, nullptr, false, false});
         continue;
       }
 
-      // 4. 任何其他符號或空白或非預期字元：由寬容狀態機安全無視！
+      // 5. 任何其他符號或空白或非預期字元：由寬容狀態機安全無視！
       next();
     }
 
     // 拆箱判定：
-    // 只有當 root_holder 未被頂層顯式括號 ({ 或 () 直接作為匿名容器使用，
+    // 只有當 root_holder 未被頂層顯式括號直接作為匿名容器使用，
     // 且頂層恰好僅解析出唯一一個獨立子節點時，方可進行安全拆箱（將其從 root_holder 解除綁定傳回）。
-    // 若頂層為匿名容器 (如 ("A") 或 { [B]="1" }) 或多節點，則完整保留容器拓撲，絕不破壞結構一致性。
+    // 若頂層為匿名容器或多節點，則完整保留容器拓撲，絕不破壞結構一致性。
     if (!root_adopted_as_container && root_holder->ChildCount() == 1)
     {
       auto first = root_holder->GetFirstChild();
