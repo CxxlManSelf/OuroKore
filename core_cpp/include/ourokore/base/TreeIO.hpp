@@ -20,11 +20,8 @@ namespace ork::base
  */
 enum class CompactMode : uint8_t
 {
-  Pretty = 0,       ///< 格式化排版模式（Allman 風格：獨立換行與縮排，具名賦值使用 " = "）
-  Compact = 1,      ///< 緊湊模式（無縮排與換行，具名賦值必然保留關鍵字 "="）
-  None = 0,         ///< 向下相容別名：格式化排版
-  WithEqual = 1,    ///< 向下相容別名：緊湊模式
-  WithoutEqual = 1  ///< 向下相容別名：緊湊模式（消除歧義，全面保留關鍵字等號）
+  Pretty = 0,  ///< 格式化排版模式（Allman 風格：獨立換行與縮排，具名賦值使用 " = "）
+  Compact = 1  ///< 緊湊模式（無縮排與換行，具名賦值必然保留關鍵字 "="）
 };
 
 namespace detail
@@ -137,7 +134,7 @@ public:
           !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
       std::ostream &os, const std::shared_ptr<Node> &root, Func &&data_to_string = nullptr, size_t indent_width = 2,
-      CompactMode mode = CompactMode::None
+      CompactMode mode = CompactMode::Pretty
   )
   {
     Serialize<Node>(
@@ -151,7 +148,7 @@ public:
           !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static void Serialize(
       std::ostream &os, const std::shared_ptr<const Node> &root, Func &&data_to_string = nullptr,
-      size_t indent_width = 2, CompactMode mode = CompactMode::None
+      size_t indent_width = 2, CompactMode mode = CompactMode::Pretty
   )
   {
     if (!root)
@@ -159,7 +156,7 @@ public:
       return;
     }
 
-    bool is_compact = (mode != CompactMode::None);
+    bool is_compact = (mode != CompactMode::Pretty);
 
     auto convert_data = [&](const std::shared_ptr<const Node> &node_ptr) -> std::string
     {
@@ -339,7 +336,7 @@ public:
   )
   {
     Serialize<Node>(
-        os, root, std::forward<Func>(data_to_string), indent_width, compact ? CompactMode::WithEqual : CompactMode::None
+        os, root, std::forward<Func>(data_to_string), indent_width, compact ? CompactMode::Compact : CompactMode::Pretty
     );
   }
 
@@ -353,7 +350,7 @@ public:
   {
     Serialize<Node>(
         os, std::const_pointer_cast<const Node>(root), std::forward<Func>(data_to_string), indent_width,
-        compact ? CompactMode::WithEqual : CompactMode::None
+        compact ? CompactMode::Compact : CompactMode::Pretty
     );
   }
 
@@ -361,7 +358,7 @@ public:
   template <typename Node = TreeNode<std::string>>
   static void Serialize(std::ostream &os, const std::shared_ptr<const Node> &root, CompactMode mode)
   {
-    Serialize<Node>(os, root, nullptr, (mode == CompactMode::None) ? 2 : 0, mode);
+    Serialize<Node>(os, root, nullptr, (mode == CompactMode::Pretty) ? 2 : 0, mode);
   }
 
   template <typename Node = TreeNode<std::string>>
@@ -373,7 +370,7 @@ public:
   template <typename Node = TreeNode<std::string>>
   static void Serialize(std::ostream &os, const std::shared_ptr<const Node> &root, bool compact)
   {
-    Serialize<Node>(os, root, compact ? CompactMode::WithEqual : CompactMode::None);
+    Serialize<Node>(os, root, compact ? CompactMode::Compact : CompactMode::Pretty);
   }
 
   template <typename Node = TreeNode<std::string>>
@@ -384,7 +381,7 @@ public:
 
   template <typename Node = TreeNode<std::string>, typename Func = std::nullptr_t>
   static void SerializeCompact(
-      std::ostream &os, const std::shared_ptr<Node> &root, CompactMode mode = CompactMode::WithEqual,
+      std::ostream &os, const std::shared_ptr<Node> &root, CompactMode mode = CompactMode::Compact,
       Func &&data_to_string = nullptr
   )
   {
@@ -393,7 +390,7 @@ public:
 
   template <typename Node = TreeNode<std::string>, typename Func = std::nullptr_t>
   static void SerializeCompact(
-      std::ostream &os, const std::shared_ptr<const Node> &root, CompactMode mode = CompactMode::WithEqual,
+      std::ostream &os, const std::shared_ptr<const Node> &root, CompactMode mode = CompactMode::Compact,
       Func &&data_to_string = nullptr
   )
   {
@@ -407,7 +404,7 @@ public:
           !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static std::string SerializeToString(
       const std::shared_ptr<const Node> &root, Func &&data_to_string = nullptr, size_t indent_width = 2,
-      CompactMode mode = CompactMode::None
+      CompactMode mode = CompactMode::Pretty
   )
   {
     std::ostringstream oss;
@@ -421,7 +418,7 @@ public:
           !std::is_same_v<std::decay_t<Func>, bool> && !std::is_same_v<std::decay_t<Func>, CompactMode>>>
   static std::string SerializeToString(
       const std::shared_ptr<Node> &root, Func &&data_to_string = nullptr, size_t indent_width = 2,
-      CompactMode mode = CompactMode::None
+      CompactMode mode = CompactMode::Pretty
   )
   {
     return SerializeToString<Node>(
@@ -432,7 +429,7 @@ public:
   template <typename Node = TreeNode<std::string>>
   static std::string SerializeToString(const std::shared_ptr<const Node> &root, CompactMode mode)
   {
-    return SerializeToString<Node>(root, nullptr, (mode == CompactMode::None) ? 2 : 0, mode);
+    return SerializeToString<Node>(root, nullptr, (mode == CompactMode::Pretty) ? 2 : 0, mode);
   }
 
   template <typename Node = TreeNode<std::string>>
@@ -444,7 +441,7 @@ public:
   template <typename Node = TreeNode<std::string>>
   static std::string SerializeToString(const std::shared_ptr<const Node> &root, bool compact)
   {
-    return SerializeToString<Node>(root, compact ? CompactMode::WithEqual : CompactMode::None);
+    return SerializeToString<Node>(root, compact ? CompactMode::Compact : CompactMode::Pretty);
   }
 
   template <typename Node = TreeNode<std::string>>

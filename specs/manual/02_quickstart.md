@@ -133,7 +133,7 @@ channels->PushElement()->SetData("General");
 channels->PushElement()->SetData("Trade");
 
 // 3. 輸出文字 DSL（支援標準排版與緊湊輸出）
-std::string dsl = TreeIO::SerializeToString(config, CompactMode::WithEqual);
+std::string dsl = TreeIO::SerializeToString(config, CompactMode::Compact);
 std::cout << "匯出 DSL: " << dsl << std::endl;
 // 輸出: [GameConfig]="1.0.0"{[Server]{[IP]="127.0.0.1"[Port]="8080"}[Channels]{"General""Trade"}}
 

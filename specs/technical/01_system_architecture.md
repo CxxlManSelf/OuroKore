@@ -259,23 +259,3 @@ End Procedure
 
 ### 6.4 離棧延遲卸載防自毀保護 (Deferred Unload Defense)
 若模組內部的某個回呼自身釋放了該模組的最後一個引用計數，核心強制將 `FreeLibrary` 操作延遲至非同步背景離棧執行緒執行，防止模組在呼叫棧仍在該動態庫內部時物理卸載自身的代碼段導致致命崩潰。
-
----
-
-## 🌲 7. 基礎工具層：樹狀物件節點與異質階層架構 (Heterogeneous Object Nodes & Tree Topology RFC)
-
-OuroKore 基礎工具庫（`ourokore_base`）提供無相依之現代高效能樹狀物件節點設施（`TreeNodeBase<D>`、`TreeNode<T>`）與文字 DSL 串流器（`TreeIO`）：
-
-### 7.1 物件節點本體論與異質多型階層
-* **節點即為物件本體（The Node IS The Object）── 徹底廢除「容器」概念**：
-  樹狀結構並非被動裝載資料的皮囊容器（Container），而是實體的**物件節點（Object Node）**。透過 CRTP 樣板基底 `TreeNodeBase<D>`，領域實體自身即為具備完整 C++ 記憶體佈局與業務邏輯的領域節點，基底僅負責注入階層拓撲、名稱索引與並發鎖機制。
-* **原生異質物件節點階層（Heterogeneous Object Nodes）**：
-  定義共通多型基底節點類別（例如 `class BaseNode : public TreeNodeBase<BaseNode>`）後，任何衍生領域節點（如 `MonsterNode`、`ItemNode` 等）均可在同一個父節點序列中並存管理。
-* **C++20 Concept 強型別零手動轉型直出**：
-  `AddChild<SubT>`、`PushElement<SubT>`、`InsertBefore<SubT>` 等介面受 `std::derived_from<SubT, D>` 編譯期約束，直接回傳強型別 `std::shared_ptr<SubT>`，呼叫端享有零手動轉型（Zero-Casting）極致便利。
-
-### 7.2 衍生類別職責邊界與嚴格私有封裝 (Strict Encapsulation Invariant)
-* **衍生類別專注領域資料處理**：衍生類別僅負責業務欄位與行為方法，**絕不直接碰觸底層內部拓撲**。
-* **拓撲成員全面私有化 (`private`)**：底層所有成員變數（`m_elements`、`m_nameMap`、`m_parent`、`m_self`、`m_treeMutex` 等）全面收斂為 `private`，節點操作一律透過公開 API，杜絕繞過鎖修改拓撲的並發競態。
-* **受保護基底建構子 (`protected`)**：`explicit TreeNodeBase(name)` 宣告為 `protected`，僅供衍生類別構造自身時調用，外部禁止實例化裸基底。
-

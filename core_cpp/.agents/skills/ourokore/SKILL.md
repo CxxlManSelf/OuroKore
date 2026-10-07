@@ -317,10 +317,9 @@ assert((*inventory)[0]->GetData() == "草藥");
 assert((*player)[0] == hp);              // 下標 0 與名稱 "HP" 存取為同一節點！
 assert((*player)[u8"HP"] == hp);
 
-// 5. 輸出為文字 DSL（支援 3 種緊湊模式，非遞迴顯式堆疊走訪防爆棧）
-TreeIO::Serialize(std::cout, player, CompactMode::None);         // 標準美化縮排
-std::string compact_eq = TreeIO::SerializeToString(player, CompactMode::WithEqual);    // 保留等號緊湊 [Player]="英雄"{...}
-std::string compact_min = TreeIO::SerializeToString(player, CompactMode::WithoutEqual); // 不保留等號極致緊湊 [Player]"英雄"{...}
+// 5. 輸出為文字 DSL（支援格式化排版與緊湊輸出，非遞迴顯式堆疊走訪防爆棧）
+TreeIO::Serialize(std::cout, player, CompactMode::Pretty);         // 標準 Allman 排版美化縮排
+std::string compact_dsl = TreeIO::SerializeToString(player, CompactMode::Compact); // 緊湊輸出 [Player]="英雄"{...}
 
 // 6. 寬容型狀態機反序列化（自動過濾並忽略雜訊）
 auto restored = TreeIO::DeserializeFromString(dsl_text);
@@ -412,7 +411,7 @@ ork::base::Event event(ork::base::EventResetMode::AutoReset, false);
    - 形態由長度數學關係自動推導：全具名為 Object（`{}`），混入匿名為 Array（`()` 或 `{}`）。
    - **C++20 `std::derived_from` 強型別零手動轉型直出**：支援多型衍生階層，`AddChild<SubT>`、`PushElement<SubT>` 直接回傳 `std::shared_ptr<SubT>`，呼叫端無需任何 dynamic_cast 即可直接操作異質物件成員。
    - **整樹共享讀寫鎖與走訪死鎖防禦鐵律**：整棵樹（Root 與所有子孫節點）共享同一個 `std::shared_mutex`，節點脫離時自立分配新鎖。**呼叫端在持讀鎖走訪期間「只能進行純資料使用，絕對禁止操作節點拓撲（Add/Remove/Clear/Detach）」**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）；動態刪除需求必須採用「先收集指針、釋放讀鎖後再批次修改」的兩階段安全範式。
-   - 文字 DSL 支援 3 種緊湊模式（None、WithEqual、WithoutEqual），原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
+   - 文字 DSL 支援格式化排版與緊湊模式（CompactMode::Pretty、CompactMode::Compact），原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
    - **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化支援外部工廠反轉模式 `factory(name, data) -> NodePtr`，工廠造不出物件或同層同名衝突時以 Fail-Fast 機制終止並回傳 `nullptr`。
    - **延伸類別職責邊界與嚴格私有封裝 (Strict Encapsulation Invariant)**：延伸類別職責專注於領域資料處理與業務行為，**絕不直接碰觸底層內部拓撲**；所有底層狀態（`m_elements`、`m_nameMap`、`m_parent`、`m_treeMutex` 等）全面收斂至 `private`，節點操作一律透過公開 API；`TreeNodeBase` 建構子宣告為 `protected`，僅供衍生類別調用初始化。
 

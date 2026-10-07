@@ -153,9 +153,11 @@ private:
 
 ---
 
-## 🌳 5. 樹狀結構階層容器與多型衍生節點 (Tree & TreeIO)
+## 🌳 5. 樹狀物件節點與異質多型衍生階層 (Tree & TreeIO)
 
-在 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>` 中，提供了高效能階層容器 `TreeNode<T>` 與文字 DSL 工具：
+> 💡 **核心心智模型**：樹並非被動裝載資料的容器，節點自身即為物件本體（The Node IS The Object），天然支援異質物件階層。
+
+在 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>` 中，提供了現代樹狀物件節點 `TreeNodeBase<D>` / `TreeNode<T>` 與文字 DSL 工具：
 
 ### 5.1 CRTP 領域節點與多型衍生階層 (C++20 std::derived_from)
 ```cpp
@@ -211,11 +213,24 @@ auto factory = [](const std::u8string &name, const std::string &data) -> std::sh
 auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, factory);
 ```
 
-### 5.3 整樹走訪黃金法則（死鎖防禦）
+### 5.3 文字 DSL 序列化與輸出模式 (CompactMode)
+支援顯式堆疊走訪輸出文字 DSL，提供兩種輸出模式：
+* `CompactMode::Pretty`：格式化排版模式（Allman 風格：獨立換行與縮排，具名賦值使用 ` = `）。
+* `CompactMode::Compact`：緊湊模式（無縮排與換行，具名賦值保留關鍵字 `=`）。
+
+```cpp
+// 1. 格式化排版輸出
+TreeIO::Serialize(std::cout, root, CompactMode::Pretty);
+
+// 2. 緊湊模式字串匯出
+std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
+```
+
+### 5.4 整樹走訪黃金法則（死鎖防禦）
 * ⚠️ **高壓線禁忌**：整棵樹共享同一個 `std::shared_mutex`（不可重入）。在持讀鎖走訪期間（`for (auto &child : *node)`），**絕對嚴禁調用 `AddChild`、`PrependChild`、`PushElement`、`RemoveChild` 等異動結構介面**，否則立即引發不可重入死鎖！
 * 異動需求請遵循「第一階段持讀鎖收集目標 -> 釋放讀鎖 -> 第二階段持寫鎖批次修改」之安全範式。
 
-### 5.4 節點清理狀態驗證 (TreeCleanupTracker)
+### 5.5 節點清理狀態驗證 (TreeCleanupTracker)
 * 欲檢查「整棵樹的所有節點是否均已全數清除釋放」，透過 `root->GetCleanupTracker()` 取得輕量弱引用共享鎖追蹤器：
 * `tracker.AreAllNodesCleanedUp()` / `tracker.IsCleanedUp()`：以 $O(1)$ 常數時間精準判定整棵樹是否已全數銷毀（鎖已 expired 即代表所有持有該鎖的節點均已析構），零遍歷開銷。
 '''

@@ -429,7 +429,7 @@ void TestCustomCRTPNode()
   std::string dsl = oss.str();
   std::cout << "  Custom CRTP Node DSL: " << dsl << std::endl;
 
-  std::string str_dsl = TreeIO::SerializeToString(hero, CompactMode::WithEqual);
+  std::string str_dsl = TreeIO::SerializeToString(hero, CompactMode::Compact);
   assert(str_dsl == dsl);
 
   // 3. 測試 DeserializeFromString<CustomEntityNode> 精準型別推導與回傳值
@@ -484,7 +484,7 @@ void TestCustomCRTPNode()
       pure_hero,
       [](const PureCustomNode &n) { return n.my_label + ":" + std::to_string(n.my_val); },
       0,
-      CompactMode::WithEqual
+      CompactMode::Compact
   );
   std::cout << "  Pure Node DSL: " << pure_dsl << std::endl;
   assert(pure_dsl == "[PureHero]=\"Warrior:100\"");
@@ -653,7 +653,7 @@ void TestConsecutiveEmptyNodes()
     assert(root->ChildCount() == 3);
 
     // 序列化
-    std::string dsl = TreeIO::SerializeToString(root, CompactMode::WithEqual);
+    std::string dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
     std::cout << "  Flags DSL: " << dsl << std::endl;
 
     // 反序列化
@@ -675,7 +675,7 @@ void TestConsecutiveEmptyNodes()
     assert(arr->ChildCount() == 3);
 
     // 序列化
-    std::string dsl = TreeIO::SerializeToString(arr, CompactMode::WithEqual);
+    std::string dsl = TreeIO::SerializeToString(arr, CompactMode::Compact);
     std::cout << "  EmptyList DSL: " << dsl << std::endl;
 
     // 反序列化
@@ -699,7 +699,7 @@ void TestConsecutiveEmptyNodes()
 
     assert(mix->ChildCount() == 5);
 
-    std::string dsl = TreeIO::SerializeToString(mix, CompactMode::WithEqual);
+    std::string dsl = TreeIO::SerializeToString(mix, CompactMode::Compact);
     auto restored = TreeIO::DeserializeFromString(dsl);
     assert(restored != nullptr);
     assert(restored->ChildCount() == 5);
