@@ -998,6 +998,99 @@ void TestPolymorphicDerivedNodeTemplate()
   std::cout << " -> 通過！" << std::endl;
 }
 
+void TestAttachChildAndFactoryDeserialization()
+{
+  std::cout << "[測試 17] AttachChild 拓撲掛載、工廠模式反序列化與資料毀損判定...";
+
+  // 1. 測試 AttachChild 的同層具名名稱重複檢查
+  auto root = TreeNode<std::string>::CreateRoot(u8"Root");
+  auto child1 = TreeNode<std::string>::MakeNode(u8"ChildA");
+  child1->SetData("Data1");
+  assert(root->AttachChild(child1) == true);
+  assert(root->FindChildByName(u8"ChildA") == child1);
+
+  // 再次掛載同名節點，應被攔截並回傳 false
+  auto child2 = TreeNode<std::string>::MakeNode(u8"ChildA");
+  child2->SetData("Data2");
+  assert(root->AttachChild(child2) == false);
+
+  // 掛載 null 節點回傳 false
+  assert(root->AttachChild(nullptr) == false);
+
+  // 2. 測試 TreeIO 工廠模式反序列化（不預先造 node，送 string 與 name 給工廠）
+  std::string dsl = R"(
+    [Player] = "Hero" {
+      [HP] = "100"
+      [Weapon] = "Sword"
+    }
+  )";
+
+  auto custom_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<TreeNode<std::string>>
+  {
+    auto node = TreeNode<std::string>::MakeNode(name);
+    if (node)
+    {
+      node->SetData("FABRICATED_" + data);
+    }
+    return node;
+  };
+
+  auto restored = TreeIO::DeserializeFromString<TreeNode<std::string>>(dsl, custom_factory);
+  assert(restored != nullptr);
+  assert(restored->GetName() == u8"Player");
+  assert(restored->GetData() == "FABRICATED_Hero");
+  assert((*restored)[u8"HP"]->GetData() == "FABRICATED_100");
+  assert((*restored)[u8"Weapon"]->GetData() == "FABRICATED_Sword");
+
+  // 3. 測試工廠製造失敗（回傳 nullptr）視為資料毀損，整棵樹中止並回傳 nullptr
+  std::string corrupt_dsl = R"(
+    [Player] = "Hero" {
+      [HP] = "CORRUPTED_VALUE"
+      [Weapon] = "Sword"
+    }
+  )";
+
+  auto strict_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<TreeNode<std::string>>
+  {
+    if (data == "CORRUPTED_VALUE")
+    {
+      return nullptr;  // 工廠判定資料損壞，無法造出物件！
+    }
+    auto node = TreeNode<std::string>::MakeNode(name);
+    if (node)
+    {
+      node->SetData(data);
+    }
+    return node;
+  };
+
+  auto corrupt_result = TreeIO::DeserializeFromString<TreeNode<std::string>>(corrupt_dsl, strict_factory);
+  assert(corrupt_result == nullptr);  // 必須完全中止並回傳 nullptr！
+
+  // 4. 測試工廠回傳的物件發現與同層具名名稱重複，視為資料毀損中止並回傳 nullptr
+  std::string duplicate_dsl = R"(
+    [Player] = "Hero" {
+      [Item] = "Sword"
+      [Item] = "Shield"
+    }
+  )";
+
+  auto normal_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<TreeNode<std::string>>
+  {
+    auto node = TreeNode<std::string>::MakeNode(name);
+    if (node)
+    {
+      node->SetData(data);
+    }
+    return node;
+  };
+
+  auto duplicate_result = TreeIO::DeserializeFromString<TreeNode<std::string>>(duplicate_dsl, normal_factory);
+  assert(duplicate_result == nullptr);  // 同層名稱重複，掛載失敗，視為資料毀損回傳 nullptr！
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
 int main()
 {
   std::cout << "========================================" << std::endl;
@@ -1020,9 +1113,10 @@ int main()
   TestArrayOfObjectsSerialization();
   TestTagAndAnonymousChildSequence();
   TestPolymorphicDerivedNodeTemplate();
+  TestAttachChildAndFactoryDeserialization();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 16 項單元測試 100% 成功通過！   " << std::endl;
+  std::cout << "  全數 17 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

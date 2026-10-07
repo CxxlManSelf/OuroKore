@@ -148,17 +148,18 @@
   * `GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取（$O(1)$）。
   * `FindChildByName(name)` / `operator[](const std::u8string &name)`：名稱尋址（$O(1)$）。
   * `AddChild<SubT = D>(name, args...)` / `AddBackChild<SubT = D>(name, args...)`：新增具名或匿名子節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型）。
+  * `AttachChild<SubT = D>(child)` / `AttachChild(nullptr)`：安全掛載外部已構造好的子節點（若物件名稱與同層具名節點衝突或為空指針，回傳 `false`）。
   * `InsertBefore<SubT = D>(child, name, args...)` / `InsertAfter<SubT = D>(child, name, args...)`：指定位置精準插入衍生節點。
   * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除。
   * `Reversed()`：零拷貝反向走訪視圖糖衣。
   * `GetTreeMutex()`：取得樹級讀寫鎖（整棵樹共享同一個鎖）。
-  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
+  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`AttachChild`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
   * `DetachFromParent()`：斷開父節點雙向弱關聯自立為新樹。
 * **具體節點 `TreeNode<T>`（`StringTreeNode`）方法**：
   * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：資料鎖保護之存取。
 * **文字 DSL 串流 `TreeIO`**：
   * `Serialize(ostream, root, ...)` / `SerializeCompact(...)` / `SerializeToString(...)`
-  * `Deserialize(istream, ...)` / `DeserializeFromString(...)`
+  * `Deserialize(istream, ...)` / `DeserializeFromString(...)`：支援外部工廠模式 `factory(name, data) -> NodePtr`，反轉職責不預先製造 node；工廠造不出物件或同層具名同名衝突時，視為資料毀損立即中止並回傳 `nullptr`。
   * 模式列舉：`CompactMode::Pretty`（Allman 風格排版）/ `CompactMode::Compact`（緊湊模式，保留關鍵字等號 `=`）。
 
 ---

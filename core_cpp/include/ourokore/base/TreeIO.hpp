@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cctype>
 #include <cstddef>
 #include <cstdio>
 #include <iostream>
@@ -61,7 +60,7 @@ using resolve_node_type_t = typename resolve_node_type<T>::type;
  * 2. 賦值關鍵字：=，具名節點賦值時必然使用。
  * 3. 資料內容："資料"，原始位元組直接傳遞（二進位安全），跳脫字元支援 \\ 與 \"。
  * 4. 容器區塊：{ ... }，Allman 風格換行排版，涵蓋具名與匿名所有子節點。
- * 5. 寬容型狀態機：不在關鍵標記內的字元、說明文字或雜訊全數安全無視；支援 //, /* *\/, # 註解。
+ * 5. 寬容型狀態機：不在關鍵標記內的字元、說明文字或雜訊全數安全無視；支援 //、# 單行註解與區塊註解。
  * 6. 非遞迴走訪：使用顯式堆疊走訪，免疫巨深階層呼叫堆疊溢位 (Stack Overflow)。
  */
 class TreeIO
@@ -475,46 +474,90 @@ public:
     using NodeType = detail::resolve_node_type_t<NodeOrData>;
     using NodePtr = std::shared_ptr<NodeType>;
 
-    auto apply_data = [&](const NodePtr &node, const std::string &raw_str)
+    auto create_node = [&](const std::u8string &name, const std::string &raw_str, bool has_data_str) -> NodePtr
     {
-      if (!node)
-      {
-        return;
-      }
-
       if constexpr (!std::is_same_v<std::decay_t<Func>, std::nullptr_t>)
       {
-        if constexpr (std::is_invocable_v<Func, const NodePtr &, const std::string &>)
+        // 1. 工廠模式 A: 接收 (name, raw_str)，傳回 NodePtr
+        if constexpr (requires { { data_handler(name, raw_str) } -> std::convertible_to<NodePtr>; })
         {
-          data_handler(node, raw_str);
+          return data_handler(name, raw_str);
         }
-        else if constexpr (std::is_invocable_v<Func, const std::string &>)
+        // 2. 工廠模式 B: 僅接收 (raw_str)，傳回 NodePtr
+        else if constexpr (requires { { data_handler(raw_str) } -> std::convertible_to<NodePtr>; })
         {
-          auto val = data_handler(raw_str);
-          if constexpr (requires { node->SetData(val); })
+          auto node = data_handler(raw_str);
+          if (node && !name.empty() && node->GetName().empty())
           {
-            node->SetData(val);
+            node->SetName(name);
           }
+          return node;
+        }
+        // 3. 修改器模式: 接收 (const NodePtr &, const std::string &)
+        else if constexpr (requires { data_handler(std::declval<NodePtr>(), raw_str); })
+        {
+          NodePtr node = NodeType::MakeNode(name);
+          if (!node)
+          {
+            return nullptr;
+          }
+          if (has_data_str)
+          {
+            data_handler(node, raw_str);
+          }
+          return node;
+        }
+        // 4. 資料轉換模式: 接收 (const std::string &)，回傳非 NodePtr
+        else if constexpr (requires { data_handler(raw_str); })
+        {
+          NodePtr node = NodeType::MakeNode(name);
+          if (!node)
+          {
+            return nullptr;
+          }
+          if (has_data_str)
+          {
+            auto val = data_handler(raw_str);
+            if constexpr (requires { node->SetData(val); })
+            {
+              node->SetData(val);
+            }
+          }
+          return node;
+        }
+        else
+        {
+          return nullptr;
         }
       }
       else
       {
-        if constexpr (requires { node->SetData(raw_str); })
+        // 預設模式：原生 MakeNode 並注入資料
+        NodePtr node = NodeType::MakeNode(name);
+        if (!node)
         {
-          node->SetData(raw_str);
+          return nullptr;
         }
-        else if constexpr (requires { node->SetData(ork::utf8::to_u8string(raw_str)); })
+        if (has_data_str)
         {
-          node->SetData(ork::utf8::to_u8string(raw_str));
-        }
-        else if constexpr (requires { typename NodeType::DataType; })
-        {
-          using DT = typename NodeType::DataType;
-          if constexpr (std::is_constructible_v<DT, const std::string &>)
+          if constexpr (requires { node->SetData(raw_str); })
           {
-            node->SetData(DT(raw_str));
+            node->SetData(raw_str);
+          }
+          else if constexpr (requires { node->SetData(ork::utf8::to_u8string(raw_str)); })
+          {
+            node->SetData(ork::utf8::to_u8string(raw_str));
+          }
+          else if constexpr (requires { typename NodeType::DataType; })
+          {
+            using DT = typename NodeType::DataType;
+            if constexpr (std::is_constructible_v<DT, const std::string &>)
+            {
+              node->SetData(DT(raw_str));
+            }
           }
         }
+        return node;
       }
     };
 
@@ -618,6 +661,10 @@ public:
 
     // 建立頂層容器節點進行全體解析 (預設名稱為空字串，防止內部標記字串外洩)
     NodePtr root_holder = NodeType::CreateRoot(u8"");
+    if (!root_holder)
+    {
+      return nullptr;
+    }
     bool root_adopted_as_container = false;
 
     // 非遞迴顯式走訪堆疊幀 (免疫巨深階層 Call Stack Overflow)
@@ -625,14 +672,15 @@ public:
     {
       NodePtr current_parent;
       char terminator{'\0'};
-      NodePtr active_child{nullptr};
+      std::u8string pending_name{};
+      bool has_pending_name{false};
       bool has_equal{false};
-      bool active_child_has_data{false};
+      NodePtr active_child{nullptr};
     };
 
     std::vector<ParseFrame> parse_stack;
     parse_stack.reserve(64);
-    parse_stack.push_back({root_holder, '\0', nullptr, false, false});
+    parse_stack.push_back({root_holder, '\0', u8"", false, false, nullptr});
 
     while (pos < len && !parse_stack.empty())
     {
@@ -647,7 +695,16 @@ public:
       // 遇到容器終止符（'}' 或 ')'）
       if (frame.terminator != '\0' && (ch == frame.terminator || (frame.terminator == '}' && ch == ')')))
       {
-        next();                  // 消耗終止符
+        next();  // 消耗終止符
+        if (frame.has_pending_name)
+        {
+          NodePtr tag = create_node(frame.pending_name, "", false);
+          if (!tag || !frame.current_parent->AttachChild(tag))
+          {
+            return nullptr;  // 資料毀損或回傳物件與同層具名名稱重複
+          }
+          frame.has_pending_name = false;
+        }
         parse_stack.pop_back();  // 顯式彈棧：結束當前層級，零 Call Stack 消耗
         continue;
       }
@@ -698,16 +755,28 @@ public:
         continue;
       }
 
-      // 1. 遇到節點名稱標記 '['：建立具名新節點
+      // 1. 遇到節點名稱標記 '['：建立具名新節點名稱緩衝
       if (ch == '[')
       {
+        // 若先前已有未完結之具名標籤（例如 [Tag1][Tag2]），先產出前一個純標籤
+        if (frame.has_pending_name)
+        {
+          NodePtr tag = create_node(frame.pending_name, "", false);
+          if (!tag || !frame.current_parent->AttachChild(tag))
+          {
+            return nullptr;
+          }
+          frame.has_pending_name = false;
+          frame.pending_name.clear();
+          frame.has_equal = false;
+        }
+
         next();  // 消耗 '['
         std::string name_s = read_name();
-        std::u8string name_u8 = ork::utf8::to_u8string(name_s);
-
-        frame.active_child = frame.current_parent->AddChild(name_u8);
+        frame.pending_name = ork::utf8::to_u8string(name_s);
+        frame.has_pending_name = true;
         frame.has_equal = false;
-        frame.active_child_has_data = false;
+        frame.active_child = nullptr;
         continue;
       }
 
@@ -715,7 +784,7 @@ public:
       if (ch == '=')
       {
         next();  // 消耗 '='
-        if (frame.active_child && !frame.active_child_has_data)
+        if (frame.has_pending_name)
         {
           frame.has_equal = true;
         }
@@ -728,23 +797,41 @@ public:
         next();  // 消耗 '"'
         std::string data_s = read_string();
 
-        if (frame.active_child && frame.has_equal && !frame.active_child_has_data)
+        if (frame.has_pending_name && frame.has_equal)
         {
           // 具名節點的資料賦值！
-          apply_data(frame.active_child, data_s);
-          frame.active_child_has_data = true;
+          NodePtr child = create_node(frame.pending_name, data_s, true);
+          if (!child || !frame.current_parent->AttachChild(child))
+          {
+            return nullptr;  // 造不出或回傳物件與同層名稱重複，視為資料毀損！
+          }
+          frame.active_child = child;
+          frame.has_pending_name = false;
+          frame.pending_name.clear();
           frame.has_equal = false;
         }
         else
         {
-          // 獨立匿名節點！
-          NodePtr anon = frame.current_parent->AddChild(u8"");
-          if (anon)
+          // 若有尚未結算的 pending_name（但無等號），先結算前置標籤
+          if (frame.has_pending_name)
           {
-            apply_data(anon, data_s);
+            NodePtr tag = create_node(frame.pending_name, "", false);
+            if (!tag || !frame.current_parent->AttachChild(tag))
+            {
+              return nullptr;
+            }
+            frame.has_pending_name = false;
+            frame.pending_name.clear();
+            frame.has_equal = false;
+          }
+
+          // 獨立匿名節點！
+          NodePtr anon = create_node(u8"", data_s, true);
+          if (!anon || !frame.current_parent->AttachChild(anon))
+          {
+            return nullptr;
           }
           frame.active_child = anon;
-          frame.active_child_has_data = true;
           frame.has_equal = false;
         }
         continue;
@@ -755,9 +842,32 @@ public:
       {
         char term = (ch == '{') ? '}' : ')';
         next();  // 消耗 '{' 或 '('
-        NodePtr target = frame.active_child;
-        if (!target)
+        NodePtr target = nullptr;
+
+        if (frame.has_pending_name)
         {
+          // 純具名容器（例如 [Inventory] { ... }）
+          NodePtr container_node = create_node(frame.pending_name, "", false);
+          if (!container_node || !frame.current_parent->AttachChild(container_node))
+          {
+            return nullptr;
+          }
+          target = container_node;
+          frame.has_pending_name = false;
+          frame.pending_name.clear();
+          frame.has_equal = false;
+          frame.active_child = nullptr;
+        }
+        else if (frame.active_child)
+        {
+          // 緊接在具名賦值節點後的子容器（例如 [Player] = "Hero" { ... }）
+          target = frame.active_child;
+          frame.active_child = nullptr;
+          frame.has_equal = false;
+        }
+        else
+        {
+          // 純匿名容器（例如 { ... }）
           if (parse_stack.size() == 1 && frame.current_parent == root_holder && !root_adopted_as_container &&
               root_holder->ChildCount() == 0)
           {
@@ -766,19 +876,33 @@ public:
           }
           else
           {
-            target = frame.current_parent->AddChild(u8"");
+            NodePtr anon_container = create_node(u8"", "", false);
+            if (!anon_container || !frame.current_parent->AttachChild(anon_container))
+            {
+              return nullptr;
+            }
+            target = anon_container;
           }
         }
-        frame.active_child = nullptr;
-        frame.has_equal = false;
-        frame.active_child_has_data = false;
 
-        parse_stack.push_back({std::move(target), term, nullptr, false, false});
+        parse_stack.push_back({std::move(target), term, u8"", false, false, nullptr});
         continue;
       }
 
       // 5. 任何其他符號或空白或非預期字元：由寬容狀態機安全無視！
       next();
+    }
+
+    // 若解析完畢時最外層有殘留的具名標籤，結算之
+    if (parse_stack.size() == 1 && parse_stack.back().has_pending_name)
+    {
+      auto &top_frame = parse_stack.back();
+      NodePtr tag = create_node(top_frame.pending_name, "", false);
+      if (!tag || !top_frame.current_parent->AttachChild(tag))
+      {
+        return nullptr;
+      }
+      top_frame.has_pending_name = false;
     }
 
     // 拆箱判定：
@@ -794,6 +918,7 @@ public:
 
     return root_holder;
   }
+
 };
 
 }  // namespace ork::base

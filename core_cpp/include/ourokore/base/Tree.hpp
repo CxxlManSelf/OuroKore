@@ -556,6 +556,46 @@ public:
     return true;
   }
 
+  /**
+   * @brief 空指針多載（直接攔截 nullptr 字面量）
+   */
+  bool AttachChild(std::nullptr_t) noexcept
+  {
+    return false;
+  }
+
+  /**
+   * @brief 掛載外部已構造好的子節點（支援 D 或其衍生型別 SubT）
+   * @param child 待掛載之子節點指標
+   * @return 若 child 為空，或回傳物件的名稱與同層既有具名節點重複，則回傳 false；成功掛載則回傳 true。
+   */
+  template <typename SubT = D>
+    requires std::derived_from<SubT, D>
+  bool AttachChild(const std::shared_ptr<SubT> &child)
+  {
+    if (!child)
+    {
+      return false;
+    }
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+
+    // 檢查回傳物件之名稱是否與同層具名名稱重複
+    if (!child->m_name.empty() && m_nameMap.find(child->m_name) != m_nameMap.end())
+    {
+      return false;
+    }
+
+    child->PropagateTreeMutex(GetTreeMutexPtr());
+    m_elements.push_back(child);
+    if (!child->m_name.empty())
+    {
+      m_nameMap[child->m_name] = child;
+    }
+    NodePtr self_ptr = m_self.lock();
+    child->SetParentAndSelf(self_ptr, child);
+    return true;
+  }
+
   // =========================================================================
   // 移除方法
   // =========================================================================

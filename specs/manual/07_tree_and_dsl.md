@@ -234,6 +234,25 @@ std::shared_ptr<ItemEntity> potion = root->PushElement<ItemEntity>(50);
 std::shared_ptr<MonsterEntity> minion = root->InsertBefore<MonsterEntity>(boss, u8"Goblin", 100, 15);
 ```
 
+### 6.3 外部工廠反序列化與 AttachChild 拓撲掛載（支援異質樹與資料毀損判定）
+為支援多型異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」：
+* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，而是將字串內容（與節點名稱）送給外部工廠：`factory(const std::u8string &name, const std::string &data) -> NodePtr` 或 `factory(const std::string &data) -> NodePtr`。
+* **安全拓撲掛載（`AttachChild`）**：由外部構造完成之物件透過 `AttachChild` 掛載至父節點。若回傳物件名稱與父節點同層既有具名節點重複，或傳入空指針，`AttachChild` 拒絕掛載並立即回傳 `false`。
+* **嚴格資料毀損中斷（Fail-Fast / All-or-Nothing）**：
+  1. 若工廠造不出物件（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+  2. 若回傳物件與同層名稱重複（`AttachChild` 回傳 `false`），同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+
+```cpp
+auto hetero_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
+    if (data == "MONSTER") return BaseEntity::MakeNode<MonsterEntity>(name, 200, 30);
+    if (data == "ITEM")    return BaseEntity::MakeNode<ItemEntity>(100);
+    return nullptr; // 無法識別之無效資料 -> 視為資料毀損，中止全體解析！
+};
+
+// 若字串合法且無同層同名衝突，回傳完整樹；若資料損壞或衝突，回傳 nullptr
+auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, hetero_factory);
+```
+
 ---
 
 ## 🔒 7. 整樹走訪安全範式與死鎖防禦指南 (Tree Traversal & Deadlock Prevention)

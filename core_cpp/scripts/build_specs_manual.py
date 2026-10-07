@@ -1040,6 +1040,25 @@ std::shared_ptr<ItemEntity> potion = root->PushElement<ItemEntity>(50);
 std::shared_ptr<MonsterEntity> minion = root->InsertBefore<MonsterEntity>(boss, u8"Goblin", 100, 15);
 ```
 
+### 6.3 外部工廠反序列化與 AttachChild 拓撲掛載（支援異質樹與資料毀損判定）
+為支援多型異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」：
+* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，而是將字串內容（與節點名稱）送給外部工廠：`factory(const std::u8string &name, const std::string &data) -> NodePtr` 或 `factory(const std::string &data) -> NodePtr`。
+* **安全拓撲掛載（`AttachChild`）**：由外部構造完成之物件透過 `AttachChild` 掛載至父節點。若回傳物件名稱與父節點同層既有具名節點重複，或傳入空指針，`AttachChild` 拒絕掛載並立即回傳 `false`。
+* **嚴格資料毀損中斷（Fail-Fast / All-or-Nothing）**：
+  1. 若工廠造不出物件（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+  2. 若回傳物件與同層名稱重複（`AttachChild` 回傳 `false`），同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+
+```cpp
+auto hetero_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
+    if (data == "MONSTER") return BaseEntity::MakeNode<MonsterEntity>(name, 200, 30);
+    if (data == "ITEM")    return BaseEntity::MakeNode<ItemEntity>(100);
+    return nullptr; // 無法識別之無效資料 -> 視為資料毀損，中止全體解析！
+};
+
+// 若字串合法且無同層同名衝突，回傳完整樹；若資料損壞或衝突，回傳 nullptr
+auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, hetero_factory);
+```
+
 ---
 
 ## 🔒 7. 整樹走訪安全範式與死鎖防禦指南 (Tree Traversal & Deadlock Prevention)
@@ -1872,17 +1891,18 @@ ork::PluginHeap::assert_clean("MyPlugin");
   * `GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取（$O(1)$）。
   * `FindChildByName(name)` / `operator[](const std::u8string &name)`：名稱尋址（$O(1)$）。
   * `AddChild<SubT = D>(name, args...)` / `AddBackChild<SubT = D>(name, args...)`：新增具名或匿名子節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型）。
+  * `AttachChild<SubT = D>(child)` / `AttachChild(nullptr)`：安全掛載外部已構造好的子節點（若物件名稱與同層具名節點衝突或為空指針，回傳 `false`）。
   * `InsertBefore<SubT = D>(child, name, args...)` / `InsertAfter<SubT = D>(child, name, args...)`：指定位置精準插入衍生節點。
   * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除。
   * `Reversed()`：零拷貝反向走訪視圖糖衣。
   * `GetTreeMutex()`：取得樹級讀寫鎖（整棵樹共享同一個鎖）。
-  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
+  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`AttachChild`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
   * `DetachFromParent()`：斷開父節點雙向弱關聯自立為新樹。
 * **具體節點 `TreeNode<T>`（`StringTreeNode`）方法**：
   * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：資料鎖保護之存取。
 * **文字 DSL 串流 `TreeIO`**：
   * `Serialize(ostream, root, ...)` / `SerializeCompact(...)` / `SerializeToString(...)`
-  * `Deserialize(istream, ...)` / `DeserializeFromString(...)`
+  * `Deserialize(istream, ...)` / `DeserializeFromString(...)`：支援外部工廠模式 `factory(name, data) -> NodePtr`，反轉職責不預先製造 node；工廠造不出物件或同層具名同名衝突時，視為資料毀損立即中止並回傳 `nullptr`。
   * 模式列舉：`CompactMode::Pretty`（Allman 風格排版）/ `CompactMode::Compact`（緊湊模式，保留關鍵字等號 `=`）。
 
 ---
