@@ -15,7 +15,7 @@
   [ 層級 2：ControlBlock 物件互斥鎖 (Object Mutex) ]
                        │
                        ▼
- [ 層級 3：樹狀結構拓撲讀寫鎖 (Tree Topology Mutex - shared_mutex) ]
+ [ 層級 3：樹狀物件節點拓撲讀寫鎖 (Tree Topology Mutex - shared_mutex) ]
                        │
                        ▼
   [ 層級 4：樹節點 Payload 資料鎖 (Tree Data Mutex) ]
@@ -35,11 +35,15 @@
 
 ---
 
-## 🔒 2. 樹狀結構不可重入鎖與防死鎖遍歷兩階段範式 (Tree Traversal & Deadlock Prevention RFC)
+## 🔒 2. 樹狀物件節點不可重入鎖與防死鎖遍歷兩階段範式 (Tree Traversal & Deadlock Prevention RFC)
 
-### 2.1 整樹共享讀寫鎖架構
-* 樹狀結構中，根節點（Root）與其所有子孫節點（Descendants）**共享同一個樹級讀寫鎖（`shared_mutex`）**。
+### 2.1 整樹共享讀寫鎖與私有封裝架構 (Shared Tree Mutex & Strict Encapsulation)
+* 樹狀物件節點中，根節點（Root）與其所有子孫節點（Descendants）**共享同一個樹級讀寫鎖（`shared_mutex`）**。
 * 此鎖為**不可重入鎖（Non-recursive Mutex）**，以取得最高之硬體級讀寫併發效能。
+* **嚴格私有封裝防線（Private Mutex & Topology Invariant）**：
+  - `TreeNodeBase` 的底層成員（`m_elements`、`m_nameMap`、`m_treeMutex` 等）對衍生類別全面私有化（`private`）。
+  - 延伸領域類別專注於資料處理，嚴格禁止直接存取內部容器或鎖實體，杜絕繞過鎖直接修改引發的並發損壞。
+  - 節點操作與整樹讀取一律透過公開方法（如 `GetTreeMutex()`）進行執行緒安全保護。
 
 ### 2.2 遍歷期間拓撲不可變鐵律
 > **高壓線禁忌**：在持共享讀鎖（Shared Read Lock）遍歷樹節點期間，**絕對禁止調用任何拓撲異動介面**（如 `AddChild()`、`RemoveChild()`、`PushElement()`、`ClearChildren()` 等）。因為拓撲修改需索取獨占寫鎖（Unique Write Lock），當前執行緒若嘗試索取將立即引發不可重入死鎖！

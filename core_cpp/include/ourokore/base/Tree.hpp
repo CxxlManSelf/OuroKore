@@ -71,7 +71,7 @@ private:
 };
 
 /**
- * @brief 基底樹狀容器 (CRTP 架構)
+ * @brief 基底樹狀物件節點 (CRTP 架構，支援異質物件階層)
  *
  * @tparam D 延伸衍生類別 (Derived Class)
  *
@@ -92,8 +92,20 @@ public:
   using ConstNodePtr = std::shared_ptr<const D>;
 
 protected:
+  /**
+   * @brief 受保護建構子：僅供衍生領域物件節點類別於構造初始化時調用
+   *
+   * 外部使用者禁止直接實例化未封裝之 TreeNodeBase，應透過衍生類別或 CreateRoot()。
+   */
+  explicit TreeNodeBase(std::u8string name = u8"") :
+      m_name(std::move(name)),
+      m_treeMutex(std::make_shared<std::shared_mutex>())
+  {
+  }
+
+private:
   std::u8string m_name;  ///< 節點名稱 (UTF-8)
-  // --- 唯一真實子節點容器通道 (連續記憶體快取友善，支援 O(1) 循序/下標隨機存取) ---
+  // --- 唯一真實子節點儲存通道 (連續記憶體快取友善，支援 O(1) 循序/下標隨機存取) ---
   std::vector<NodePtr> m_elements;
 
   // --- 具名索引字典 (O(1) 雜湊尋址) ---
@@ -141,7 +153,6 @@ protected:
     return m_treeMutex;
   }
 
-private:
   // 工廠方法：建構節點（私有內部受控調用）
   template <typename SubT = D, typename... Args>
     requires std::derived_from<SubT, D>
@@ -224,13 +235,6 @@ public:
     std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     m_parent.reset();
     PropagateTreeMutex(std::make_shared<std::shared_mutex>());
-  }
-
-public:
-  explicit TreeNodeBase(std::u8string name = u8"") :
-      m_name(std::move(name)),
-      m_treeMutex(std::make_shared<std::shared_mutex>())
-  {
   }
 
   virtual ~TreeNodeBase()
@@ -324,7 +328,7 @@ public:
   }
 
   // =========================================================================
-  // 子節點與陣列元素數量與存取通道 (統合單一容器)
+  // 子節點與陣列元素數量與存取通道 (統合單一序列)
   // =========================================================================
 
   [[nodiscard]] size_t ChildCount() const
@@ -437,7 +441,7 @@ public:
   // =========================================================================
 
   /**
-   * @brief 新增具名或匿名子節點（追加至容器尾端，O(1)）
+   * @brief 新增具名或匿名子物件節點（追加至尾端，O(1)）
    */
   template <typename SubT = D, typename... Args>
     requires std::derived_from<SubT, D>
@@ -468,7 +472,7 @@ public:
   }
 
   /**
-   * @brief 在容器最前端插入具名或匿名子節點（Prepend）
+   * @brief 在最前端插入具名或匿名子物件節點（Prepend）
    */
   template <typename SubT = D, typename... Args>
     requires std::derived_from<SubT, D>

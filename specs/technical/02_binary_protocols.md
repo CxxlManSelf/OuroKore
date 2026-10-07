@@ -130,36 +130,50 @@ End Interface
 
 ---
 
-## 🌲 5. 樹狀結構階層與文字 DSL 串流協議 (Hierarchical Tree & Text DSL Wire Format RFC)
+## 🌲 5. 樹狀物件節點與文字 DSL 串流協議 (Hierarchical Object Nodes & Text DSL Wire Format RFC)
 
-本節定義 OuroKore 階層式容器 `TreeNode` 與文字 DSL 串流 `TreeIO` 的資料交換規範。
+本節定義 OuroKore 樹狀物件節點 `TreeNode`（`TreeNodeBase<D>`）與文字 DSL 串流 `TreeIO` 的資料交換規範。
 
-### 5.1 資料純度自動推導雙模態 (Data-Driven Morphism)
+### 5.1 物件節點本體論與異質多型階層 (Object Nodes & Heterogeneous Polymorphism RFC)
+* **節點即為物件本體（The Node IS The Object）── 徹底廢除「容器」概念**：
+  樹狀結構並非被動裝載資料的容器（Container），而是實體的**物件節點（Object Node）**。在 CRTP 架構下，衍生類別 `D` 自身就是具備實體欄位與業務邏輯的 C++ 物件，`TreeNodeBase<D>` 作為樹狀拓撲能力注入基底（Tree Topology Mixin）。整棵樹是由一組具備父子拓撲關係的領域物件節點所構成的階層體系。
+* **原生異質物件節點階層（Heterogeneous Object Nodes）**：
+  由共通多型基底節點類別（例如 `class BaseEntity : public TreeNodeBase<BaseEntity>`）派生之不同具體業務物件節點（如 `MonsterEntity`、`ItemEntity`、`LightSourceEntity` 等），可在同一個父節點的子節點序列中共存管理。
+* **C++20 `std::derived_from` 強型別零手動轉型直出（Zero-Casting）**：
+  所有新增與插入介面（`CreateRoot`、`AddChild`、`PrependChild`、`PushElement`、`InsertBefore`、`InsertAfter`）均受 C++20 Concept 編譯期約束，完美轉發建構參數並直接回傳 `std::shared_ptr<SubT>`，呼叫端享有零手動轉型（Zero-Casting）便利。
+* **衍生類別職責邊界與嚴格私有封裝（Strict Encapsulation Invariant）**：
+  1. **延伸類別專注於資料處理**：延伸類別的職責為領域屬性與業務行為，**絕不直接碰觸底層內部拓撲**。
+  2. **拓撲狀態全面私有化 (`private`)**：所有底層成員變數（`m_elements`、`m_nameMap`、`m_parent`、`m_self`、`m_treeMutex` 等）與內部同步方法全面收斂為 `private`，嚴格禁止衍生類別直接碰觸，杜絕繞過讀寫鎖篡改資料引發競態。
+  3. **節點操作一律使用公開 API**：若延伸類別業務方法需要存取或操作子節點，**一律調用公開操作功能**（如 `AddChild()`、`PushElement()`、`operator[]`、`GetName()`、`GetParent()`、`GetTreeMutex()` 等），享有整樹讀寫鎖與快取索引的完備保護。
+  4. **受保護基底建構子 (`protected`)**：`explicit TreeNodeBase(name)` 宣告為 `protected`，僅供延伸類別於初始化自身時調用；外部禁止直接實例化裸 `TreeNodeBase<D>`。
+
+### 5.2 資料純度自動推導雙模態 (Data-Driven Morphism)
 樹節點本身不儲存形態列舉，形態完全由子節點結構純度於執行期自動推導：
 * **物件模式（Object Mode，DSL 界定符 `{}`）**：子節點全體均為具名節點（`child_count == named_child_count`）。
-* **陣列模式（Array Mode，DSL 界定符 `()`）**：混入任何無名（匿名）節點（`child_count > named_child_count`）。
+* **陣列模式（Array Mode，DSL 界定符 `{}` 或相容 `()`）**：混入任何無名（匿名）節點（`child_count > named_child_count`）。
 
-### 5.2 四大正交界定符與零等號哲學 (Orthogonal Delimiters)
-文字 DSL 採用四個完全正交之語法 Token，等號 `=` 僅為可選裝飾符號：
+### 5.3 四大正交界定符與語法規範 (Orthogonal Delimiters)
+文字 DSL 採用正交之語法 Token，等號 `=` 為具名賦值關鍵字：
 * `[節點名稱]`：名稱標記。
+* **`=`**：**具名賦值關鍵字**（將後續引號內容賦值予該具名節點，具名節點有值時必然使用；無值純標籤如 `[IsAdmin]` 則無等號）。
 * `"字串內容"`：Payload 資料（支援 0~255 二進位位元組與轉義字元 `\"`、`\\`、`\n`、`\xHH`）。
-* `{具名成員}`：物件區塊。
-* `(列表元素)`：陣列區塊。
+* `{子節點區塊}`：子節點階層區塊（全面統一為大括號，Allman 風格獨立換行；解析時相容舊式 `()`）。
 
 #### 三種緊湊傳輸編碼模式 (CompactMode Wire Styles)：
-1. **模式 1：標準縮排換行 (CompactMode::None)**：含標準縮排、空白與換行，供人類閱讀。
+1. **模式 1：標準排版 (CompactMode::Pretty)**：含標準縮排、空白與換行，供人類閱讀。
 2. **模式 2：含等號緊湊 (CompactMode::WithEqual)**：`[Key]="Value"{[Child]="1"}`。
-3. **模式 3：極致無等號緊湊 (CompactMode::WithoutEqual)**：`[Key]"Value"{[Child]"1"}`。
-   - 規範保證：連續具名空節點（如 `[A][B]`）、匿名空元素、物件陣列 `( { [id]"1" } )` 均 100% 精準對稱還原，單元素容器（如 `("Item")`）反序列化時拓撲身分永不降級脫殼。
+3. **模式 3：極致緊湊 (CompactMode::Compact)**：保留等號但移除所有多餘空白 `[Player]="Hero"{[HP]="100"}`。
+   - 規範保證：連續具名空節點（如 `[A][B]`）、匿名空元素、物件陣列均 100% 精準對稱還原，單元素陣列節點（如 `{"Item"}`）反序列化時拓撲身分永不降級脫殼。
 
-### 5.3 註解語法與界定符遮蔽
-狀態機原生支援三種風格註解：
-* `// 單行註解`（跳至行尾）
-* `/* 區塊註解 */`（跳至閉合符 `*/`）
-* `# 腳本註解`（跳至行尾）
-* **遮蔽保證**：註解內部包含的引號與括號均被狀態機嚴格忽略，不得觸發任何狀態轉移。
+### 5.4 外部工廠反序列化與特權掛載協定 (Factory Inversion of Control & Fail-Fast RFC)
+文字 DSL 串流還原為異質物件樹時，`TreeIO` 支援「反轉控制（Inversion of Control）」外部工廠模式：
+* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，而是將節點名稱與字串內容送給應用端註冊的工廠：`factory(const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity>`。
+* **內部特權拓撲掛載（`AttachChild`）**：由工廠構造完成的異質物件實體，由 `TreeIO` 透過內部特權（`AttachChild` 為 `private`，宣告 `friend class TreeIO;`）安全掛載至父節點。一般外部程式碼無法直接調用 `AttachChild`，確保平時所有節點一律嚴格由父節點原地延伸構造。
+* **嚴格資料毀損中斷（Fail-Fast / All-or-Nothing）**：
+  1. 若工廠無法識別資料（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+  2. 若回傳物件與同層名稱重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
 
-### 5.4 顯式堆疊非遞迴 FSM 反序列化演算法 (Non-recursive FSM Deserialization)
+### 5.5 顯式堆疊非遞迴 FSM 反序列化演算法 (Non-recursive FSM Deserialization)
 反序列化演算法以堆積（Heap）顯式堆疊 `Stack<ParseFrame>` 驅動，呼叫棧（Call Stack）深度恆為 $O(1)$，數學證明巨深文字 DSL 免疫呼叫堆疊溢位（Stack Overflow）：
 
 ```text
@@ -170,7 +184,7 @@ Structure ParseFrame:
     accumulated_data: String
 End Structure
 
-Function DeserializeFromString(dsl_text: String) -> NodeHandle:
+Function DeserializeFromString(dsl_text: String, factory: Optional<FactoryFunction>) -> NodeHandle:
     Let root = CreateRootNode()
     Let stack = DynamicStack<ParseFrame>()
     stack.Push(ParseFrame(root, STATE_SEEK_NODE))
@@ -179,7 +193,7 @@ Function DeserializeFromString(dsl_text: String) -> NodeHandle:
     While cursor < dsl_text.Length Do
         Let ch = dsl_text[cursor]
         
-        // 略過空白字元與三種註解
+        // 略過空白字元與三種註解 (//, /* */, #)
         If IsCommentOrWhitespace(ch, dsl_text, cursor) Then
             cursor = SkipCommentOrWhitespace(dsl_text, cursor)
             Continue

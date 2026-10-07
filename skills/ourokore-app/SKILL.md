@@ -142,62 +142,89 @@ private:
 
 ---
 
-## 🌳 5. 樹狀結構階層容器與多型衍生節點 (Tree & TreeIO)
+## 🌳 5. 樹狀物件節點與異質物件階層 (Tree & TreeIO)
 
-在 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>` 中，提供了高效能階層容器 `TreeNode<T>` 與文字 DSL 工具：
+> ⚠️ **核心心智模型與封裝邊界鐵律**：
+> 1. **不要再稱呼 Tree 為容器了，要把它看作是「物件節點（Object Node）」本體！**
+>    在 CRTP 架構下，衍生類別自身就是領域實體物件，`TreeNodeBase<D>` 為其注入樹狀拓撲關聯能力。而且這套系統**天然支援異質物件（Heterogeneous Objects）**，同一棵樹中可自由掛載不同衍生型別的具體物件節點！
+> 2. **衍生類別專注領域資料處理，不直接操作內部節點**：
+>    延伸類別的職責在於領域屬性與業務行為，**絕不直接碰觸底層內部拓撲**。所有底層成員變數（`m_elements`、`m_nameMap`、`m_parent`、`m_self`、`m_treeMutex` 等）全面收斂為 `private`，杜絕繞過讀寫鎖篡改資料引發競態。
+> 3. **節點操作一律使用公開介面**：
+>    若延伸類別業務方法需要走訪或操作子節點，**一律調用公開 API**（如 `AddChild()`、`PushElement()`、`operator[]`、`GetName()`、`GetParent()`、`GetTreeMutex()` 等），享有整樹讀寫鎖與索引的完備保護。
+> 4. **基底建構子宣告為 `protected`**：
+>    僅供延伸類別於初始化自身時調用；外部禁止直接實例化裸 `TreeNodeBase<D>`。
 
-### 5.1 CRTP 領域節點與多型衍生階層 (C++20 std::derived_from)
+### 5.1 CRTP 領域基底與異質物件節點階層 (C++20 std::derived_from)
 ```cpp
 #include <ourokore/base/Tree.hpp>
 
+// 1. 定義共通多型基底物件節點
 class BaseEntity : public ork::base::TreeNodeBase<BaseEntity> {
 public:
     virtual ~BaseEntity() = default;
-    virtual std::string GetType() const { return "BaseEntity"; }
+    virtual std::string GetCategory() const { return "BaseEntity"; }
 protected:
     explicit BaseEntity(std::u8string name = u8"") : TreeNodeBase(std::move(name)) {}
     template <typename D> friend class TreeNodeBase;
 };
 
+// 2. 派生具體異質物件節點
 class MonsterEntity : public BaseEntity {
 public:
     int hp{100};
     int atk{20};
     MonsterEntity(std::u8string name, int in_hp, int in_atk)
         : BaseEntity(std::move(name)), hp(in_hp), atk(in_atk) {}
-    std::string GetType() const override { return "Monster"; }
+    std::string GetCategory() const override { return "Monster"; }
 };
 
-// 1. 建立根節點
+class ItemEntity : public BaseEntity {
+public:
+    int price{0};
+    explicit ItemEntity(int in_price) : BaseEntity(u8""), price(in_price) {}
+    std::string GetCategory() const override { return "Item"; }
+};
+
+// 3. 建立根物件節點
 auto root = BaseEntity::CreateRoot(u8"Scene");
 
-// 2. 零轉型直接新增強型別衍生節點 (C++20 std::derived_from 約束，直出 std::shared_ptr<SubT>)
+// 4. 強型別零手動轉型直出（C++20 std::derived_from 約束，直出 std::shared_ptr<MonsterEntity>）
 std::shared_ptr<MonsterEntity> boss = root->AddChild<MonsterEntity>(u8"BossDragon", 5000, 350);
 boss->hp -= 100; // 直接存取衍生屬性，無需 dynamic_cast！
 
-// 3. 原地構造並推入陣列元素
-std::shared_ptr<MonsterEntity> minion = root->PushElement<MonsterEntity>(u8"Goblin", 100, 15);
+// 5. 原地構造並推入匿名異質元素節點
+std::shared_ptr<ItemEntity> potion = root->PushElement<ItemEntity>(50);
+potion->price = 45;
 
-// 4. 開頭插入衍生子節點 (PrependChild)
+// 6. 指定位置插入異質物件節點 (InsertBefore / PrependChild)
 std::shared_ptr<MonsterEntity> guard = root->PrependChild<MonsterEntity>(u8"Guard", 1200, 80);
+std::shared_ptr<MonsterEntity> minion = root->InsertBefore<MonsterEntity>(boss, u8"Goblin", 100, 15);
+
+// 7. 同樹異質物件並存與多型走訪
+assert(root->ChildCount() == 4);
+for (const auto &child : *root) {
+    if (child) {
+        std::cout << "節點類別: " << child->GetCategory() << std::endl;
+    }
+}
 ```
 
-### 5.2 外部工廠反序列化與 TreeIO 特權拓撲掛載 (Factory-First Deserialization)
+### 5.2 外部工廠反序列化與 TreeIO 特權拓撲掛載 (異質樹還原與 Fail-Fast)
 為支援異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」：反序列化時**不預先製造 node**，僅將字串內容（與節點名稱）送至外部工廠，成型後由 `TreeIO` 透過內部特權（`AttachChild`）掛載至父節點：
-* **工廠簽名**：`factory(const std::u8string &name, const std::string &data) -> NodePtr` 或 `factory(const std::string &data) -> NodePtr`。
+* **工廠簽名**：`factory(const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity>` 或 `factory(const std::string &data) -> std::shared_ptr<BaseEntity>`。
 * **資料毀損嚴格中止 (Fail-Fast)**：
   1. 若工廠造不出物件（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   2. 若回傳物件掛載時發現名稱與同層具名節點重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
 
 ```cpp
-auto factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
-    if (data == "MONSTER") return BaseEntity::CreateRoot<MonsterEntity>(name, 100, 20);
-    if (data == "ITEM")    return BaseEntity::CreateRoot<ItemEntity>(50);
+auto hetero_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
+    if (data.rfind("MONSTER:", 0) == 0) return BaseEntity::CreateRoot<MonsterEntity>(name, 100, 20);
+    if (data.rfind("ITEM:", 0) == 0)    return BaseEntity::CreateRoot<ItemEntity>(50);
     return nullptr; // 無法識別之無效型別 -> 視為資料毀損，中止全體解析！
 };
 
-// 若字串合法且無同層同名衝突，回傳完整樹；若資料損壞或衝突，回傳 nullptr
-auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, factory);
+// 若字串合法且無同層同名衝突，回傳完整異質物件樹；若資料損壞或衝突，回傳 nullptr
+auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, hetero_factory);
 ```
 
 ### 5.3 整樹走訪黃金法則（死鎖防禦）

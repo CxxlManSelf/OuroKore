@@ -288,8 +288,9 @@ OURO_REGISTER_PROXY(BossProxy, Boss)
 ```
 * **防禦不變量**：Proxy 嚴格禁止從臨時右值（Rvalue Temporary）建構，杜絕懸垂引用；底層全走 `OuroPtr::operator()`，透明復水完全無縫支援。
 
-### 2.7 現代樹狀結構容器與文字 DSL 串流 (Tree & TreeIO Utilities)
-適用於階層式遊戲資料、屬性樹、樹狀配置檔案與寬容文字 DSL 串流儲存。
+### 2.7 現代樹狀物件節點與文字 DSL 串流 (Tree & TreeIO Utilities)
+> ⚠️ **核心心智模型**：不要再稱呼 Tree 為容器，要將其看作是「物件節點（Object Node）」本體！天然支援異質物件（Heterogeneous Objects），同一棵樹中可自由掛載不同衍生型別的具體物件節點，並透過 C++20 `std::derived_from` 樣板介面（`AddChild<Derived>`、`PushElement<Derived>`）達成強型別零轉型直出。
+適用於階層式遊戲資料、異質領域實體樹、屬性樹與寬容文字 DSL 串流儲存。
 ```cpp
 #include <ourokore/base/Tree.hpp>
 #include <ourokore/base/TreeIO.hpp>
@@ -405,13 +406,15 @@ ork::base::Event event(ork::base::EventResetMode::AutoReset, false);
    - 任何專案內部的測試動態外掛（如 `test_plugin_dll`）或第三方 Component 範例，在 CMake 中必須統一使用 `add_library(<name> MODULE ...)` 並清除前綴（`PREFIX ""`），嚴禁編譯為可被靜態鏈結的 `SHARED` 導入庫，以維持執行期動態加載的純淨隔離性。
 6. **全域 TypeID 雜湊標準統一 (Fnv1a64 Invariant)**：
    - 核心所有型別唯一碼（`ork_type_id_t`）、編譯期 `ork::Subclass` 樣板基底、執行期字串型別註冊與查詢，**一律統一採用 `ork::base::Fnv1a64` 計算**。嚴禁在核心不同模組或外掛中各搞一套手寫雜湊邏輯，確保跨模組與脫水反序列化識別碼 100% 絕對一致。
-7. **基礎工具層職責與樹狀結構容器規範 (Tree & TreeIO Invariant)**：
-   - 樹狀容器（`TreeNodeBase`、`TreeNode<T>`）與串流解析器（`TreeIO`）為基礎通用設施（`ourokore_base`），零依賴核心層。
-   - 採用**單一容器雙模態統合架構**：所有子項目統一存於連續記憶體 `std::vector`，具名者由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址，下標與名稱存取 100% 互通。
-   - 形態由長度數學關係自動推導：全具名為 Object（`{}`），混入匿名為 Array（`()`）。
+7. **基礎工具層職責與樹狀物件節點規範 (Tree & TreeIO Invariant)**：
+   - 樹狀物件節點（`TreeNodeBase`、`TreeNode<T>`）與串流解析器（`TreeIO`）為基礎通用設施（`ourokore_base`），零依賴核心層。**絕不可視為純被動容器，節點自身即為物件本體，且原生支援異質物件（Heterogeneous Objects）**。
+   - 採用**單一物件節點雙模態統合架構**：所有子節點統一存於連續記憶體 `std::vector`，具名者由 `std::unordered_map` 提供 $O(1)$ 雜湊尋址，下標與名稱存取 100% 互通。
+   - 形態由長度數學關係自動推導：全具名為 Object（`{}`），混入匿名為 Array（`()` 或 `{}`）。
+   - **C++20 `std::derived_from` 強型別零手動轉型直出**：支援多型衍生階層，`AddChild<SubT>`、`PushElement<SubT>` 直接回傳 `std::shared_ptr<SubT>`，呼叫端無需任何 dynamic_cast 即可直接操作異質物件成員。
    - **整樹共享讀寫鎖與走訪死鎖防禦鐵律**：整棵樹（Root 與所有子孫節點）共享同一個 `std::shared_mutex`，節點脫離時自立分配新鎖。**呼叫端在持讀鎖走訪期間「只能進行純資料使用，絕對禁止操作節點拓撲（Add/Remove/Clear/Detach）」**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）；動態刪除需求必須採用「先收集指針、釋放讀鎖後再批次修改」的兩階段安全範式。
    - 文字 DSL 支援 3 種緊湊模式（None、WithEqual、WithoutEqual），原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
-   - **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化 handler 支援 `(string) -> Data` 值轉換與 `(shared_ptr<NodeType>, string) -> void` 就地賦值兩種模式。
+   - **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化支援外部工廠反轉模式 `factory(name, data) -> NodePtr`，工廠造不出物件或同層同名衝突時以 Fail-Fast 機制終止並回傳 `nullptr`。
+   - **延伸類別職責邊界與嚴格私有封裝 (Strict Encapsulation Invariant)**：延伸類別職責專注於領域資料處理與業務行為，**絕不直接碰觸底層內部拓撲**；所有底層狀態（`m_elements`、`m_nameMap`、`m_parent`、`m_treeMutex` 等）全面收斂至 `private`，節點操作一律透過公開 API；`TreeNodeBase` 建構子宣告為 `protected`，僅供衍生類別調用初始化。
 
 ---
 

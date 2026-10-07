@@ -122,7 +122,7 @@
    - `04_handles_and_topology.md`（句柄、拓撲與 OuroPtr 調用語意）
    - `05_dehydration_and_storage.md`（脫水與儲存）
    - `06_host_lifecycle.md`（宿主生命週期與特權管理）
-   - `07_tree_and_dsl.md`（樹狀結構容器與文字 DSL 指南）
+   - `07_tree_and_dsl.md`（樹狀物件節點與文字 DSL 指南）
    - `08_base_utilities.md`（基礎工具庫指南）
    - `09_heap_and_memory.md`（外掛 Heap 追蹤與記憶體防禦指南）
    - 🌟 **終端附錄鐵律**：公開 API 參照手冊（`*_api_reference.md`，目前為 `10_api_reference.md`）**永遠排在 manual 體系之最後一本**，作為全套手冊之終端字典查閱附錄；未來若新增章節，API 參照手冊順延並永遠維持在最末位。

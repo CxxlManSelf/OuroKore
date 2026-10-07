@@ -59,7 +59,7 @@ OuroKore 嚴格劃分三大權限層級：
 4. [04. Handle 拓撲管理系統](04_handles_and_topology.md) - OwningHandle、UnboundHandle、OwningContainerHandle、OuroPtr
 5. [05. 自動換頁脫水與儲存驅動](05_dehydration_and_storage.md) - 記憶體脫水、透明按需復水、LRU 策略配置
 6. [06. 宿主生命週期與特權管理](06_host_lifecycle.md) - HostContext 獨佔特權、插件隔離防護、優雅退出
-7. [07. 樹狀結構容器與文字 DSL 指南](07_tree_and_dsl.md) - TreeNode 雙模態容器、顯式堆疊走訪與正交無等號 DSL
+7. [07. 樹狀物件節點與文字 DSL 指南](07_tree_and_dsl.md) - TreeNode 樹狀物件節點、異質物件階層、顯式堆疊走訪與正交無等號 DSL
 8. [08. 基礎工具庫指南](08_base_utilities.md) - DynamicLibrary 生命週期反向錨定、constexpr Hash、並行同步與 UTF-8
 9. [09. 外掛 Heap 追蹤與記憶體防禦指南](09_heap_and_memory.md) - 編譯期 A/B 方案、全域重載、外掛結束前洩漏檢驗與純 C ABI
 10. [10. 公開 C++ API 參照手冊](10_api_reference.md) - 完整公開 API 清單與核心型別定義（終端速查字典附錄）

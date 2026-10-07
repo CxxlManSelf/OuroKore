@@ -107,9 +107,9 @@ std::cout << "玩家建立成功，HandleID: " << pid << std::endl;
 
 ---
 
-## 🌳 第四步：使用樹狀結構容器與文字 DSL 配置 (Tree & TreeIO)
+## 🌳 第四步：使用樹狀物件節點與文字 DSL 配置 (Tree & TreeIO)
 
-除了託管型持久化物件外，OuroKore 還提供了高效能、雙模態統合的通用樹狀容器與文字 DSL 串流工具（位於 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>`），非常適合用於遊戲設定檔、屬性樹、技能樹與文字 DSL 讀寫：
+除了託管型持久化物件外，OuroKore 還提供了高效能、支援異質物件（Heterogeneous Objects）的**樹狀物件節點（Object Node）**與文字 DSL 串流工具（位於 `<ourokore/base/Tree.hpp>` 與 `<ourokore/base/TreeIO.hpp>`）。在 OuroKore 的心智模型中，Tree 並非單純裝載資料的容器，而是**領域物件節點本體**，每個節點自身就是具有型別與屬性的物件，可靈活組織異質物件階層、遊戲設定檔、技能樹、場景拓撲與文字 DSL 讀寫：
 
 ```cpp
 #include <ourokore/base/Tree.hpp>
@@ -119,23 +119,23 @@ using ork::base::Tree; // 即 ork::base::StringTreeNode
 using ork::base::TreeIO;
 using ork::base::CompactMode;
 
-// 1. 建立根節點
+// 1. 建立根物件節點
 auto config = Tree::CreateRoot(u8"GameConfig");
 config->SetData("1.0.0");
 
-// 2. 建立具名子節點 (O(1) 雜湊尋址) 與陣列清單 (O(1) 連續記憶體隨機下標)
+// 2. 建立具名子物件節點 (O(1) 雜湊尋址) 與匿名陣列元素節點 (O(1) 連續記憶體隨機下標)
 auto server = config->AddChild(u8"Server");
 server->AddChild(u8"IP")->SetData("127.0.0.1");
 server->AddChild(u8"Port")->SetData("8080");
 
 auto channels = config->AddChild(u8"Channels");
-channels->AddChild()->SetData("General");
-channels->AddChild()->SetData("Trade");
+channels->PushElement()->SetData("General");
+channels->PushElement()->SetData("Trade");
 
-// 3. 輸出文字 DSL（支援標準美化與 3 種緊湊輸出）
+// 3. 輸出文字 DSL（支援標準排版與緊湊輸出）
 std::string dsl = TreeIO::SerializeToString(config, CompactMode::WithEqual);
 std::cout << "匯出 DSL: " << dsl << std::endl;
-// 輸出: [GameConfig]="1.0.0"{[Server]{[IP]="127.0.0.1"[Port]="8080"}[Channels]("General""Trade")}
+// 輸出: [GameConfig]="1.0.0"{[Server]{[IP]="127.0.0.1"[Port]="8080"}[Channels]{"General""Trade"}}
 
 // 4. 寬容型狀態機反序列化（原生支援 //、/* */ 與 # 註解過濾）
 std::string input_dsl = R"(

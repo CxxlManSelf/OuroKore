@@ -138,16 +138,17 @@
 
 ---
 
-## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
+## 🌳 9. 樹狀物件節點與異質物件階層：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
 * **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
 * **樣板基底 `TreeNodeBase<Derived>` 方法**：
-  * `CreateRoot<SubT = D>(name, args...)`：建立樹之根節點（唯一合法的樹入口，支援 C++20 `std::derived_from<SubT, D>` 約束與轉發建構參數，直出 `std::shared_ptr<SubT>`）。
+  * `explicit TreeNodeBase(name)`：受保護建構子（`protected`），僅供衍生類別構造自身時調用；外部禁止直接實例化未封裝之基底。
+  * `CreateRoot<SubT = D>(name, args...)`：建立樹之根物件節點（唯一合法的樹入口，支援 C++20 `std::derived_from<SubT, D>` 約束與轉發建構參數，直出強型別 `std::shared_ptr<SubT>`）。
   * `Size()` / `ChildCount()`：子節點/元素數量查詢（$O(1)$）。
   * `GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取（$O(1)$）。
   * `FindChildByName(name)` / `operator[](const std::u8string &name)`：名稱尋址（$O(1)$）。
-  * `AddChild<SubT = D>(name, args...)` / `PrependChild<SubT = D>(name, args...)`：在尾端追加或在最前端插入具名或匿名子節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型）。
-  * `PushElement<SubT = D>(args...)`：原地構造並推入匿名陣列元素。
-  * `InsertBefore<SubT = D>(child, name, args...)` / `InsertAfter<SubT = D>(child, name, args...)`：指定位置精準插入衍生節點。
+  * `AddChild<SubT = D>(name, args...)` / `PrependChild<SubT = D>(name, args...)`：在尾端追加或在最前端插入具名或匿名子物件節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型，支援異質物件）。
+  * `PushElement<SubT = D>(args...)`：原地構造並推入匿名異質元素節點。
+  * `InsertBefore<SubT = D>(child, name, args...)` / `InsertAfter<SubT = D>(child, name, args...)`：指定位置精準插入異質衍生節點。
   * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除（斷開關聯一律由父節點呼叫 `RemoveChild`）。
   * `DetachFromParent()`：斷開與父節點之關聯自立為新樹（自動分配並傳播新專屬樹級讀寫鎖）。
   * `GetCleanupTracker()`：取得整棵樹之清理狀態追蹤器（`TreeCleanupTracker`），以 $O(1)$ 弱引用樹級共享鎖判定所有節點是否全數清除。
