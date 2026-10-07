@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <concepts>
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <ourokore/base/utf8.hpp>
@@ -18,31 +17,57 @@
 namespace ork::base
 {
 
+class TreeIO;
+
 /**
- * @brief 迭代式防爆棧節點刪除器（向後相容介面）
+ * @brief 樹狀節點清理狀態追蹤器 (Tree Cleanup Tracker)
  *
- * 專為解決百萬層深樹在析構時引發的呼叫堆疊溢位 (Stack Overflow) 問題。
- * 樹狀結構已直接內建「迭代式展平析構（Iterative Flattening Destructor）」，
- * 在銷毀鏈路中以 O(1) 呼叫堆疊深度迭代清空，徹底杜絕 Stack Overflow。
- * 此介面保留作為向下相容之用，已無需啟動背景執行緒，100% 杜絕行程退出時的 UAF 與崩潰。
+ * 原理：整棵樹的所有節點均共享同一個 m_treeMutex (std::shared_ptr<std::shared_mutex>)。
+ * 本追蹤器僅包裝該共享鎖的弱引用 (std::weak_ptr<std::shared_mutex>)，不干涉或延長節點生命週期。
+ * 當且僅當所有節點均已解構釋放時，該共享鎖將隨之銷毀 (expired)。
+ * 藉此以 O(1) 時間與極小記憶體開銷，精準判定「整棵樹的所有節點是否均已全數清除釋放」。
  */
-class AsyncNodeDeletor
+class TreeCleanupTracker
 {
 public:
-  using Task = std::function<void()>;
-
-  static void EnqueueTask(Task task)
+  TreeCleanupTracker() = default;
+  explicit TreeCleanupTracker(std::weak_ptr<std::shared_mutex> mutex) noexcept :
+      m_mutexWeak(std::move(mutex))
   {
-    if (task)
-    {
-      task();
-    }
   }
 
-  static void Wait() noexcept
+  /// @brief 檢查整棵樹的所有節點是否均已全數清除 (鎖已銷毀即代表所有持有節點均已析構)
+  [[nodiscard]] bool AreAllNodesCleanedUp() const noexcept
   {
-    // 迭代式析構為同步安全完成，無需等待
+    return m_mutexWeak.expired();
   }
+
+  /// @brief 別名捷徑：是否已全數清理
+  [[nodiscard]] bool IsCleanedUp() const noexcept
+  {
+    return m_mutexWeak.expired();
+  }
+
+  /// @brief 檢查樹是否仍有節點存活
+  [[nodiscard]] bool IsAlive() const noexcept
+  {
+    return !m_mutexWeak.expired();
+  }
+
+  /// @brief 取得目前仍持有該鎖的參照計數 (即剩餘節點與持有者數量預估)
+  [[nodiscard]] long UseCount() const noexcept
+  {
+    return m_mutexWeak.use_count();
+  }
+
+  /// @brief 取得底層 weak_ptr 原生物件
+  [[nodiscard]] const std::weak_ptr<std::shared_mutex> &GetRawWeakPtr() const noexcept
+  {
+    return m_mutexWeak;
+  }
+
+private:
+  std::weak_ptr<std::shared_mutex> m_mutexWeak;
 };
 
 /**
@@ -60,6 +85,8 @@ public:
 template <typename D>
 class TreeNodeBase
 {
+  friend class TreeIO;
+
 public:
   using NodePtr = std::shared_ptr<D>;
   using ConstNodePtr = std::shared_ptr<const D>;
@@ -105,16 +132,6 @@ protected:
     }
   }
 
-public:
-  [[nodiscard]] std::shared_mutex &GetTreeMutex() const noexcept
-  {
-    if (!m_treeMutex)
-    {
-      m_treeMutex = std::make_shared<std::shared_mutex>();
-    }
-    return *m_treeMutex;
-  }
-
   [[nodiscard]] std::shared_ptr<std::shared_mutex> GetTreeMutexPtr() const noexcept
   {
     if (!m_treeMutex)
@@ -124,36 +141,12 @@ public:
     return m_treeMutex;
   }
 
-  /**
-   * @brief 斷開與父節點的關聯並自立為新樹（分配專屬共享鎖）
-   */
-  void DetachFromParent()
-  {
-    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
-    m_parent.reset();
-    PropagateTreeMutex(std::make_shared<std::shared_mutex>());
-  }
-
-  // 工廠方法：建構節點（支援 D 及其衍生多型型別 SubT 與完美轉發構造參數）
+private:
+  // 工廠方法：建構節點（私有內部受控調用）
   template <typename SubT = D, typename... Args>
     requires std::derived_from<SubT, D>
   static std::shared_ptr<SubT> MakeNode(const std::u8string &name = u8"", Args &&...args)
   {
-    if constexpr (requires { SubT::CanCreateChild(name); })
-    {
-      if (!SubT::CanCreateChild(name))
-      {
-        return nullptr;
-      }
-    }
-    else if constexpr (requires { D::CanCreateChild(name); })
-    {
-      if (!D::CanCreateChild(name))
-      {
-        return nullptr;
-      }
-    }
-
     if constexpr (requires { new SubT(name, std::forward<Args>(args)...); })
     {
       return std::shared_ptr<SubT>(new SubT(name, std::forward<Args>(args)...));
@@ -166,11 +159,71 @@ public:
     }
     else
     {
-      static_assert(requires { new SubT(name, std::forward<Args>(args)...); } ||
-                    requires { new SubT(std::forward<Args>(args)...); },
-                    "SubT must be constructible either as new SubT(name, args...) or new SubT(args...)");
+      static_assert(
+          requires { new SubT(name, std::forward<Args>(args)...); } ||
+              requires { new SubT(std::forward<Args>(args)...); },
+          "SubT must be constructible either as new SubT(name, args...) or new SubT(args...)"
+      );
       return nullptr;
     }
+  }
+
+  template <typename SubT = D>
+    requires std::derived_from<SubT, D>
+  bool AttachChild(const std::shared_ptr<SubT> &child)
+  {
+    if (!child)
+    {
+      return false;
+    }
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+
+    // 檢查回傳物件之名稱是否與同層具名名稱重複
+    if (!child->m_name.empty() && m_nameMap.find(child->m_name) != m_nameMap.end())
+    {
+      return false;
+    }
+
+    child->PropagateTreeMutex(GetTreeMutexPtr());
+    m_elements.push_back(child);
+    if (!child->m_name.empty())
+    {
+      m_nameMap[child->m_name] = child;
+    }
+    NodePtr self_ptr = m_self.lock();
+    child->SetParentAndSelf(self_ptr, child);
+    return true;
+  }
+
+public:
+  [[nodiscard]] std::shared_mutex &GetTreeMutex() const noexcept
+  {
+    if (!m_treeMutex)
+    {
+      m_treeMutex = std::make_shared<std::shared_mutex>();
+    }
+    return *m_treeMutex;
+  }
+
+  /**
+   * @brief 取得樹狀節點清理狀態追蹤器 (TreeCleanupTracker)
+   *
+   * 透過弱引用整棵樹共享的讀寫鎖 (m_treeMutex)，在不干涉節點生命週期的前提下，
+   * 以 O(1) 效率監控所有節點是否均已完全清除釋放。
+   */
+  [[nodiscard]] TreeCleanupTracker GetCleanupTracker() const noexcept
+  {
+    return TreeCleanupTracker(GetTreeMutexPtr());
+  }
+
+  /**
+   * @brief 斷開與父節點的關聯並自立為新樹（分配專屬共享鎖）
+   */
+  void DetachFromParent()
+  {
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+    m_parent.reset();
+    PropagateTreeMutex(std::make_shared<std::shared_mutex>());
   }
 
 public:
@@ -220,12 +273,6 @@ public:
     }
   }
 
-  // 靜態鉤子預設實現：延伸類別可覆寫以加入自訂校驗
-  static bool CanCreateChild([[maybe_unused]] const std::u8string &name)
-  {
-    return true;
-  }
-
   template <typename SubT = D, typename... Args>
     requires std::derived_from<SubT, D>
   static std::shared_ptr<SubT> CreateRoot(const std::u8string &name = u8"", Args &&...args)
@@ -236,14 +283,6 @@ public:
       root->m_self = root;
     }
     return root;
-  }
-
-  // 創建陣列根節點（便民別名）
-  template <typename SubT = D, typename... Args>
-    requires std::derived_from<SubT, D>
-  static std::shared_ptr<SubT> CreateArray(const std::u8string &name = u8"", Args &&...args)
-  {
-    return CreateRoot<SubT>(name, std::forward<Args>(args)...);
   }
 
   // --- 基本屬性 ---
@@ -258,7 +297,6 @@ public:
     std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
     m_name = name;
   }
-
 
   // 取得父節點與自身
   [[nodiscard]] NodePtr GetParent()
@@ -290,12 +328,6 @@ public:
   // =========================================================================
 
   [[nodiscard]] size_t ChildCount() const
-  {
-    std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
-    return m_elements.size();
-  }
-
-  [[nodiscard]] size_t ElementCount() const
   {
     std::shared_lock<std::shared_mutex> lock(GetTreeMutex());
     return m_elements.size();
@@ -435,12 +467,35 @@ public:
     return new_child;
   }
 
-  // 向下相容別名
+  /**
+   * @brief 在容器最前端插入具名或匿名子節點（Prepend）
+   */
   template <typename SubT = D, typename... Args>
     requires std::derived_from<SubT, D>
-  std::shared_ptr<SubT> AddBackChild(const std::u8string &name = u8"", Args &&...args)
+  std::shared_ptr<SubT> PrependChild(const std::u8string &name = u8"", Args &&...args)
   {
-    return AddChild<SubT>(name, std::forward<Args>(args)...);
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+    if (!name.empty() && m_nameMap.find(name) != m_nameMap.end())
+    {
+      return nullptr;  // 具名不可重複
+    }
+
+    std::shared_ptr<SubT> new_child = MakeNode<SubT>(name, std::forward<Args>(args)...);
+    if (!new_child)
+    {
+      return nullptr;
+    }
+
+    new_child->PropagateTreeMutex(GetTreeMutexPtr());
+    m_elements.insert(m_elements.begin(), new_child);
+    if (!name.empty())
+    {
+      m_nameMap[name] = new_child;
+    }
+
+    NodePtr self_ptr = m_self.lock();
+    new_child->SetParentAndSelf(self_ptr, new_child);
+    return new_child;
   }
 
   template <typename SubT = D, typename... Args>
@@ -525,75 +580,10 @@ public:
    * @brief 原地構造並推入匿名陣列元素（支援衍生型別與完美轉發）
    */
   template <typename SubT = D, typename... Args>
-    requires std::derived_from<SubT, D> &&
-             (!(sizeof...(Args) == 1 && (std::is_convertible_v<std::remove_cvref_t<Args>, NodePtr> && ...)))
+    requires std::derived_from<SubT, D>
   std::shared_ptr<SubT> PushElement(Args &&...args)
   {
     return AddChild<SubT>(u8"", std::forward<Args>(args)...);
-  }
-
-  /**
-   * @brief 推入既有子節點指標（支援 D 或其衍生型別 SubT）
-   */
-  template <typename SubT = D>
-    requires std::derived_from<SubT, D>
-  bool PushElement(const std::shared_ptr<SubT> &element)
-  {
-    if (!element)
-    {
-      return false;
-    }
-    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
-
-    element->PropagateTreeMutex(GetTreeMutexPtr());
-    m_elements.push_back(element);
-    if (!element->m_name.empty())
-    {
-      m_nameMap[element->m_name] = element;
-    }
-    NodePtr self_ptr = m_self.lock();
-    element->SetParentAndSelf(self_ptr, element);
-    return true;
-  }
-
-  /**
-   * @brief 空指針多載（直接攔截 nullptr 字面量）
-   */
-  bool AttachChild(std::nullptr_t) noexcept
-  {
-    return false;
-  }
-
-  /**
-   * @brief 掛載外部已構造好的子節點（支援 D 或其衍生型別 SubT）
-   * @param child 待掛載之子節點指標
-   * @return 若 child 為空，或回傳物件的名稱與同層既有具名節點重複，則回傳 false；成功掛載則回傳 true。
-   */
-  template <typename SubT = D>
-    requires std::derived_from<SubT, D>
-  bool AttachChild(const std::shared_ptr<SubT> &child)
-  {
-    if (!child)
-    {
-      return false;
-    }
-    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
-
-    // 檢查回傳物件之名稱是否與同層具名名稱重複
-    if (!child->m_name.empty() && m_nameMap.find(child->m_name) != m_nameMap.end())
-    {
-      return false;
-    }
-
-    child->PropagateTreeMutex(GetTreeMutexPtr());
-    m_elements.push_back(child);
-    if (!child->m_name.empty())
-    {
-      m_nameMap[child->m_name] = child;
-    }
-    NodePtr self_ptr = m_self.lock();
-    child->SetParentAndSelf(self_ptr, child);
-    return true;
   }
 
   // =========================================================================
@@ -689,11 +679,6 @@ public:
         child->PropagateTreeMutex(std::make_shared<std::shared_mutex>());
       }
     }
-  }
-
-  void ClearElements()
-  {
-    ClearChildren();
   }
 
   // 迭代器與反向視圖

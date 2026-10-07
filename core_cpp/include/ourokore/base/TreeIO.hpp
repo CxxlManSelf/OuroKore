@@ -912,7 +912,7 @@ public:
     if (!root_adopted_as_container && root_holder->ChildCount() == 1)
     {
       auto first = root_holder->GetFirstChild();
-      first->DetachFromParent();
+      root_holder->RemoveChild(first);
       return first;
     }
 

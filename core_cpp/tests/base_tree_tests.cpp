@@ -18,12 +18,15 @@ void TestBasicTreeOperations()
   assert(root != nullptr);
   assert(root->GetName() == u8"Root");
 
-  // 增加具名字節點 (AddChild 與 InsertBefore)
+  // 增加具名字節點 (AddChild, PrependChild 與 InsertBefore)
   auto child1 = root->AddChild(u8"Child1");
   auto child2 = root->AddChild(u8"Child2");
   auto child0 = root->InsertBefore(child1, u8"Child0");
+  auto head = root->PrependChild(u8"Head");
 
-  assert(root->ChildCount() == 3);
+  assert(root->ChildCount() == 4);
+  assert(root->GetFirstChild() == head);
+  assert(root->HasChild(u8"Head"));
   assert(root->HasChild(u8"Child0"));
   assert(root->HasChild(u8"Child1"));
   assert(root->HasChild(u8"Child2"));
@@ -38,7 +41,7 @@ void TestBasicTreeOperations()
   assert(child1->GetData() == "Hello World");
 
   // 測試首尾存取
-  assert(root->GetFirstChild() == child0);
+  assert(root->GetFirstChild() == head);
   assert(root->GetLastChild() == child2);
 
   // 測試父節點反查
@@ -46,8 +49,10 @@ void TestBasicTreeOperations()
 
   // 測試移除節點
   assert(root->RemoveChildByName(u8"Child0"));
+  assert(root->RemoveChildByName(u8"Head"));
   assert(root->ChildCount() == 2);
   assert(!root->HasChild(u8"Child0"));
+  assert(!root->HasChild(u8"Head"));
 
   std::cout << " -> 通過！" << std::endl;
 }
@@ -56,8 +61,8 @@ void TestArrayOperations()
 {
   std::cout << "[測試 4] 陣列形態與 O(1) 隨機下標存取測試..." << std::endl;
 
-  auto array_node = StringTreeNode::CreateArray(u8"Inventory");
-  assert(array_node->ElementCount() == 0);
+  auto array_node = StringTreeNode::CreateRoot(u8"Inventory");
+  assert(array_node->ChildCount() == 0);
 
   // 追加元素（由資料內容自然驅動為陣列）
   auto elem0 = array_node->PushElement();
@@ -69,7 +74,7 @@ void TestArrayOperations()
   auto elem2 = array_node->PushElement();
   elem2->SetData("雙手大劍");
 
-  assert(array_node->ElementCount() == 3);
+  assert(array_node->ChildCount() == 3);
 
   // 測試 O(1) 隨機下標存取
   assert((*array_node)[0]->GetData() == "草藥");
@@ -112,7 +117,7 @@ void TestArrayOperations()
 
   // 測試下標移除
   assert(array_node->RemoveElementAt(1));
-  assert(array_node->ElementCount() == 2);
+  assert(array_node->ChildCount() == 2);
   assert((*array_node)[0]->GetData() == "草藥");
   assert((*array_node)[1]->GetData() == "雙手大劍");
 
@@ -126,7 +131,7 @@ void TestTreeIOSerialization()
   auto player = StringTreeNode::CreateRoot(u8"Player");
   player->SetData("英雄角色");
 
-  auto hp = player->AddBackChild(u8"HP");
+  auto hp = player->AddChild(u8"HP");
   hp->SetData("100");
 
   auto inventory = player->AddChild(u8"Inventory");
@@ -154,7 +159,7 @@ void TestTreeIOSerialization()
 
   auto restored_inv = (*restored)[u8"Inventory"];
   assert(restored_inv != nullptr);
-  assert(restored_inv->ElementCount() == 2);
+  assert(restored_inv->ChildCount() == 2);
   assert((*restored_inv)[0]->GetData() == "草藥");
   assert((*restored_inv)[1]->GetData() == "黃金盔甲");
 
@@ -229,7 +234,7 @@ void TestFaultTolerantFSM()
 
   auto bl = (*root)[u8"Blacklist"];
   assert(bl != nullptr);
-  assert(bl->ElementCount() == 3);
+  assert(bl->ChildCount() == 3);
   assert((*bl)[0]->GetData() == "192.168.1.100");
   assert((*bl)[1]->GetData() == "10.0.0.5");
   assert((*bl)[2]->GetData() == "172.16.0.1");
@@ -272,7 +277,7 @@ void TestConcurrencySafety()
   for (int i = 0; i < 50; ++i)
   {
     std::string name = "Node" + std::to_string(i);
-    root->AddBackChild(ork::utf8::to_u8string(name))->SetData("Init");
+    root->AddChild(ork::utf8::to_u8string(name))->SetData("Init");
   }
 
   std::vector<std::thread> threads;
@@ -328,12 +333,11 @@ void TestDeepTreeDestruction()
     auto current = root;
     for (int i = 0; i < 20000; ++i)
     {
-      current = current->AddBackChild(u8"DeepChild");
+      current = current->AddChild(u8"DeepChild");
     }
   }
 
-  // 驗證向下相容介面呼叫
-  AsyncNodeDeletor::Wait();
+  // 展平析構為同步安全完成
 
   std::cout << " -> 通過！" << std::endl;
 }
@@ -345,10 +349,10 @@ void TestUnifiedDualMode()
   auto hero = StringTreeNode::CreateRoot(u8"Hero");
 
   // 1. 新增具名子節點
-  auto hp = hero->AddBackChild(u8"HP");
+  auto hp = hero->AddChild(u8"HP");
   hp->SetData("100");
   assert(hero->ChildCount() == 1);
-  assert(hero->ElementCount() == 1);
+  assert(hero->Size() == 1);
 
   // 2. 混入匿名元素
   auto item0 = hero->PushElement();
@@ -412,7 +416,7 @@ void TestCustomCRTPNode()
   hero->entity_tag = "勇者";
   hero->level = 99;
 
-  auto weapon = hero->AddBackChild(u8"Weapon");
+  auto weapon = hero->AddChild(u8"Weapon");
   weapon->entity_tag = "傳說之劍";
 
   auto skills = hero->AddChild(u8"Skills");
@@ -511,34 +515,29 @@ void TestTreeSharedMutex()
   std::cout << "[測試 2] 樹級讀寫鎖共享機制與跨樹獨立性測試..." << std::endl;
 
   auto root = StringTreeNode::CreateRoot(u8"TreeRoot");
-  assert(root->GetTreeMutexPtr() != nullptr);
 
-  // 1. 建立子節點，驗證鎖被繼承與共享
+  // 1. 建立子節點，驗證鎖被繼承與共享 (所有節點共享同一個 std::shared_mutex 記憶體位址)
   auto child1 = root->AddChild(u8"Child1");
   auto child2 = root->AddChild(u8"Child2");
   auto grandchild = child1->AddChild(u8"GrandChild");
 
-  assert(child1->GetTreeMutexPtr() == root->GetTreeMutexPtr());
-  assert(child2->GetTreeMutexPtr() == root->GetTreeMutexPtr());
-  assert(grandchild->GetTreeMutexPtr() == root->GetTreeMutexPtr());
+  assert(&child1->GetTreeMutex() == &root->GetTreeMutex());
+  assert(&child2->GetTreeMutex() == &root->GetTreeMutex());
+  assert(&grandchild->GetTreeMutex() == &root->GetTreeMutex());
 
-  // 2. 獨立子樹掛載測試
-  auto standalone = StringTreeNode::MakeNode(u8"Standalone");
+  // 2. 獨立樹鎖隔離測試
+  auto standalone = StringTreeNode::CreateRoot(u8"Standalone");
   auto subchild = standalone->AddChild(u8"SubChild");
-  assert(standalone->GetTreeMutexPtr() != root->GetTreeMutexPtr());
-  assert(standalone->GetTreeMutexPtr() == subchild->GetTreeMutexPtr());
-
-  root->PushElement(standalone);
-  assert(standalone->GetTreeMutexPtr() == root->GetTreeMutexPtr());
-  assert(subchild->GetTreeMutexPtr() == root->GetTreeMutexPtr());
+  assert(&standalone->GetTreeMutex() != &root->GetTreeMutex());
+  assert(&standalone->GetTreeMutex() == &subchild->GetTreeMutex());
 
   // 3. 節點移除自立新鎖測試
   assert(root->RemoveChild(child2));
-  assert(child2->GetTreeMutexPtr() != root->GetTreeMutexPtr());
+  assert(&child2->GetTreeMutex() != &root->GetTreeMutex());
 
-  // 4. Detach 自立新鎖測試
-  grandchild->DetachFromParent();
-  assert(grandchild->GetTreeMutexPtr() != root->GetTreeMutexPtr());
+  // 4. 子節點由父節點移除自立新鎖測試
+  assert(child1->RemoveChild(grandchild));
+  assert(&grandchild->GetTreeMutex() != &root->GetTreeMutex());
 
   std::cout << " -> 通過！" << std::endl;
 }
@@ -551,7 +550,7 @@ void TestUnboxingAndAnonymousContainerSafety()
   {
     auto single_arr = TreeIO::DeserializeFromString("{\"OnlyOneItem\"}");
     assert(single_arr != nullptr);
-    assert(single_arr->ElementCount() == 1);
+    assert(single_arr->ChildCount() == 1);
     assert((*single_arr)[0] != nullptr);
     assert((*single_arr)[0]->GetData() == "OnlyOneItem");
     assert(single_arr->GetName().empty());  // 匿名容器不應帶有 __ROOT__ 魔術名稱
@@ -561,7 +560,7 @@ void TestUnboxingAndAnonymousContainerSafety()
   {
     auto multi_arr = TreeIO::DeserializeFromString("{\"ItemA\" \"ItemB\"}");
     assert(multi_arr != nullptr);
-    assert(multi_arr->ElementCount() == 2);
+    assert(multi_arr->ChildCount() == 2);
     assert((*multi_arr)[0]->GetData() == "ItemA");
     assert((*multi_arr)[1]->GetData() == "ItemB");
   }
@@ -601,7 +600,7 @@ void TestUnboxingAndAnonymousContainerSafety()
     auto named_arr = TreeIO::DeserializeFromString("[Inventory]{\"Sword\"}");
     assert(named_arr != nullptr);
     assert(named_arr->GetName() == u8"Inventory");
-    assert(named_arr->ElementCount() == 1);
+    assert(named_arr->ChildCount() == 1);
     assert((*named_arr)[0]->GetData() == "Sword");
   }
 
@@ -669,11 +668,11 @@ void TestConsecutiveEmptyNodes()
 
   // 2. 連續匿名空陣列元素（純空字串元素）
   {
-    auto arr = StringTreeNode::CreateArray(u8"EmptyList");
+    auto arr = StringTreeNode::CreateRoot(u8"EmptyList");
     arr->PushElement();
     arr->PushElement();
     arr->PushElement();
-    assert(arr->ElementCount() == 3);
+    assert(arr->ChildCount() == 3);
 
     // 序列化
     std::string dsl = TreeIO::SerializeToString(arr, CompactMode::WithEqual);
@@ -683,7 +682,7 @@ void TestConsecutiveEmptyNodes()
     auto restored = TreeIO::DeserializeFromString(dsl);
     assert(restored != nullptr);
     assert(restored->GetName() == u8"EmptyList");
-    assert(restored->ElementCount() == 3);
+    assert(restored->ChildCount() == 3);
     assert((*restored)[0]->GetData().empty());
     assert((*restored)[1]->GetData().empty());
     assert((*restored)[2]->GetData().empty());
@@ -753,15 +752,13 @@ void TestArrayOfObjectsSerialization()
 {
   std::cout << "[測試 14] 陣列內包含多個匿名子物件的序列化與反序列化測試..." << std::endl;
 
-  // 1. 程式碼建構陣列包含多個匿名子物件
-  auto arr = StringTreeNode::CreateArray(u8"");
-  auto obj1 = StringTreeNode::MakeNode(u8"");
+  // 1. 程式碼建構陣列包含多個匿名子物件（由父節點原地延伸）
+  auto arr = StringTreeNode::CreateRoot(u8"");
+  auto obj1 = arr->PushElement();
   obj1->AddChild(u8"item1")->SetData("A");
-  arr->PushElement(obj1);
 
-  auto obj2 = StringTreeNode::MakeNode(u8"");
+  auto obj2 = arr->PushElement();
   obj2->AddChild(u8"item2")->SetData("B");
-  arr->PushElement(obj2);
 
   // 序列化
   std::string dsl = TreeIO::SerializeToString(arr);
@@ -770,7 +767,7 @@ void TestArrayOfObjectsSerialization()
   // 反序列化
   auto restored = TreeIO::DeserializeFromString(dsl);
   assert(restored != nullptr);
-  assert(restored->ElementCount() == 2);
+  assert(restored->ChildCount() == 2);
 
   auto r_obj1 = (*restored)[0];
   assert(r_obj1 != nullptr);
@@ -796,7 +793,7 @@ void TestArrayOfObjectsSerialization()
 
   auto user_restored = TreeIO::DeserializeFromString(user_dsl);
   assert(user_restored != nullptr);
-  assert(user_restored->ElementCount() == 2);
+  assert(user_restored->ChildCount() == 2);
 
   auto u_obj1 = (*user_restored)[0];
   assert(u_obj1 != nullptr);
@@ -989,10 +986,9 @@ void TestPolymorphicDerivedNodeTemplate()
   assert(anon_default != nullptr);
   assert(anon_default->GetName().empty());
 
-  // 8. 透過 PushElement 推入既有衍生節點指標
-  auto external_monster = BaseEntity::MakeNode<MonsterEntity>(u8"WanderingGhost", 80, 25);
-  assert(boss->PushElement(external_monster));
-  assert(boss->FindChildByName(u8"WanderingGhost") == external_monster);
+  // 8. 透過 AddChild 原地延伸構造衍生節點
+  auto monster = boss->AddChild<MonsterEntity>(u8"WanderingGhost", 80, 25);
+  assert(boss->FindChildByName(u8"WanderingGhost") == monster);
   assert(boss->FindChildByName(u8"WanderingGhost")->GetEntityType() == "Monster");
 
   std::cout << " -> 通過！" << std::endl;
@@ -1000,24 +996,9 @@ void TestPolymorphicDerivedNodeTemplate()
 
 void TestAttachChildAndFactoryDeserialization()
 {
-  std::cout << "[測試 17] AttachChild 拓撲掛載、工廠模式反序列化與資料毀損判定...";
+  std::cout << "[測試 17] TreeIO 特權掛載、工廠模式反序列化與資料毀損判定...";
 
-  // 1. 測試 AttachChild 的同層具名名稱重複檢查
-  auto root = TreeNode<std::string>::CreateRoot(u8"Root");
-  auto child1 = TreeNode<std::string>::MakeNode(u8"ChildA");
-  child1->SetData("Data1");
-  assert(root->AttachChild(child1) == true);
-  assert(root->FindChildByName(u8"ChildA") == child1);
-
-  // 再次掛載同名節點，應被攔截並回傳 false
-  auto child2 = TreeNode<std::string>::MakeNode(u8"ChildA");
-  child2->SetData("Data2");
-  assert(root->AttachChild(child2) == false);
-
-  // 掛載 null 節點回傳 false
-  assert(root->AttachChild(nullptr) == false);
-
-  // 2. 測試 TreeIO 工廠模式反序列化（不預先造 node，送 string 與 name 給工廠）
+  // 1. 測試 TreeIO 工廠模式反序列化（不預先造 node，送 string 與 name 給工廠）
   std::string dsl = R"(
     [Player] = "Hero" {
       [HP] = "100"
@@ -1027,7 +1008,7 @@ void TestAttachChildAndFactoryDeserialization()
 
   auto custom_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<TreeNode<std::string>>
   {
-    auto node = TreeNode<std::string>::MakeNode(name);
+    auto node = TreeNode<std::string>::CreateRoot(name);
     if (node)
     {
       node->SetData("FABRICATED_" + data);
@@ -1056,7 +1037,7 @@ void TestAttachChildAndFactoryDeserialization()
     {
       return nullptr;  // 工廠判定資料損壞，無法造出物件！
     }
-    auto node = TreeNode<std::string>::MakeNode(name);
+    auto node = TreeNode<std::string>::CreateRoot(name);
     if (node)
     {
       node->SetData(data);
@@ -1067,7 +1048,7 @@ void TestAttachChildAndFactoryDeserialization()
   auto corrupt_result = TreeIO::DeserializeFromString<TreeNode<std::string>>(corrupt_dsl, strict_factory);
   assert(corrupt_result == nullptr);  // 必須完全中止並回傳 nullptr！
 
-  // 4. 測試工廠回傳的物件發現與同層具名名稱重複，視為資料毀損中止並回傳 nullptr
+  // 3. 測試工廠回傳的物件發現與同層具名名稱重複，視為資料毀損中止並回傳 nullptr
   std::string duplicate_dsl = R"(
     [Player] = "Hero" {
       [Item] = "Sword"
@@ -1077,7 +1058,7 @@ void TestAttachChildAndFactoryDeserialization()
 
   auto normal_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<TreeNode<std::string>>
   {
-    auto node = TreeNode<std::string>::MakeNode(name);
+    auto node = TreeNode<std::string>::CreateRoot(name);
     if (node)
     {
       node->SetData(data);
@@ -1087,6 +1068,48 @@ void TestAttachChildAndFactoryDeserialization()
 
   auto duplicate_result = TreeIO::DeserializeFromString<TreeNode<std::string>>(duplicate_dsl, normal_factory);
   assert(duplicate_result == nullptr);  // 同層名稱重複，掛載失敗，視為資料毀損回傳 nullptr！
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
+void TestTreeCleanupTracker()
+{
+  std::cout << "[測試 18] TreeCleanupTracker 弱引用共享鎖全節點清除驗證測試..." << std::endl;
+
+  TreeCleanupTracker root_tracker;
+  TreeCleanupTracker detached_tracker;
+
+  {
+    auto root = StringTreeNode::CreateRoot(u8"RootNode");
+    root_tracker = root->GetCleanupTracker();
+
+    assert(root_tracker.IsAlive());
+    assert(!root_tracker.AreAllNodesCleanedUp());
+    assert(!root_tracker.IsCleanedUp());
+
+    auto child1 = root->AddChild(u8"Child1");
+    auto child2 = root->AddChild(u8"Child2");
+    auto grandChild = child1->AddChild(u8"GrandChild");
+
+    // 建立 Detached 子節點並測試獨立生命週期
+    child2->DetachFromParent();
+    detached_tracker = child2->GetCleanupTracker();
+    assert(detached_tracker.IsAlive());
+    assert(!detached_tracker.AreAllNodesCleanedUp());
+
+    // 依然存活
+    assert(root_tracker.IsAlive());
+  }
+
+  // 離開區塊後，root, child1, grandChild 均已完全解構釋放
+  assert(root_tracker.AreAllNodesCleanedUp());
+  assert(root_tracker.IsCleanedUp());
+  assert(!root_tracker.IsAlive());
+
+  // detached 節點 child2 也在區塊結束時釋放
+  assert(detached_tracker.AreAllNodesCleanedUp());
+  assert(detached_tracker.IsCleanedUp());
+  assert(!detached_tracker.IsAlive());
 
   std::cout << " -> 通過！" << std::endl;
 }
@@ -1114,9 +1137,10 @@ int main()
   TestTagAndAnonymousChildSequence();
   TestPolymorphicDerivedNodeTemplate();
   TestAttachChildAndFactoryDeserialization();
+  TestTreeCleanupTracker();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 17 項單元測試 100% 成功通過！   " << std::endl;
+  std::cout << "  全數 18 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

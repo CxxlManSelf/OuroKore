@@ -141,20 +141,26 @@
 ## 🌳 9. 樹狀結構節點與文字 DSL 串流：`ork::base::TreeNode<T>` / `ork::base::TreeIO`
 * **標頭檔**：`ourokore/base/Tree.hpp`、`ourokore/base/TreeIO.hpp`
 * **樣板基底 `TreeNodeBase<Derived>` 方法**：
-  * `CreateRoot<SubT = D>(name, args...)` / `CreateArray<SubT = D>(name, args...)`：建立樹之根節點（支援 C++20 `std::derived_from<SubT, D>` 約束與轉發建構參數，直出 `std::shared_ptr<SubT>`）。
-  * `MakeNode<SubT = D>(name, args...)`：底層工廠函式（支援衍生多型與建構鉤子）。
-  * `PushElement<SubT = D>(args...)` / `PushElement(element)`：原地構造匿名元素或推入既有節點指標（$O(1)$）。
-  * `ElementCount()` / `Size()` / `ChildCount()`：子元素數量查詢（$O(1)$）。
+  * `CreateRoot<SubT = D>(name, args...)`：建立樹之根節點（唯一合法的樹入口，支援 C++20 `std::derived_from<SubT, D>` 約束與轉發建構參數，直出 `std::shared_ptr<SubT>`）。
+  * `Size()` / `ChildCount()`：子節點/元素數量查詢（$O(1)$）。
   * `GetElementAt(index)` / `operator[](size_t index)`：隨機下標存取（$O(1)$）。
   * `FindChildByName(name)` / `operator[](const std::u8string &name)`：名稱尋址（$O(1)$）。
-  * `AddChild<SubT = D>(name, args...)` / `AddBackChild<SubT = D>(name, args...)`：新增具名或匿名子節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型）。
-  * `AttachChild<SubT = D>(child)` / `AttachChild(nullptr)`：安全掛載外部已構造好的子節點（若物件名稱與同層具名節點衝突或為空指針，回傳 `false`）。
+  * `AddChild<SubT = D>(name, args...)` / `PrependChild<SubT = D>(name, args...)`：在尾端追加或在最前端插入具名或匿名子節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型）。
+  * `PushElement<SubT = D>(args...)`：原地構造並推入匿名陣列元素。
   * `InsertBefore<SubT = D>(child, name, args...)` / `InsertAfter<SubT = D>(child, name, args...)`：指定位置精準插入衍生節點。
-  * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除。
+  * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除（斷開關聯一律由父節點呼叫 `RemoveChild`）。
+  * `DetachFromParent()`：斷開與父節點之關聯自立為新樹（自動分配並傳播新專屬樹級讀寫鎖）。
+  * `GetCleanupTracker()`：取得整棵樹之清理狀態追蹤器（`TreeCleanupTracker`），以 $O(1)$ 弱引用樹級共享鎖判定所有節點是否全數清除。
   * `Reversed()`：零拷貝反向走訪視圖糖衣。
   * `GetTreeMutex()`：取得樹級讀寫鎖（整棵樹共享同一個鎖）。
-  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`AttachChild`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
-  * `DetachFromParent()`：斷開父節點雙向弱關聯自立為新樹。
+  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`PrependChild`/`PushElement`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
+  * 🔒 **拓撲特權隔離**：`AttachChild` 與 `MakeNode` 為私有內部特權（`private`，僅對 `friend class TreeIO;` 開放），外部使用者一律嚴格由父節點原地延伸構造，禁止隨意掛載外部獨立節點。
+* **樹清理追蹤器 `ork::base::TreeCleanupTracker` 類別**：
+  * `bool AreAllNodesCleanedUp() const noexcept`：檢查整棵樹所有節點是否已全數解構清除（鎖已銷毀即代表所有節點均已析構）。
+  * `bool IsCleanedUp() const noexcept`：`AreAllNodesCleanedUp()` 之別名捷徑。
+  * `bool IsAlive() const noexcept`：檢查樹是否仍有節點存活。
+  * `long UseCount() const noexcept`：取得目前持有該鎖之節點引用計數預估。
+  * `const std::weak_ptr<std::shared_mutex>& GetRawWeakPtr() const noexcept`：取得底層原生弱引用。
 * **具體節點 `TreeNode<T>`（`StringTreeNode`）方法**：
   * `T GetData()` / `void SetData(const T &)` / `void SetData(T &&)`：資料鎖保護之存取。
 * **文字 DSL 串流 `TreeIO`**：

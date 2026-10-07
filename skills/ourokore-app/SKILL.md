@@ -178,23 +178,21 @@ boss->hp -= 100; // 直接存取衍生屬性，無需 dynamic_cast！
 // 3. 原地構造並推入陣列元素
 std::shared_ptr<MonsterEntity> minion = root->PushElement<MonsterEntity>(u8"Goblin", 100, 15);
 
-// 4. 掛載外部已構造好的子節點 (AttachChild)
-// 若回傳物件名稱與同層具名節點衝突，或傳入空指針，回傳 false
-auto external_dragon = BaseEntity::MakeNode<MonsterEntity>(u8"Dragon", 2000, 100);
-bool attached = root->AttachChild(external_dragon);
+// 4. 開頭插入衍生子節點 (PrependChild)
+std::shared_ptr<MonsterEntity> guard = root->PrependChild<MonsterEntity>(u8"Guard", 1200, 80);
 ```
 
-### 5.2 外部工廠反序列化與 AttachChild 拓撲掛載 (Factory-First Deserialization)
-為支援異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」：反序列化時**不預先製造 node**，僅將字串內容（與節點名稱）送至外部工廠，成型後掛載至父節點：
+### 5.2 外部工廠反序列化與 TreeIO 特權拓撲掛載 (Factory-First Deserialization)
+為支援異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」：反序列化時**不預先製造 node**，僅將字串內容（與節點名稱）送至外部工廠，成型後由 `TreeIO` 透過內部特權（`AttachChild`）掛載至父節點：
 * **工廠簽名**：`factory(const std::u8string &name, const std::string &data) -> NodePtr` 或 `factory(const std::string &data) -> NodePtr`。
 * **資料毀損嚴格中止 (Fail-Fast)**：
   1. 若工廠造不出物件（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
-  2. 若回傳物件掛載時發現名稱與同層具名節點重複（`AttachChild` 回傳 `false`），同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+  2. 若回傳物件掛載時發現名稱與同層具名節點重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
 
 ```cpp
 auto factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
-    if (data == "MONSTER") return BaseEntity::MakeNode<MonsterEntity>(name, 100, 20);
-    if (data == "ITEM")    return BaseEntity::MakeNode<ItemEntity>(50);
+    if (data == "MONSTER") return BaseEntity::CreateRoot<MonsterEntity>(name, 100, 20);
+    if (data == "ITEM")    return BaseEntity::CreateRoot<ItemEntity>(50);
     return nullptr; // 無法識別之無效型別 -> 視為資料毀損，中止全體解析！
 };
 
@@ -203,5 +201,9 @@ auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, factory);
 ```
 
 ### 5.3 整樹走訪黃金法則（死鎖防禦）
-* ⚠️ **高壓線禁忌**：整棵樹共享同一個 `std::shared_mutex`（不可重入）。在持讀鎖走訪期間（`for (auto &child : *node)`），**絕對嚴禁調用 `AddChild`、`RemoveChild`、`PushElement`、`AttachChild` 等異動結構介面**，否則立即引發不可重入死鎖！
+* ⚠️ **高壓線禁忌**：整棵樹共享同一個 `std::shared_mutex`（不可重入）。在持讀鎖走訪期間（`for (auto &child : *node)`），**絕對嚴禁調用 `AddChild`、`PrependChild`、`PushElement`、`RemoveChild` 等異動結構介面**，否則立即引發不可重入死鎖！
 * 異動需求請遵循「第一階段持讀鎖收集目標 -> 釋放讀鎖 -> 第二階段持寫鎖批次修改」之安全範式。
+
+### 5.4 節點清理狀態驗證 (TreeCleanupTracker)
+* 欲檢查「整棵樹的所有節點是否均已全數清除釋放」，透過 `root->GetCleanupTracker()` 取得輕量弱引用共享鎖追蹤器：
+* `tracker.AreAllNodesCleanedUp()` / `tracker.IsCleanedUp()`：以 $O(1)$ 常數時間精準判定整棵樹是否已全數銷毀（鎖已 expired 即代表所有持有該鎖的節點均已析構），零遍歷開銷。
