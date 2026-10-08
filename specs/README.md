@@ -29,6 +29,7 @@
 2. [02. 二進位串流與藍圖打包協議](technical/02_binary_protocols.md) - 純 Payload 與拓撲分離、防記憶體爆炸與防重複鍵
 3. [03. 純 C ABI 規格與記憶體佈局規範](technical/03_c_abi_and_memory.md) - 37 個純 C 導出函式規格、CRT 隔離、ControlBlock
 4. [04. 併發模型、鎖階層規範與防死鎖設計](technical/04_concurrency_and_locks.md) - 單向鎖順序、執行緒池防自我死鎖機制
+5. [05. ORKT 樹狀文字交換格式規格書](technical/05_orkt_format_spec.md) - 語言無關文字格式 RFC、EBNF 文法、消歧義狀態機與序列化規範
 
 ---
 
