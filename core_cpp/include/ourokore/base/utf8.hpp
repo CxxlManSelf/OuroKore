@@ -72,4 +72,94 @@ template <> struct is_string_like<char8_t *> : std::true_type {};
 template <typename T>
 inline constexpr bool is_string_like_v = is_string_like<std::decay_t<T>>::value;
 
+/**
+ * @brief 判定字串內容是否為嚴格合規的 UTF-8 位元組序列（依據 RFC 3629）
+ *
+ * 嚴格排除：
+ * 1. 非法前導位元組（0xC0, 0xC1, 0xF5..0xFF）
+ * 2. 超長編碼（Overlong encoding）
+ * 3. UTF-16 代理字元區段（Surrogate halves: U+D800..U+DFFF, 0xED 0xA0..0xBF）
+ * 4. 超出 Unicode 最大碼點（> U+10FFFF, 0xF4 0x90..0xBF）
+ * 5. 截斷或不完整之多位元組序列
+ */
+template <typename T>
+constexpr bool is_valid(const T &str) noexcept
+{
+  std::string_view v = as_view(str);
+  const auto *bytes = reinterpret_cast<const uint8_t *>(v.data());
+  const size_t len = v.size();
+  size_t i = 0;
+
+  while (i < len)
+  {
+    uint8_t b1 = bytes[i++];
+    if (b1 <= 0x7F)
+    {
+      // 1 位元組 (ASCII: 0x00..0x7F)
+      continue;
+    }
+    else if (b1 >= 0xC2 && b1 <= 0xDF)
+    {
+      // 2 位元組 (0xC2..0xDF 0x80..0xBF)
+      if (i >= len) return false;
+      uint8_t b2 = bytes[i++];
+      if ((b2 & 0xC0) != 0x80) return false;
+    }
+    else if (b1 >= 0xE0 && b1 <= 0xEF)
+    {
+      // 3 位元組
+      if (i + 1 >= len) return false;
+      uint8_t b2 = bytes[i++];
+      uint8_t b3 = bytes[i++];
+      if ((b3 & 0xC0) != 0x80) return false;
+
+      if (b1 == 0xE0)
+      {
+        // 排除超長編碼 (b2 必須 >= 0xA0)
+        if (b2 < 0xA0 || b2 > 0xBF) return false;
+      }
+      else if (b1 == 0xED)
+      {
+        // 排除 UTF-16 代理字元 U+D800..U+DFFF (b2 必須 <= 0x9F)
+        if (b2 < 0x80 || b2 > 0x9F) return false;
+      }
+      else
+      {
+        if ((b2 & 0xC0) != 0x80) return false;
+      }
+    }
+    else if (b1 >= 0xF0 && b1 <= 0xF4)
+    {
+      // 4 位元組
+      if (i + 2 >= len) return false;
+      uint8_t b2 = bytes[i++];
+      uint8_t b3 = bytes[i++];
+      uint8_t b4 = bytes[i++];
+      if ((b3 & 0xC0) != 0x80 || (b4 & 0xC0) != 0x80) return false;
+
+      if (b1 == 0xF0)
+      {
+        // 排除超長編碼 (b2 必須 >= 0x90)
+        if (b2 < 0x90 || b2 > 0xBF) return false;
+      }
+      else if (b1 == 0xF4)
+      {
+        // 排除超出 U+10FFFF (b2 必須 <= 0x8F)
+        if (b2 < 0x80 || b2 > 0x8F) return false;
+      }
+      else
+      {
+        if ((b2 & 0xC0) != 0x80) return false;
+      }
+    }
+    else
+    {
+      // 非法前導位元組 (0x80..0xC1 或 0xF5..0xFF)
+      return false;
+    }
+  }
+
+  return true;
+}
+
 }  // namespace ork::utf8

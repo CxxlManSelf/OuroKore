@@ -778,6 +778,11 @@ public:
 
         next();  // 消耗 '['
         std::string name_s = read_name();
+        // 依照 ORKT 規範（RFC 3629 / §9.5 Fail-Fast）：名稱必須為合法 UTF-8 編碼
+        if (!ork::utf8::is_valid(name_s))
+        {
+          return nullptr;  // 名稱包含非法 UTF-8 位元組序列，立即判定毀損終止解析
+        }
         frame.pending_name = ork::utf8::to_u8string(name_s);
         frame.has_pending_name = true;
         frame.has_equal = false;

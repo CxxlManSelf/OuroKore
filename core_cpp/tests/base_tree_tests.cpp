@@ -1326,6 +1326,82 @@ void TestExplicitAnonymousContainerDisambiguation()
   std::cout << " -> 通過！" << std::endl;
 }
 
+void TestUtf8NameValidation()
+{
+  std::cout << "[測試 21] 節點名稱 UTF-8 合法性檢驗與 Fail-Fast 防禦測試..." << std::endl;
+
+  // 1. 單元驗證 ork::utf8::is_valid 算法
+  assert(ork::utf8::is_valid(""));
+  assert(ork::utf8::is_valid("Hello_World-123"));
+  assert(ork::utf8::is_valid("繁體中文節點名稱"));
+  assert(ork::utf8::is_valid(u8"測試C++20字面量"));
+  assert(ork::utf8::is_valid("Emoji🚀🔥"));
+
+  // 非法前導位元組
+  assert(!ork::utf8::is_valid(std::string("\xFF")));
+  assert(!ork::utf8::is_valid(std::string("\xFE")));
+  assert(!ork::utf8::is_valid(std::string("\x80")));  // 孤立續接字節
+
+  // 超長編碼 (Overlong)
+  assert(!ork::utf8::is_valid(std::string("\xC0\x80", 2)));
+  assert(!ork::utf8::is_valid(std::string("\xC1\x80", 2)));
+  assert(!ork::utf8::is_valid(std::string("\xE0\x80\x80", 3)));
+  assert(!ork::utf8::is_valid(std::string("\xF0\x80\x80\x80", 4)));
+
+  // UTF-16 代理字元 (Surrogates: U+D800..U+DFFF)
+  assert(!ork::utf8::is_valid(std::string("\xED\xA0\x80", 3)));  // U+D800
+  assert(!ork::utf8::is_valid(std::string("\xED\xBF\xBF", 3)));  // U+DFFF
+
+  // 超出 Unicode 上限 (> U+10FFFF)
+  assert(!ork::utf8::is_valid(std::string("\xF4\x90\x80\x80", 4)));
+
+  // 截斷的多位元組序列
+  assert(!ork::utf8::is_valid(std::string("\xC2", 1)));
+  assert(!ork::utf8::is_valid(std::string("\xE4\xB8", 2)));
+  assert(!ork::utf8::is_valid(std::string("\xF0\x9F\x9A", 3)));
+
+  // 2. TreeIO 反序列化合法 UTF-8 名稱測試
+  std::string valid_dsl = R"(
+[玩家角色] = "勇者"
+{
+  [裝備欄]
+  {
+    [傳奇雙手劍] = "攻擊力+500"
+  }
+}
+)";
+  auto valid_root = TreeIO::DeserializeFromString(valid_dsl);
+  assert(valid_root != nullptr);
+  assert(valid_root->GetName() == u8"玩家角色");
+  assert(valid_root->ChildCount() == 1);
+  auto equip_slot = (*valid_root)[0];
+  assert(equip_slot->GetName() == u8"裝備欄");
+  assert(equip_slot->ChildCount() == 1);
+  assert((*equip_slot)[0]->GetName() == u8"傳奇雙手劍");
+  assert((*equip_slot)[0]->GetData() == "攻擊力+500");
+
+  // 3. TreeIO 反序列化非法 UTF-8 名稱 -> 觸發 Fail-Fast 回傳 nullptr
+  std::string bad_dsl1 = "[";
+  bad_dsl1.append("\xFF\xFE");  // 非法前導位元組
+  bad_dsl1.append("] = \"Data\"");
+  auto bad_root1 = TreeIO::DeserializeFromString(bad_dsl1);
+  assert(bad_root1 == nullptr);  // 必須被安全攔截並傳回 nullptr！
+
+  std::string bad_dsl2 = "[";
+  bad_dsl2.append("\xED\xA0\x80");  // UTF-16 代理字元
+  bad_dsl2.append("] = \"Data\"");
+  auto bad_root2 = TreeIO::DeserializeFromString(bad_dsl2);
+  assert(bad_root2 == nullptr);
+
+  std::string bad_dsl3 = "[Prefix_";
+  bad_dsl3.append("\xE4\xB8");  // 截斷的 3-byte 中文字元
+  bad_dsl3.append("] { \"Child\" }");
+  auto bad_root3 = TreeIO::DeserializeFromString(bad_dsl3);
+  assert(bad_root3 == nullptr);
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
 int main()
 {
   std::cout << "========================================" << std::endl;
@@ -1352,9 +1428,10 @@ int main()
   TestTreeCleanupTracker();
   TestSiblingReordering();
   TestExplicitAnonymousContainerDisambiguation();
+  TestUtf8NameValidation();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 20 項單元測試 100% 成功通過！   " << std::endl;
+  std::cout << "  全數 21 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

@@ -307,6 +307,7 @@ for (const auto &child : *dungeon) {
 * **嚴格資料毀損中斷（Fail-Fast / All-or-Nothing）**：
   1. 若工廠無法識別資料（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   2. 若回傳物件與同層名稱重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+  3. 若節點名稱包含非法或非 UTF-8 位元組序列（依據 RFC 3629），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
 
 ```cpp
 auto hetero_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
