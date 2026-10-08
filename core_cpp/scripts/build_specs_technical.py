@@ -269,9 +269,10 @@ End Procedure
 ### 6.2 外掛終端收尾保證 (Terminal Shutdown Guarantee)
 外掛可註冊終端收尾回呼（Terminal Shutdown Symbol），保證於外掛所屬的所有活體物件全部釋放完畢後**最後執行一次**。
 
-### 6.3 外掛拒絕卸載轉為常駐模式 (Permanent Resident Mode)
-* 若外掛之終端收尾函式執行後傳回**非零代碼**，核心將其識別為「外掛主動拒絕卸載」。
-* 核心立即將其標記為 `is_permanent_resident = True`，取消物理卸載調用，使該動態庫安全常駐於記憶體直至進程終止，杜絕外掛因全局註冊回呼無法清理而崩潰。
+### 6.3 外掛拒絕卸載轉為常駐模式與生命週期接管 (Resident Mode & Ownership Handover)
+* 若外掛之終端收尾函式執行後傳回**非零代碼**（或 bool 回傳 `false`），核心將其識別為「外掛主動拒絕卸載」。
+* 核心立即將其原生句柄登記進全域常駐表（`resident_table`），取消物理卸載調用，使該動態庫安全常駐於記憶體，杜絕外掛因全域回呼未清理而崩潰。
+* **重用與所有權交接機制（Transfer of Ownership）**：當日後再次調用 `load()` 重新載入該模組時，系統在 `resident_table` 命中後，**立即將其自常駐表中移除**，並為其建立全新的控制區塊接管該句柄；若日後新控制區塊解構且外掛同意卸載，物理卸載後常駐表保證無殘留，杜絕懸空野指標。
 
 ### 6.4 離棧延遲卸載防自毀保護 (Deferred Unload Defense)
 若模組內部的某個回呼自身釋放了該模組的最後一個引用計數，核心強制將 `FreeLibrary` 操作延遲至非同步背景離棧執行緒執行，防止模組在呼叫棧仍在該動態庫內部時物理卸載自身的代碼段導致致命崩潰。
@@ -418,15 +419,15 @@ End Interface
 
 ### 5.1 資料純度自動推導雙模態 (Data-Driven Morphism)
 樹節點本身不儲存形態列舉，形態完全由子節點結構純度於執行期自動推導：
-* **物件模式（Object Mode，DSL 界定符 `{}`）**：子節點全體均為具名節點（`child_count == named_child_count`）。
-* **陣列模式（Array Mode，DSL 界定符 `()`）**：混入任何無名（匿名）節點（`child_count > named_child_count`）。
+* **具名物件模式（Object Mode）**：子節點全體均為具名節點（`child_count == named_child_count`），文字 DSL 採用 `{}` 大括號區塊。
+* **匿名陣列模式（Array Mode）**：混入任何無名（匿名）節點（`child_count > named_child_count`），文字 DSL 亦全面統一採用 `{}` 大括號區塊封裝匿名元素。
 
-### 5.2 四大正交界定符與零等號哲學 (Orthogonal Delimiters)
-文字 DSL 採用四個完全正交之語法 Token，等號 `=` 僅為可選裝飾符號：
-* `[節點名稱]`：名稱標記。
+### 5.2 三大正交界定符與具名賦值關鍵字 (Orthogonal Delimiters & Assignment)
+文字 DSL 採用三大正交語法 Token，容器區塊全面統一為大括號 `{}`，等號 `=` 為具名賦值關鍵字：
+* `[節點名稱]`：名稱標記（跳脫字元支援 `\]` 與 `\\`）。
+* `=`：具名賦值關鍵字（具名節點賦值時必然使用）。
 * `"字串內容"`：Payload 資料（支援 0~255 二進位位元組與轉義字元 `\"`、`\\`、`\n`、`\xHH`）。
-* `{具名成員}`：物件區塊。
-* `(列表元素)`：陣列區塊。
+* `{子節點成員}`：容器區塊（全面統一為大括號，Allman 風格獨立換行）。
 
 #### 兩種緊湊傳輸編碼模式 (CompactMode Wire Styles)：
 1. **模式 1：格式化排版 (CompactMode::Pretty)**：含標準縮排、空白與換行，供人類閱讀（Allman 風格）。
@@ -648,9 +649,10 @@ End Function
 ---
 
 ### 💾 類別 D：Base 模組 Heap 追蹤與清空檢驗介面 (`heap_api.h`)
+> 所有純 C API 一律強制修飾呼叫慣例 `ORK_CALL`（Windows: `__cdecl`），確保跨語言 FFI（C# P/Invoke、Rust extern "C"）堆疊平衡完全一致。
 
 38. `ork_heap_allocate`
-    - **符號規格**：`Function ork_heap_allocate(size: UInt64, file: CString, line: Int32) -> RawPointer`
+    - **符號規格**：`Function ORK_CALL ork_heap_allocate(size: UInt64, file: CString, line: Int32) -> RawPointer`
     - **說明**：配置記憶體並依編譯期方案記錄檔名與行號。
 39. `ork_heap_allocate_aligned`
     - **符號規格**：`Function ork_heap_allocate_aligned(size: UInt64, alignment: UInt64, file: CString, line: Int32) -> RawPointer`

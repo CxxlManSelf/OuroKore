@@ -136,15 +136,15 @@ End Interface
 
 ### 5.1 資料純度自動推導雙模態 (Data-Driven Morphism)
 樹節點本身不儲存形態列舉，形態完全由子節點結構純度於執行期自動推導：
-* **物件模式（Object Mode，DSL 界定符 `{}`）**：子節點全體均為具名節點（`child_count == named_child_count`）。
-* **陣列模式（Array Mode，DSL 界定符 `()`）**：混入任何無名（匿名）節點（`child_count > named_child_count`）。
+* **具名物件模式（Object Mode）**：子節點全體均為具名節點（`child_count == named_child_count`），文字 DSL 採用 `{}` 大括號區塊。
+* **匿名陣列模式（Array Mode）**：混入任何無名（匿名）節點（`child_count > named_child_count`），文字 DSL 亦全面統一採用 `{}` 大括號區塊封裝匿名元素。
 
-### 5.2 四大正交界定符與零等號哲學 (Orthogonal Delimiters)
-文字 DSL 採用四個完全正交之語法 Token，等號 `=` 僅為可選裝飾符號：
-* `[節點名稱]`：名稱標記。
+### 5.2 三大正交界定符與具名賦值關鍵字 (Orthogonal Delimiters & Assignment)
+文字 DSL 採用三大正交語法 Token，容器區塊全面統一為大括號 `{}`，等號 `=` 為具名賦值關鍵字：
+* `[節點名稱]`：名稱標記（跳脫字元支援 `\]` 與 `\\`）。
+* `=`：具名賦值關鍵字（具名節點賦值時必然使用）。
 * `"字串內容"`：Payload 資料（支援 0~255 二進位位元組與轉義字元 `\"`、`\\`、`\n`、`\xHH`）。
-* `{具名成員}`：物件區塊。
-* `(列表元素)`：陣列區塊。
+* `{子節點成員}`：容器區塊（全面統一為大括號，Allman 風格獨立換行）。
 
 #### 兩種緊湊傳輸編碼模式 (CompactMode Wire Styles)：
 1. **模式 1：格式化排版 (CompactMode::Pretty)**：含標準縮排、空白與換行，供人類閱讀（Allman 風格）。

@@ -222,8 +222,8 @@
   * `bool PluginHeap::is_clean()`：查詢當前模組是否 100% 清空。
   * `std::string PluginHeap::dump_leaks_to_string(context_name)`：輸出格式化 UTF-8 洩漏診斷清單。
   * `void PluginHeap::assert_clean(context_name)`：未清空立即印出報告並拋出例外。
-  * `PluginHeapGuard`：RAII 作用域洩漏檢測守衛。
-* **純 C ABI 介面**：
+  * `PluginHeapGuard`：RAII 作用域洩漏檢測守衛（內置固定緩衝區深拷貝，保證零堆記憶體配置與抗暫時字串懸空）。
+* **純 C ABI 介面（全體修飾 `ORK_CALL`）**：
   * `ork_heap_allocate(size, file, line)` / `ork_heap_deallocate(ptr)`
   * `ork_heap_is_clean()` / `ork_heap_dump_leaks(buf, len)` / `ork_heap_assert_clean(name)`
 

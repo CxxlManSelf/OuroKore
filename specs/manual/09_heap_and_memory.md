@@ -93,6 +93,8 @@ extern "C" PLUGIN_EXPORT int32_t PluginShutdown() {
 ork::PluginHeap::assert_clean("MyPlugin");
 
 // RAII 守衛：離開作用域時自動檢查，若有洩漏自動輸出至 stderr
+// 💡 PluginHeapGuard 內部採用內置固定緩衝區深拷貝，徹底杜絕外部暫時字串（如 "Test_" + name）懸空，
+//    並保證 100% 零堆記憶體配置（Zero Heap Allocation Invariant），避免自身配置污染外掛的 HeapTracker 記帳產生偽誤報！
 {
     ork::PluginHeapGuard guard("PluginScope");
     // 執行外掛邏輯...
@@ -103,12 +105,12 @@ ork::PluginHeap::assert_clean("MyPlugin");
 
 ## 🌐 6. 跨語言純 C ABI (`ourokore/base/heap_api.h`)
 
-底層提供純 C ABI，供 C#、Rust、Python 進行記憶體檢查與 FFI 對接，保證跨語言邊界零例外外洩：
-* `ork_heap_allocate(size, file, line)` / `ork_heap_deallocate(ptr)`
-* `ork_heap_is_clean()` -> 傳回 `1`（已清空）或 `0`（未清空）
-* `ork_heap_get_active_allocations()` / `ork_heap_get_active_bytes()`
-* `ork_heap_dump_leaks(out_buf, buf_size)`
-* `ork_heap_assert_clean(context_name)`
+底層提供純 C ABI，供 C#、Rust、Python 進行記憶體檢查與 FFI 對接，保證跨語言邊界零例外外洩（所有函式一律修飾 `ORK_CALL` 呼叫慣例）：
+* `void *ORK_CALL ork_heap_allocate(size, file, line)` / `void ORK_CALL ork_heap_deallocate(ptr)`
+* `int32_t ORK_CALL ork_heap_is_clean()` -> 傳回 `1`（已清空）或 `0`（未清空）
+* `uint64_t ORK_CALL ork_heap_get_active_allocations()` / `uint64_t ORK_CALL ork_heap_get_active_bytes()`
+* `int32_t ORK_CALL ork_heap_dump_leaks(out_buf, buf_size)`
+* `int32_t ORK_CALL ork_heap_assert_clean(context_name)`
 
 ---
 

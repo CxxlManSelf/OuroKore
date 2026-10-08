@@ -438,6 +438,27 @@ int main()
     std::cout << "  ✅ 外掛 MODULE 動態庫全域 operator new/delete 攔截與退出前檢驗全流程通過！" << std::endl;
   }
 
+  // =========================================================================
+  // 測試 12: 驗證 PluginHeapGuard 抗暫時性字串懸空 (Anti-Dangling Temporary String)
+  // =========================================================================
+  {
+    std::cout << "\n[Test 12] 驗證 PluginHeapGuard 抗暫時性字串懸空與零堆配置..." << std::endl;
+    std::string mod_name = "AudioEngine";
+    {
+      // 傳入暫時性字串（陳述式結束後即刻銷毀）
+      ork::PluginHeapGuard guard("Test_" + mod_name + "_V2");
+      assert(guard.get_context_name() == "Test_AudioEngine_V2");
+    }
+    // 驗證超過緩衝區長度的超長字串截斷保護
+    std::string long_name(200, 'X');
+    {
+      ork::PluginHeapGuard long_guard(long_name);
+      assert(long_guard.get_context_name().size() == 127);
+      assert(long_guard.get_context_name().front() == 'X');
+    }
+    std::cout << "  ✅ PluginHeapGuard 暫時字串安全持有與長度截斷防禦驗證通過！" << std::endl;
+  }
+
   std::cout << "============================================================" << std::endl;
   std::cout << "🎉 所有 Heap 追蹤與清空檢驗測試 100% 全部通過！" << std::endl;
   std::cout << "============================================================" << std::endl;

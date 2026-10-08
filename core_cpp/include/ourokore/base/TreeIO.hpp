@@ -689,8 +689,8 @@ public:
         break;
       }
 
-      // 遇到容器終止符（'}' 或 ')'）
-      if (frame.terminator != '\0' && (ch == frame.terminator || (frame.terminator == '}' && ch == ')')))
+      // 遇到容器終止符（'}'）
+      if (frame.terminator != '\0' && ch == frame.terminator)
       {
         next();  // 消耗終止符
         if (frame.has_pending_name)
@@ -834,11 +834,11 @@ public:
         continue;
       }
 
-      // 4. 遇到容器開啟符 '{' 或 '('：顯式壓棧進入深層，完全非遞迴
-      if (ch == '{' || ch == '(')
+      // 4. 遇到容器開啟符 '{'：顯式壓棧進入深層，完全非遞迴
+      if (ch == '{')
       {
-        char term = (ch == '{') ? '}' : ')';
-        next();  // 消耗 '{' 或 '('
+        char term = '}';
+        next();  // 消耗 '{'
         NodePtr target = nullptr;
 
         if (frame.has_pending_name)

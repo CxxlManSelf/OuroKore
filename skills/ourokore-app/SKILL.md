@@ -95,6 +95,7 @@ extern "C" PLUGIN_EXPORT int32_t PluginShutdown() {
 ork::PluginHeap::assert_clean("MyPlugin");
 
 // RAII 守衛：離開作用域時自動檢查，若有洩漏自動輸出至 stderr
+// 💡 PluginHeapGuard 內置固定緩衝區深拷貝，零堆配置（Zero Heap Allocation Invariant）且抗暫時字串懸空
 {
     ork::PluginHeapGuard guard("PluginScope");
     // 執行外掛邏輯...

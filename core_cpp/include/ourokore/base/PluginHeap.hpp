@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <new> // IWYU pragma: keep
 #include <string_view>
@@ -67,17 +69,27 @@ inline std::string dump_leaks_to_string(std::string_view context_name = "Plugin"
 class PluginHeapGuard
 {
 public:
+  /**
+   * @brief 建構外掛 Heap 洩漏守衛
+   *
+   * 內部採用固定緩衝區進行深拷貝（Deep Copy），100% 杜絕外部傳入暫時字串（如 "Test_" + name）
+   * 提早銷毀所導致的懸空字串視圖（Dangling String View）問題。
+   * 同時保證零堆記憶體配置（Zero Heap Allocation），避免自身配置污染外掛的 HeapTracker 記帳。
+   *
+   * @param context_name 診斷情境或模組名稱（若超過緩衝區上限將安全截斷）
+   * @param strict_abort 發現洩漏時是否立即強制呼叫 std::abort() 終止進程
+   */
   explicit PluginHeapGuard(std::string_view context_name = "Plugin", bool strict_abort = false) :
-      m_context_name(context_name),
       m_strict_abort(strict_abort)
   {
+    set_context_name(context_name);
   }
 
   ~PluginHeapGuard()
   {
     if (!PluginHeap::is_clean())
     {
-      std::string report = PluginHeap::dump_leaks_to_string(m_context_name);
+      std::string report = PluginHeap::dump_leaks_to_string(get_context_name());
       std::cerr << "\n" << report << std::endl;
       if (m_strict_abort)
       {
@@ -86,11 +98,32 @@ public:
     }
   }
 
+  /**
+   * @brief 取得當前守衛持有的情境名稱視圖
+   */
+  [[nodiscard]] std::string_view get_context_name() const noexcept
+  {
+    return std::string_view(m_context_buffer, m_context_len);
+  }
+
   PluginHeapGuard(const PluginHeapGuard &) = delete;
   PluginHeapGuard &operator=(const PluginHeapGuard &) = delete;
 
 private:
-  std::string_view m_context_name;
+  void set_context_name(std::string_view name) noexcept
+  {
+    std::size_t copy_len = (std::min)(name.size(), sizeof(m_context_buffer) - 1);
+    if (copy_len > 0)
+    {
+      std::memcpy(m_context_buffer, name.data(), copy_len);
+    }
+    m_context_buffer[copy_len] = '\0';
+    m_context_len = copy_len;
+  }
+
+  // 內部內聯緩衝區：兼顧無堆配置（Zero Heap Allocation）與抗懸空字串（Anti-Dangling）
+  char m_context_buffer[128]{'\0'};
+  std::size_t m_context_len{0};
   bool m_strict_abort{false};
 };
 

@@ -153,6 +153,7 @@ static void UnregisterControlBlock(const std::filesystem::path &path)
       reg.table.erase(it);
     }
   }
+  reg.resident_table.erase(path);
 }
 
 static void MarkAsResident(const std::filesystem::path &path, void *handle)
@@ -350,6 +351,7 @@ DynamicLibrary DynamicLibrary::load(const std::filesystem::path &path, LibraryLo
     if (res_it != reg.resident_table.end())
     {
       void *resident_handle = res_it->second;
+      reg.resident_table.erase(res_it);
       auto control_block = std::make_shared<LibraryControlBlock>(resident_handle, resolved_path);
       reg.table[resolved_path] = control_block;
       return DynamicLibrary(std::move(control_block), "", false);

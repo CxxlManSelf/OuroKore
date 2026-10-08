@@ -566,7 +566,7 @@ public:
 4. **模組全域啟始與收尾保證（Lifecycle Hooks & Startup/Shutdown Protocol）**：
    - **首次載入精準辨識**：多個模組重複呼叫 `load()` 請求載入相同動態庫時，載入器透過全域規範路徑弱引用快取共享控制區塊。只有第一次進入進程（0 -> 1）時 `lib.is_first_loaded()` 會傳回 `true`；後續重複載入（N -> N+1）傳回 `false`。
    - **全域啟始單次保證**：呼叫 `lib.initialize_once<InitFn>("ork_plugin_init", args...)`，僅在首次載入時執行初始化（避免型別重複註冊或資源衝突），重複載入時自動安全略過。
-   - **模組唯一善後收尾與常駐模式 (Terminal Shutdown & Resident Mode)**：透過 `lib.register_shutdown_symbol("ork_plugin_shutdown")` 或 `lib.set_shutdown_hook(...)` 註冊收尾邏輯。外掛在引用歸零時首先執行此唯一入口；若外掛回傳 `false` 拒絕結束，系統自動轉為【常駐模式】，不呼叫 `FreeLibrary`、不發送後置通知，並保持全域路徑登錄長存以供後續無縫重用！若同意結束（回傳 `true` 或 `void`），則正常物理卸載並觸發 `post_unload_hooks`。
+   - **模組唯一善後收尾與常駐模式 (Terminal Shutdown & Resident Mode)**：透過 `lib.register_shutdown_symbol("ork_plugin_shutdown")` 或 `lib.set_shutdown_hook(...)` 註冊收尾邏輯。外掛在引用歸零時首先執行此唯一入口；若外掛回傳 `false` 拒絕結束，系統自動轉為【常駐模式】，不呼叫 `FreeLibrary`、不發送後置通知，並將原生句柄轉存至全域常駐表（`resident_table`）。**日後若再次呼叫 `load()` 重新載入該模組，系統在常駐表重用該句柄時會立即將其移出常駐表，將生命週期所有權交由新控制區塊託管（接管即移出所有權）**；若新控制區塊日後釋放且外掛同意卸載，則正常物理卸載，確保常駐表絕無懸空指標殘留！若外掛初次即同意結束（回傳 `true` 或 `void`），則正常物理卸載並觸發 `post_unload_hooks`。
 
 #### 實戰範例：
 ```cpp
@@ -1791,6 +1791,8 @@ extern "C" PLUGIN_EXPORT int32_t PluginShutdown() {
 ork::PluginHeap::assert_clean("MyPlugin");
 
 // RAII 守衛：離開作用域時自動檢查，若有洩漏自動輸出至 stderr
+// 💡 PluginHeapGuard 內部採用內置固定緩衝區深拷貝，徹底杜絕外部暫時字串（如 "Test_" + name）懸空，
+//    並保證 100% 零堆記憶體配置（Zero Heap Allocation Invariant），避免自身配置污染外掛的 HeapTracker 記帳產生偽誤報！
 {
     ork::PluginHeapGuard guard("PluginScope");
     // 執行外掛邏輯...
@@ -1801,12 +1803,12 @@ ork::PluginHeap::assert_clean("MyPlugin");
 
 ## 🌐 6. 跨語言純 C ABI (`ourokore/base/heap_api.h`)
 
-底層提供純 C ABI，供 C#、Rust、Python 進行記憶體檢查與 FFI 對接，保證跨語言邊界零例外外洩：
-* `ork_heap_allocate(size, file, line)` / `ork_heap_deallocate(ptr)`
-* `ork_heap_is_clean()` -> 傳回 `1`（已清空）或 `0`（未清空）
-* `ork_heap_get_active_allocations()` / `ork_heap_get_active_bytes()`
-* `ork_heap_dump_leaks(out_buf, buf_size)`
-* `ork_heap_assert_clean(context_name)`
+底層提供純 C ABI，供 C#、Rust、Python 進行記憶體檢查與 FFI 對接，保證跨語言邊界零例外外洩（所有函式一律修飾 `ORK_CALL` 呼叫慣例）：
+* `void *ORK_CALL ork_heap_allocate(size, file, line)` / `void ORK_CALL ork_heap_deallocate(ptr)`
+* `int32_t ORK_CALL ork_heap_is_clean()` -> 傳回 `1`（已清空）或 `0`（未清空）
+* `uint64_t ORK_CALL ork_heap_get_active_allocations()` / `uint64_t ORK_CALL ork_heap_get_active_bytes()`
+* `int32_t ORK_CALL ork_heap_dump_leaks(out_buf, buf_size)`
+* `int32_t ORK_CALL ork_heap_assert_clean(context_name)`
 
 ---
 
@@ -2045,8 +2047,8 @@ ork::PluginHeap::assert_clean("MyPlugin");
   * `bool PluginHeap::is_clean()`：查詢當前模組是否 100% 清空。
   * `std::string PluginHeap::dump_leaks_to_string(context_name)`：輸出格式化 UTF-8 洩漏診斷清單。
   * `void PluginHeap::assert_clean(context_name)`：未清空立即印出報告並拋出例外。
-  * `PluginHeapGuard`：RAII 作用域洩漏檢測守衛。
-* **純 C ABI 介面**：
+  * `PluginHeapGuard`：RAII 作用域洩漏檢測守衛（內置固定緩衝區深拷貝，保證零堆記憶體配置與抗暫時字串懸空）。
+* **純 C ABI 介面（全體修飾 `ORK_CALL`）**：
   * `ork_heap_allocate(size, file, line)` / `ork_heap_deallocate(ptr)`
   * `ork_heap_is_clean()` / `ork_heap_dump_leaks(buf, len)` / `ork_heap_assert_clean(name)`
 

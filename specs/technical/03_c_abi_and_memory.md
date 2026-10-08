@@ -153,9 +153,10 @@
 ---
 
 ### 💾 類別 D：Base 模組 Heap 追蹤與清空檢驗介面 (`heap_api.h`)
+> 所有純 C API 一律強制修飾呼叫慣例 `ORK_CALL`（Windows: `__cdecl`），確保跨語言 FFI（C# P/Invoke、Rust extern "C"）堆疊平衡完全一致。
 
 38. `ork_heap_allocate`
-    - **符號規格**：`Function ork_heap_allocate(size: UInt64, file: CString, line: Int32) -> RawPointer`
+    - **符號規格**：`Function ORK_CALL ork_heap_allocate(size: UInt64, file: CString, line: Int32) -> RawPointer`
     - **說明**：配置記憶體並依編譯期方案記錄檔名與行號。
 39. `ork_heap_allocate_aligned`
     - **符號規格**：`Function ork_heap_allocate_aligned(size: UInt64, alignment: UInt64, file: CString, line: Int32) -> RawPointer`

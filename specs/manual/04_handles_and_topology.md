@@ -114,7 +114,7 @@ public:
 4. **模組全域啟始與收尾保證（Lifecycle Hooks & Startup/Shutdown Protocol）**：
    - **首次載入精準辨識**：多個模組重複呼叫 `load()` 請求載入相同動態庫時，載入器透過全域規範路徑弱引用快取共享控制區塊。只有第一次進入進程（0 -> 1）時 `lib.is_first_loaded()` 會傳回 `true`；後續重複載入（N -> N+1）傳回 `false`。
    - **全域啟始單次保證**：呼叫 `lib.initialize_once<InitFn>("ork_plugin_init", args...)`，僅在首次載入時執行初始化（避免型別重複註冊或資源衝突），重複載入時自動安全略過。
-   - **模組唯一善後收尾與常駐模式 (Terminal Shutdown & Resident Mode)**：透過 `lib.register_shutdown_symbol("ork_plugin_shutdown")` 或 `lib.set_shutdown_hook(...)` 註冊收尾邏輯。外掛在引用歸零時首先執行此唯一入口；若外掛回傳 `false` 拒絕結束，系統自動轉為【常駐模式】，不呼叫 `FreeLibrary`、不發送後置通知，並保持全域路徑登錄長存以供後續無縫重用！若同意結束（回傳 `true` 或 `void`），則正常物理卸載並觸發 `post_unload_hooks`。
+   - **模組唯一善後收尾與常駐模式 (Terminal Shutdown & Resident Mode)**：透過 `lib.register_shutdown_symbol("ork_plugin_shutdown")` 或 `lib.set_shutdown_hook(...)` 註冊收尾邏輯。外掛在引用歸零時首先執行此唯一入口；若外掛回傳 `false` 拒絕結束，系統自動轉為【常駐模式】，不呼叫 `FreeLibrary`、不發送後置通知，並將原生句柄轉存至全域常駐表（`resident_table`）。**日後若再次呼叫 `load()` 重新載入該模組，系統在常駐表重用該句柄時會立即將其移出常駐表，將生命週期所有權交由新控制區塊託管（接管即移出所有權）**；若新控制區塊日後釋放且外掛同意卸載，則正常物理卸載，確保常駐表絕無懸空指標殘留！若外掛初次即同意結束（回傳 `true` 或 `void`），則正常物理卸載並觸發 `post_unload_hooks`。
 
 #### 實戰範例：
 ```cpp

@@ -593,7 +593,7 @@ void HeapTracker::reset() noexcept
 extern "C"
 {
 
-void *ork_heap_allocate(size_t size, const char *file, int32_t line)
+void *ORK_CALL ork_heap_allocate(size_t size, const char *file, int32_t line)
 {
   try
   {
@@ -605,7 +605,7 @@ void *ork_heap_allocate(size_t size, const char *file, int32_t line)
   }
 }
 
-void *ork_heap_allocate_aligned(size_t size, size_t alignment, const char *file, int32_t line)
+void *ORK_CALL ork_heap_allocate_aligned(size_t size, size_t alignment, const char *file, int32_t line)
 {
   try
   {
@@ -617,7 +617,7 @@ void *ork_heap_allocate_aligned(size_t size, size_t alignment, const char *file,
   }
 }
 
-void ork_heap_deallocate(void *ptr)
+void ORK_CALL ork_heap_deallocate(void *ptr)
 {
   try
   {
@@ -628,7 +628,7 @@ void ork_heap_deallocate(void *ptr)
   }
 }
 
-void ork_heap_deallocate_aligned(void *ptr, size_t alignment)
+void ORK_CALL ork_heap_deallocate_aligned(void *ptr, size_t alignment)
 {
   try
   {
@@ -639,7 +639,7 @@ void ork_heap_deallocate_aligned(void *ptr, size_t alignment)
   }
 }
 
-int32_t ork_heap_is_clean(void)
+int32_t ORK_CALL ork_heap_is_clean(void)
 {
   try
   {
@@ -651,7 +651,7 @@ int32_t ork_heap_is_clean(void)
   }
 }
 
-uint64_t ork_heap_get_active_allocations(void)
+uint64_t ORK_CALL ork_heap_get_active_allocations(void)
 {
   try
   {
@@ -663,7 +663,7 @@ uint64_t ork_heap_get_active_allocations(void)
   }
 }
 
-uint64_t ork_heap_get_active_bytes(void)
+uint64_t ORK_CALL ork_heap_get_active_bytes(void)
 {
   try
   {
@@ -675,7 +675,7 @@ uint64_t ork_heap_get_active_bytes(void)
   }
 }
 
-int32_t ork_heap_dump_leaks(char *out_buf, size_t buf_size)
+int32_t ORK_CALL ork_heap_dump_leaks(char *out_buf, size_t buf_size)
 {
   try
   {
@@ -695,7 +695,7 @@ int32_t ork_heap_dump_leaks(char *out_buf, size_t buf_size)
   }
 }
 
-int32_t ork_heap_assert_clean(const char *context_name)
+int32_t ORK_CALL ork_heap_assert_clean(const char *context_name)
 {
   try
   {
@@ -708,7 +708,7 @@ int32_t ork_heap_assert_clean(const char *context_name)
   }
 }
 
-void ork_heap_reset(void)
+void ORK_CALL ork_heap_reset(void)
 {
   try
   {
