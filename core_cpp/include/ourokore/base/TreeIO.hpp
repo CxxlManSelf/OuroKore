@@ -267,10 +267,24 @@ public:
       std::string data_s = convert_data(f.node);
       std::string escaped_data = EscapeContent(data_s);
 
+      // 檢查是否具有子節點
+      size_t count = f.node->ChildCount();
+
       // 輸出節點開頭
-      if (!escaped_name.empty())
+      // 若為具名節點，或具有子節點之容器節點（含匿名容器），輸出標頭 [Name] 或 []
+      if (!escaped_name.empty() || count > 0)
       {
-        os << indent << '[' << escaped_name << ']';
+        if (!escaped_name.empty())
+        {
+          os << indent << '[' << escaped_name << ']';
+        }
+        else
+        {
+          // 匿名容器：輸出顯式標頭 []
+          os << indent << "[]";
+        }
+
+        // 若帶有資料，輸出賦值（具名或匿名均一致遵循 = "Data"）
         if (!escaped_data.empty())
         {
           if (is_compact)
@@ -282,6 +296,7 @@ public:
             os << " = \"" << escaped_data << "\"";
           }
         }
+
         if (!is_compact)
         {
           os << '\n';
@@ -289,20 +304,13 @@ public:
       }
       else
       {
-        // 匿名節點：若為純資料葉節點（無子節點）或帶有資料，輸出字串引號 ""
-        // 若為匿名容器節點（ChildCount > 0 且無資料），則直接由後續容器括號括起，無須輸出空引號
-        if (!escaped_data.empty() || f.node->ChildCount() == 0)
+        // 匿名純資料葉節點（無子節點）
+        os << indent << "\"" << escaped_data << "\"";
+        if (!is_compact)
         {
-          os << indent << "\"" << escaped_data << "\"";
-          if (!is_compact)
-          {
-            os << '\n';
-          }
+          os << '\n';
         }
       }
-
-      // 檢查是否具有子節點
-      size_t count = f.node->ChildCount();
       if (count > 0)
       {
         os << indent << '{';
@@ -822,13 +830,13 @@ public:
             frame.has_equal = false;
           }
 
-          // 獨立匿名節點！
+          // 獨立匿名節點！純字串葉節點絕不搶佔後續子容器，杜絕語法歧義
           NodePtr anon = create_node(u8"", data_s, true);
           if (!anon || !frame.current_parent->AttachChild(anon))
           {
             return nullptr;
           }
-          frame.active_child = anon;
+          frame.active_child = nullptr;
           frame.has_equal = false;
         }
         continue;

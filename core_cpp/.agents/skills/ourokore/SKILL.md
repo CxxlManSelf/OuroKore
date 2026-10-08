@@ -412,6 +412,7 @@ ork::base::Event event(ork::base::EventResetMode::AutoReset, false);
    - **C++20 `std::derived_from` 強型別零手動轉型直出**：支援多型衍生階層，`AddChild<SubT>`、`PushElement<SubT>` 直接回傳 `std::shared_ptr<SubT>`，呼叫端無需任何 dynamic_cast 即可直接操作異質物件成員。
    - **整樹共享讀寫鎖與走訪死鎖防禦鐵律**：整棵樹（Root 與所有子孫節點）共享同一個 `std::shared_mutex`，節點脫離時自立分配新鎖。**呼叫端在持讀鎖走訪期間「只能進行純資料使用，絕對禁止操作節點拓撲（Add/Remove/Clear/Detach）」**，否則會因非遞迴讀寫鎖引發重複加鎖死鎖（Deadlock）；動態刪除需求必須採用「先收集指針、釋放讀鎖後再批次修改」的兩階段安全範式。
    - 文字 DSL 支援格式化排版與緊湊模式（CompactMode::Pretty、CompactMode::Compact），原生支援 `//` 單行註解、`/* ... */` 區塊註解與 `#` 腳本註解過濾，狀態機寬容過濾任意雜訊並保證 0~255 二進位位元組安全與非遞迴顯式堆疊走訪。
+   - **顯式 `[]` 匿名容器標頭與消歧義鐵律 (Explicit Anonymous Header Invariant)**：匿名容器在 DSL 中以 `[]` 作為顯式標頭（Allman 排版：`[]\n{\n...\n}`，緊湊模式：`[]{...}`），若帶有資料則以 `[] = "Data"` 標明；純字串葉節點 `"Data"` 絕不貪婪搶佔後續容器，徹底消除同層平級「純字串葉節點」與「獨立匿名容器」之語法歧義。
    - **CRTP 節點衍生與型別自適應萃取保證**：自定義節點可直接繼承 `TreeNodeBase<Derived>`，`TreeIO::Deserialize<NodeType>` 與 `DeserializeFromString<NodeType>` 會精準回傳 `std::shared_ptr<NodeType>`，子節點亦為相同衍生型別；反序列化支援外部工廠反轉模式 `factory(name, data) -> NodePtr`，工廠造不出物件或同層同名衝突時以 Fail-Fast 機制終止並回傳 `nullptr`。
    - **延伸類別職責邊界與嚴格私有封裝 (Strict Encapsulation Invariant)**：延伸類別職責專注於領域資料處理與業務行為，**絕不直接碰觸底層內部拓撲**；所有底層狀態（`m_elements`、`m_nameMap`、`m_parent`、`m_treeMutex` 等）全面收斂至 `private`，節點操作一律透過公開 API；`TreeNodeBase` 建構子宣告為 `protected`，僅供衍生類別調用初始化。
 

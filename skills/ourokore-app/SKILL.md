@@ -208,6 +208,15 @@ auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, factory);
 * `CompactMode::Pretty`：格式化排版模式（Allman 風格：獨立換行與縮排，具名賦值使用 ` = `）。
 * `CompactMode::Compact`：緊湊模式（無縮排與換行，具名賦值保留關鍵字 `=`）。
 
+#### 顯式匿名容器標頭 `[]` 與消歧義規則：
+* **純匿名容器**：序列化一律輸出 `[]` 標頭（Allman 風格獨立換行：`[]
+{
+...
+}`，緊湊模式：`[]{...}`）。
+* **帶資料匿名容器**：輸出 `[] = "Data"` 標頭（緊湊模式：`[]="Data"{...}`）。
+* **純字串葉節點**：直接輸出 `"Data"`，狀態機保證絕不搶佔後續子容器，同層平級書寫 `"Data"` 與 `[] { ... }` 互為獨立兄弟節點。
+* **空葉節點**：無名無值無子節點表現為空字串引號 `""`。
+
 ```cpp
 // 1. 格式化排版輸出
 TreeIO::Serialize(std::cout, root, CompactMode::Pretty);

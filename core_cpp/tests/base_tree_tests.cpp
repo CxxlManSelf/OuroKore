@@ -1223,6 +1223,109 @@ void TestSiblingReordering()
   std::cout << " -> 通過！" << std::endl;
 }
 
+void TestExplicitAnonymousContainerDisambiguation()
+{
+  std::cout << "[測試 20] 顯式 [] 匿名容器標頭與帶資料匿名容器消歧義測試..." << std::endl;
+
+  // 1. 測試使用者指定之 Allman 風格匿名容器結構（字串 + 獨立平級容器）
+  std::string dsl1 = R"(
+[]
+{
+  "ItemData"
+  []
+  {
+    "Sub1"
+    "Sub2"
+  }
+}
+)";
+
+  auto root1 = TreeIO::DeserializeFromString(dsl1);
+  assert(root1 != nullptr);
+  assert(root1->GetName().empty());
+  assert(root1->ChildCount() == 2);  // 必須為 2 個平級兄弟，絕不誤吞成父子！
+
+  // 檢查元素 0: 純字串葉節點
+  auto elem0 = (*root1)[0];
+  assert(elem0 != nullptr);
+  assert(elem0->GetName().empty());
+  assert(elem0->GetData() == "ItemData");
+  assert(elem0->ChildCount() == 0);
+
+  // 檢查元素 1: 獨立匿名子容器
+  auto elem1 = (*root1)[1];
+  assert(elem1 != nullptr);
+  assert(elem1->GetName().empty());
+  assert(elem1->GetData().empty());
+  assert(elem1->ChildCount() == 2);
+  assert((*elem1)[0]->GetData() == "Sub1");
+  assert((*elem1)[1]->GetData() == "Sub2");
+
+  // 序列化回 DSL，驗證格式化 Allman 輸出結構
+  std::string exported_dsl1 = TreeIO::SerializeToString(root1);
+  std::cout << "  Exported DSL1:\n" << exported_dsl1 << std::endl;
+  assert(exported_dsl1.find("[]") != std::string::npos);
+
+  // 2. 測試帶資料之匿名容器：[] = "ContainerPayload" { ... }
+  std::string dsl2 = R"(
+[]
+{
+  "ItemData"
+  [] = "ContainerPayload"
+  {
+    "Sub1"
+    "Sub2"
+  }
+}
+)";
+
+  auto root2 = TreeIO::DeserializeFromString(dsl2);
+  assert(root2 != nullptr);
+  assert(root2->ChildCount() == 2);
+
+  auto with_data_container = (*root2)[1];
+  assert(with_data_container != nullptr);
+  assert(with_data_container->GetName().empty());
+  assert(with_data_container->GetData() == "ContainerPayload");  // 成功持有資料！
+  assert(with_data_container->ChildCount() == 2);                 // 成功持有子節點！
+  assert((*with_data_container)[0]->GetData() == "Sub1");
+  assert((*with_data_container)[1]->GetData() == "Sub2");
+
+  // 序列化回 DSL，驗證帶資料標頭格式
+  std::string exported_dsl2 = TreeIO::SerializeToString(root2);
+  std::cout << "  Exported DSL2:\n" << exported_dsl2 << std::endl;
+  assert(exported_dsl2.find("[] = \"ContainerPayload\"") != std::string::npos);
+
+  // 3. 測試 Compact 模式下的序列化與反序列化
+  std::string compact_dsl2 = TreeIO::SerializeToString(root2, CompactMode::Compact);
+  std::cout << "  Compact DSL2: " << compact_dsl2 << std::endl;
+  assert(compact_dsl2 == "[]{\"ItemData\"[]=\"ContainerPayload\"{\"Sub1\"\"Sub2\"}}");
+
+  auto restored_compact2 = TreeIO::DeserializeFromString(compact_dsl2);
+  assert(restored_compact2 != nullptr);
+  assert(restored_compact2->ChildCount() == 2);
+  assert((*restored_compact2)[1]->GetData() == "ContainerPayload");
+  assert((*restored_compact2)[1]->ChildCount() == 2);
+
+  // 4. 測試純大括號相容性：字串緊接純大括號亦能消歧義互為兄弟
+  std::string dsl3 = R"(
+{
+  "ItemData"
+  {
+    "Sub1"
+    "Sub2"
+  }
+}
+)";
+  auto root3 = TreeIO::DeserializeFromString(dsl3);
+  assert(root3 != nullptr);
+  assert(root3->ChildCount() == 2);
+  assert((*root3)[0]->GetData() == "ItemData");
+  assert((*root3)[1]->ChildCount() == 2);
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
 int main()
 {
   std::cout << "========================================" << std::endl;
@@ -1248,9 +1351,10 @@ int main()
   TestAttachChildAndFactoryDeserialization();
   TestTreeCleanupTracker();
   TestSiblingReordering();
+  TestExplicitAnonymousContainerDisambiguation();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 19 項單元測試 100% 成功通過！   " << std::endl;
+  std::cout << "  全數 20 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;
