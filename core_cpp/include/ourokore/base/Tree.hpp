@@ -228,13 +228,66 @@ public:
   }
 
   /**
-   * @brief 斷開與父節點的關聯並自立為新樹（分配專屬共享鎖）
+   * @brief 斷開與父節點的關聯並自立為新樹（從父節點完全移除並分配專屬共享鎖）
+   * @return 若成功從父節點斷開則傳回 true；若原本即無父節點則傳回 false。
    */
-  void DetachFromParent()
+  bool DetachFromParent()
   {
-    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
-    m_parent.reset();
-    PropagateTreeMutex(std::make_shared<std::shared_mutex>());
+    NodePtr parent = m_parent.lock();
+    NodePtr self = m_self.lock();
+    if (parent && self)
+    {
+      return parent->RemoveChild(self);
+    }
+    return false;
+  }
+
+  /**
+   * @brief 將自身移動至同層目標兄弟節點之前（同層重排捷徑）
+   * @param target 同層目標兄弟節點
+   * @return 若自身或目標無效、或不在同一父節點下則回傳 false；移動成功傳回 true。
+   */
+  bool MoveBefore(const NodePtr &target)
+  {
+    NodePtr parent = m_parent.lock();
+    NodePtr self = m_self.lock();
+    if (parent && self && target)
+    {
+      return parent->MoveChildBefore(self, target);
+    }
+    return false;
+  }
+
+  /**
+   * @brief 將自身移動至同層目標兄弟節點之後（同層重排捷徑）
+   * @param target 同層目標兄弟節點
+   * @return 若自身或目標無效、或不在同一父節點下則回傳 false；移動成功傳回 true。
+   */
+  bool MoveAfter(const NodePtr &target)
+  {
+    NodePtr parent = m_parent.lock();
+    NodePtr self = m_self.lock();
+    if (parent && self && target)
+    {
+      return parent->MoveChildAfter(self, target);
+    }
+    return false;
+  }
+
+  /**
+   * @brief 將自身移動至父節點指定之下標位置（同層重排捷徑）
+   * @param new_index 目標下標位置
+   * @return 若自身無父節點則回傳 false；移動成功傳回 true。
+   */
+  bool MoveToIndex(size_t new_index)
+  {
+    NodePtr parent = m_parent.lock();
+    NodePtr self = m_self.lock();
+    if (parent && self)
+    {
+      return parent->MoveChildToIndex(self, new_index);
+    }
+    return false;
   }
 
   virtual ~TreeNodeBase()
@@ -588,6 +641,133 @@ public:
   std::shared_ptr<SubT> PushElement(Args &&...args)
   {
     return AddChild<SubT>(u8"", std::forward<Args>(args)...);
+  }
+
+  // =========================================================================
+  // 同層順序搬移與重排方法 (Sibling Reordering)
+  // =========================================================================
+
+  /**
+   * @brief 將既有同層子節點移動至目標兄弟節點之前 (MoveChildBefore)
+   * @param child 待移動之子節點
+   * @param target 目標兄弟節點
+   * @return 若 child 或 target 為空、或不在當前節點容器內則回傳 false；移動成功傳回 true。
+   */
+  bool MoveChildBefore(const NodePtr &child, const NodePtr &target)
+  {
+    if (!child || !target)
+    {
+      return false;
+    }
+    if (child == target)
+    {
+      return true;
+    }
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+    auto it_child = std::find(m_elements.begin(), m_elements.end(), child);
+    if (it_child == m_elements.end())
+    {
+      return false;
+    }
+    auto it_target = std::find(m_elements.begin(), m_elements.end(), target);
+    if (it_target == m_elements.end())
+    {
+      return false;
+    }
+
+    if (it_child < it_target)
+    {
+      std::rotate(it_child, it_child + 1, it_target);
+    }
+    else
+    {
+      std::rotate(it_target, it_child, it_child + 1);
+    }
+    return true;
+  }
+
+  /**
+   * @brief 將既有同層子節點移動至目標兄弟節點之後 (MoveChildAfter)
+   * @param child 待移動之子節點
+   * @param target 目標兄弟節點
+   * @return 若 child 或 target 為空、或不在當前節點容器內則回傳 false；移動成功傳回 true。
+   */
+  bool MoveChildAfter(const NodePtr &child, const NodePtr &target)
+  {
+    if (!child || !target)
+    {
+      return false;
+    }
+    if (child == target)
+    {
+      return true;
+    }
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+    auto it_child = std::find(m_elements.begin(), m_elements.end(), child);
+    if (it_child == m_elements.end())
+    {
+      return false;
+    }
+    auto it_target = std::find(m_elements.begin(), m_elements.end(), target);
+    if (it_target == m_elements.end())
+    {
+      return false;
+    }
+
+    if (it_child < it_target)
+    {
+      std::rotate(it_child, it_child + 1, it_target + 1);
+    }
+    else
+    {
+      std::rotate(it_target + 1, it_child, it_child + 1);
+    }
+    return true;
+  }
+
+  /**
+   * @brief 將既有同層子節點移動至指定下標位置 (MoveChildToIndex)
+   * @param child 待移動之子節點
+   * @param new_index 目標下標（若大於等於元素數量則移動至最末端）
+   * @return 若 child 為空、或不在當前節點容器內則回傳 false；移動成功傳回 true。
+   */
+  bool MoveChildToIndex(const NodePtr &child, size_t new_index)
+  {
+    if (!child)
+    {
+      return false;
+    }
+    std::unique_lock<std::shared_mutex> lock(GetTreeMutex());
+    if (m_elements.empty())
+    {
+      return false;
+    }
+    auto it_child = std::find(m_elements.begin(), m_elements.end(), child);
+    if (it_child == m_elements.end())
+    {
+      return false;
+    }
+
+    if (new_index >= m_elements.size())
+    {
+      new_index = m_elements.size() - 1;
+    }
+
+    size_t old_index = static_cast<size_t>(std::distance(m_elements.begin(), it_child));
+    if (old_index == new_index)
+    {
+      return true;
+    }
+
+    if (old_index < new_index)
+    {
+      std::rotate(it_child, it_child + 1, m_elements.begin() + new_index + 1);
+    }
+    else
+    {
+      std::rotate(m_elements.begin() + new_index, it_child, it_child + 1);
+    }
+    return true;
   }
 
   // =========================================================================

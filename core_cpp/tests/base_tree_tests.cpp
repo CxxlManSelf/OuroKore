@@ -1092,7 +1092,13 @@ void TestTreeCleanupTracker()
     auto grandChild = child1->AddChild(u8"GrandChild");
 
     // 建立 Detached 子節點並測試獨立生命週期
-    child2->DetachFromParent();
+    bool detached_ok = child2->DetachFromParent();
+    assert(detached_ok);
+    assert(root->ChildCount() == 1);
+    assert(!root->HasChild(u8"Child2"));
+    assert(root->FindChildByName(u8"Child2") == nullptr);
+    assert(child2->GetParent() == nullptr);
+
     detached_tracker = child2->GetCleanupTracker();
     assert(detached_tracker.IsAlive());
     assert(!detached_tracker.AreAllNodesCleanedUp());
@@ -1110,6 +1116,109 @@ void TestTreeCleanupTracker()
   assert(detached_tracker.AreAllNodesCleanedUp());
   assert(detached_tracker.IsCleanedUp());
   assert(!detached_tracker.IsAlive());
+
+  std::cout << " -> 通過！" << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// 測試 19：同層子節點搬移與重排測試 (Sibling Reordering)
+// ---------------------------------------------------------------------------
+void TestSiblingReordering()
+{
+  std::cout << "[測試 19] 同層子節點順序搬移與重排測試 (MoveChildBefore/After/ToIndex)..." << std::flush;
+
+  auto root = StringTreeNode::CreateRoot(u8"Root");
+  auto a = root->AddChild(u8"A");
+  auto b = root->AddChild(u8"B");
+  auto c = root->AddChild(u8"C");
+  auto d = root->AddChild(u8"D");
+
+  // 初始順序: [A, B, C, D]
+  assert(root->GetElementAt(0) == a);
+  assert(root->GetElementAt(1) == b);
+  assert(root->GetElementAt(2) == c);
+  assert(root->GetElementAt(3) == d);
+
+  // 1. MoveChildBefore: 將 A 移到 C 之前 -> [B, A, C, D]
+  bool ok = root->MoveChildBefore(a, c);
+  assert(ok);
+  assert(root->GetElementAt(0) == b);
+  assert(root->GetElementAt(1) == a);
+  assert(root->GetElementAt(2) == c);
+  assert(root->GetElementAt(3) == d);
+
+  // 2. MoveChildBefore: 將 D 移到 B 之前 -> [D, B, A, C]
+  ok = root->MoveChildBefore(d, b);
+  assert(ok);
+  assert(root->GetElementAt(0) == d);
+  assert(root->GetElementAt(1) == b);
+  assert(root->GetElementAt(2) == a);
+  assert(root->GetElementAt(3) == c);
+
+  // 3. MoveChildAfter: 將 D 移到 A 之後 -> [B, A, D, C]
+  ok = root->MoveChildAfter(d, a);
+  assert(ok);
+  assert(root->GetElementAt(0) == b);
+  assert(root->GetElementAt(1) == a);
+  assert(root->GetElementAt(2) == d);
+  assert(root->GetElementAt(3) == c);
+
+  // 4. MoveChildToIndex: 將 C 移至 index 0 -> [C, B, A, D]
+  ok = root->MoveChildToIndex(c, 0);
+  assert(ok);
+  assert(root->GetElementAt(0) == c);
+  assert(root->GetElementAt(1) == b);
+  assert(root->GetElementAt(2) == a);
+  assert(root->GetElementAt(3) == d);
+
+  // 5. MoveChildToIndex 超出邊界自動 clamp: 將 C 移至 index 999 -> [B, A, D, C]
+  ok = root->MoveChildToIndex(c, 999);
+  assert(ok);
+  assert(root->GetElementAt(0) == b);
+  assert(root->GetElementAt(1) == a);
+  assert(root->GetElementAt(2) == d);
+  assert(root->GetElementAt(3) == c);
+
+  // 6. 子節點自身的捷徑糖衣: b->MoveAfter(c) -> [A, D, C, B]
+  ok = b->MoveAfter(c);
+  assert(ok);
+  assert(root->GetElementAt(0) == a);
+  assert(root->GetElementAt(1) == d);
+  assert(root->GetElementAt(2) == c);
+  assert(root->GetElementAt(3) == b);
+
+  // a->MoveToIndex(2) -> [D, C, A, B]
+  ok = a->MoveToIndex(2);
+  assert(ok);
+  assert(root->GetElementAt(0) == d);
+  assert(root->GetElementAt(1) == c);
+  assert(root->GetElementAt(2) == a);
+  assert(root->GetElementAt(3) == b);
+
+  // b->MoveBefore(d) -> [B, D, C, A]
+  ok = b->MoveBefore(d);
+  assert(ok);
+  assert(root->GetElementAt(0) == b);
+  assert(root->GetElementAt(1) == d);
+  assert(root->GetElementAt(2) == c);
+  assert(root->GetElementAt(3) == a);
+
+  // 7. 驗證名稱字典長存且精準尋址不受順序搬移影響
+  assert(root->FindChildByName(u8"A") == a);
+  assert(root->FindChildByName(u8"B") == b);
+  assert(root->FindChildByName(u8"C") == c);
+  assert(root->FindChildByName(u8"D") == d);
+
+  // 8. 邊界與錯誤檢查: 自身移給自身、nullptr、跨親代節點
+  assert(root->MoveChildBefore(a, a) == true);   // 無變化直接成功
+  assert(root->MoveChildAfter(a, a) == true);
+  assert(root->MoveChildBefore(a, nullptr) == false);
+  assert(root->MoveChildBefore(nullptr, a) == false);
+
+  auto anotherRoot = StringTreeNode::CreateRoot(u8"Other");
+  auto otherChild = anotherRoot->AddChild(u8"X");
+  assert(root->MoveChildBefore(a, otherChild) == false); // 不同父節點
+  assert(root->MoveChildAfter(otherChild, a) == false);
 
   std::cout << " -> 通過！" << std::endl;
 }
@@ -1138,9 +1247,10 @@ int main()
   TestPolymorphicDerivedNodeTemplate();
   TestAttachChildAndFactoryDeserialization();
   TestTreeCleanupTracker();
+  TestSiblingReordering();
 
   std::cout << "========================================" << std::endl;
-  std::cout << "  全數 18 項單元測試 100% 成功通過！   " << std::endl;
+  std::cout << "  全數 19 項單元測試 100% 成功通過！   " << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

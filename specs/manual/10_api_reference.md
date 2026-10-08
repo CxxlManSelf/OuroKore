@@ -149,12 +149,14 @@
   * `AddChild<SubT = D>(name, args...)` / `PrependChild<SubT = D>(name, args...)`：在尾端追加或在最前端插入具名或匿名子物件節點（直出強型別 `std::shared_ptr<SubT>`，零手動轉型，支援異質物件）。
   * `PushElement<SubT = D>(args...)`：原地構造並推入匿名異質元素節點。
   * `InsertBefore<SubT = D>(child, name, args...)` / `InsertAfter<SubT = D>(child, name, args...)`：指定位置精準插入異質衍生節點。
+  * `MoveChildBefore(child, target)` / `MoveChildAfter(child, target)` / `MoveChildToIndex(child, index)`：同層子節點順序原地搬移與重排（採用 `std::rotate` 原地調度，零記憶體重配置，具名字典 $O(1)$ 尋址長存有效）。
+  * `MoveBefore(target)` / `MoveAfter(target)` / `MoveToIndex(index)`：子節點自身發起之同層重排捷徑語法糖。
   * `RemoveElementAt()` / `RemoveChild()` / `ClearChildren()`：子節點移除（斷開關聯一律由父節點呼叫 `RemoveChild`）。
-  * `DetachFromParent()`：斷開與父節點之關聯自立為新樹（自動分配並傳播新專屬樹級讀寫鎖）。
+  * `bool DetachFromParent()`：斷開與父節點之關聯並自立為新樹（自動從父節點之容器完全移除、解開父弱引用，並分配傳播新專屬樹級讀寫鎖）。
   * `GetCleanupTracker()`：取得整棵樹之清理狀態追蹤器（`TreeCleanupTracker`），以 $O(1)$ 弱引用樹級共享鎖判定所有節點是否全數清除。
   * `Reversed()`：零拷貝反向走訪視圖糖衣。
   * `GetTreeMutex()`：取得樹級讀寫鎖（整棵樹共享同一個鎖）。
-  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`PrependChild`/`PushElement`/`RemoveChild`），否則引發不可重入讀寫鎖重複加鎖死鎖！
+  * ⚠️ **高壓線禁忌**：走訪期間只能進行純資料讀取，**絕對禁止調用任何結構異動介面**（如 `AddChild`/`PrependChild`/`PushElement`/`RemoveChild`/`MoveChildBefore` 等），否則引發不可重入讀寫鎖重複加鎖死鎖！
   * 🔒 **拓撲特權隔離**：`AttachChild` 與 `MakeNode` 為私有內部特權（`private`，僅對 `friend class TreeIO;` 開放），外部使用者一律嚴格由父節點原地延伸構造，禁止隨意掛載外部獨立節點。
 * **樹清理追蹤器 `ork::base::TreeCleanupTracker` 類別**：
   * `bool AreAllNodesCleanedUp() const noexcept`：檢查整棵樹所有節點是否已全數解構清除（鎖已銷毀即代表所有節點均已析構）。
