@@ -33,8 +33,8 @@
 * **ORKT**：OuroKore Tree 文字交換格式之簡稱，推薦標準副檔名為 `.orkt`，推薦 MIME 類型為 `text/x-orkt` 或 `application/x-orkt`。
 * **物件節點（Object Node）**：ORKT 格式中的基本建構單元。節點不是被動裝載資料的容器，其自身即為資料實體。
 * **有效負載（Payload / Data）**：儲存於節點本體的純文字或二進位資料串流。
-* **具名字節點（Named Child）**：擁有非空名稱標籤的子節點。
-* **匿名子節點（Anonymous Child）**：名稱為空字串的子節點。
+* **具名字節點（Named Child）**：擁有非空 UTF-8 名稱標籤的子節點。
+* **匿名子節點（Anonymous Child）**：名稱為 `[]` 的子節點。
 * **純標籤（Tag）**：擁有名稱但有效負載為空且無子節點的節點。
 
 ---
@@ -50,7 +50,7 @@ $$N = \langle \text{Name}, \text{Data}, \text{Children} \rangle$$
 
 | 維度名稱 | 類型 | 描述 |
 | :--- | :--- | :--- |
-| **名稱（Name）** | `String` | 節點的字串識別碼。若為匿名節點，則為空字串 `""`。 |
+| **名稱（Name）** | `UTF-8 String` | 節點的字串識別碼（嚴格必須為合法 UTF-8 編碼）。若為匿名節點，則為 `[]`。 |
 | **資料負載（Data）** | `String` / `Binary Stream` | 節點承載的本體資料內容。若無資料，則為空字串 `""`。 |
 | **子節點序列（Children）** | `Ordered List<Node>` | 該節點所擁有的子節點循序列表，長度大於等於 0。 |
 
@@ -73,8 +73,9 @@ $$N = \langle \text{Name}, \text{Data}, \text{Children} \rangle$$
 
 ## 3. 字元編碼與字節流規範 (Encoding & Byte Stream)
 
-1. **字元集標準**：
+1. **字元集標準與名稱編碼鐵律**：
    * ORKT 文件**必須**使用 **UTF-8** 編碼（RFC 3629）。
+   * **節點名稱必須為 UTF-8**：所有具名節點的名稱標籤（Name）**必須且只能為合法 UTF-8 字串**，嚴禁包含畸形或非法的 UTF-8 位元組序列。
    * 嚴禁在 ORKT 核心傳輸或檔案儲存中使用任何非 UTF-8 本地編碼（如 UTF-16、GBK、Big5、Windows-1252 等）。
 2. **Byte Order Mark (BOM)**：
    * 檔案開頭**不應（SHOULD NOT）**包含 UTF-8 BOM（位元組序列 `0xEF 0xBB 0xBF`）。
@@ -214,10 +215,10 @@ ORKT 的三維度正交模型衍生出以下幾種標準節點形態，每種形
 
 | 形態名稱 | 名稱 (Name) | 資料 (Data) | 子節點 (Children) | 標準格式化表現 (Pretty) | 緊湊表現 (Compact) | 範例語法 |
 | :--- | :---: | :---: | :---: | :--- | :--- | :--- |
-| **空葉節點 (Empty Leaf)** | ❌ (`""`) | ❌ (`""`) | ❌ ($0$) | `""` | `""` | `""` |
-| **純值葉節點 (Value Leaf)** | ❌ (`""`) | ✔️ | ❌ ($0$) | `"Data"` | `"Data"` | `"草藥"` |
-| **純匿名容器 (Anon Container)** | ❌ (`""`) | ❌ (`""`) | ✔️ ($>0$) | `[]`<br>`{`<br>&nbsp;&nbsp;`...`<br>`}` | `[]{...}` | `[] { "A" "B" }` |
-| **帶值匿名容器 (Anon with Data)** | ❌ (`""`) | ✔️ | ✔️ ($>0$) | `[] = "Data"`<br>`{`<br>&nbsp;&nbsp;`...`<br>`}` | `[]="Data"{...}` | `[] = "Header" { "Sub" }` |
+| **空葉節點 (Empty Leaf)** | ❌ (`[]`) | ❌ (`""`) | ❌ ($0$) | `""` | `""` | `""` |
+| **純值葉節點 (Value Leaf)** | ❌ (`[]`) | ✔️ | ❌ ($0$) | `"Data"` | `"Data"` | `"草藥"` |
+| **純匿名容器 (Anon Container)** | ❌ (`[]`) | ❌ (`""`) | ✔️ ($>0$) | `[]`<br>`{`<br>&nbsp;&nbsp;`...`<br>`}` | `[]{...}` | `[] { "A" "B" }` |
+| **帶值匿名容器 (Anon with Data)** | ❌ (`[]`) | ✔️ | ✔️ ($>0$) | `[] = "Data"`<br>`{`<br>&nbsp;&nbsp;`...`<br>`}` | `[]="Data"{...}` | `[] = "Header" { "Sub" }` |
 | **具名純標籤 (Named Tag)** | ✔️ | ❌ (`""`) | ❌ ($0$) | `[Name]` | `[Name]` | `[IsActive]` |
 | **具名屬性賦值 (Named Property)** | ✔️ | ✔️ | ❌ ($0$) | `[Name] = "Data"` | `[Name]="Data"` | `[HP] = "100"` |
 | **具名純容器 (Named Container)** | ✔️ | ❌ (`""`) | ✔️ ($>0$) | `[Name]`<br>`{`<br>&nbsp;&nbsp;`...`<br>`}` | `[Name]{...}` | `[Inventory] { "草藥" }` |
@@ -244,8 +245,8 @@ ORKT 的三維度正交模型衍生出以下幾種標準節點形態，每種形
                     │
                     ▼ 剖析器解析結果
 父容器 (Children Count = 2)
- ├── [0] Name="Tag",      Data="",         Children=[] (純標籤)
- └── [1] Name="",         Data="NextItem", Children=[] (平級匿名葉節點)
+ ├── [0] Name=[Tag],      Data="",         Children=[] (純標籤)
+ └── [1] Name=[],         Data="NextItem", Children=[] (平級匿名葉節點)
 ```
 
 ---
@@ -321,6 +322,8 @@ ORKT 支援根節點單體與多節點流的雙模態表現：
    如在頂層或非賦值位置出現孤立的等號 `=`、未定義的保留字元，剖析器應當拒絕解析。
 4. **記憶體防護保證 (Recursion Depth Guard)**：
    實作端應當採用顯式堆疊（Explicit Stack）或提供最大遞迴深度限制（如 1,000 層），防止惡意構造的畸形深層巢狀文件導致執行緒呼叫棧溢位（Stack Overflow）。
+5. **非法 UTF-8 名稱編驗 (Invalid UTF-8 Name Error)**：
+   節點名稱（Name）必須符合標準 UTF-8 編碼。若剖析器在讀取名稱標頭 `[...]` 時偵測到無效或畸形的 UTF-8 位元組序列，**必須立即終止解析並拋出編碼錯誤**。
 
 ---
 
