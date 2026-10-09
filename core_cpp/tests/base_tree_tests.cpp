@@ -1310,18 +1310,25 @@ void TestExplicitAnonymousContainerDisambiguation()
   assert((*restored_compact2)[1]->GetData() == "ContainerPayload");
   assert((*restored_compact2)[1]->ChildCount() == 2);
 
-  // 4. 測試缺失顯式標頭之殘缺語法防禦：字串後接裸大括號不合規格，視為文件毀損回傳 nullptr
-  std::string invalid_dsl = R"(
+  // 4. 測試無標頭裸大括號前後符號視為雜訊，內部葉節點平級保留
+  std::string noise_dsl = R"(
+[]
 {
   "ItemData"
   {
     "Sub1"
     "Sub2"
   }
+  "ItemB"
 }
 )";
-  auto invalid_root = TreeIO::DeserializeFromString(invalid_dsl);
-  assert(invalid_root == nullptr);  // 缺失顯式標頭 []，Fail-Fast 判定為文件毀損回傳 nullptr！
+  auto noise_root = TreeIO::DeserializeFromString(noise_dsl);
+  assert(noise_root != nullptr);
+  assert(noise_root->ChildCount() == 4);
+  assert((*noise_root)[0]->GetData() == "ItemData");
+  assert((*noise_root)[1]->GetData() == "Sub1");
+  assert((*noise_root)[2]->GetData() == "Sub2");
+  assert((*noise_root)[3]->GetData() == "ItemB");
 
   std::cout << " -> 通過！" << std::endl;
 }

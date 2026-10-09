@@ -681,11 +681,12 @@ public:
       bool has_pending_name{false};
       bool has_equal{false};
       NodePtr active_child{nullptr};
+      size_t noise_brace_depth{0};
     };
 
     std::vector<ParseFrame> parse_stack;
     parse_stack.reserve(64);
-    parse_stack.push_back({root_holder, '\0', u8"", false, false, nullptr});
+    parse_stack.push_back({root_holder, '\0', u8"", false, false, nullptr, 0});
 
     while (pos < len && !parse_stack.empty())
     {
@@ -697,21 +698,32 @@ public:
         break;
       }
 
-      // 遇到容器終止符（'}'）
-      if (frame.terminator != '\0' && ch == frame.terminator)
+      // 遇到容器終止符或閉合大括號（'}'）
+      if (ch == '}')
       {
-        next();  // 消耗終止符
-        if (frame.has_pending_name)
+        if (frame.noise_brace_depth > 0)
         {
-          NodePtr tag = create_node(frame.pending_name, "", false);
-          if (!tag || !frame.current_parent->AttachChild(tag))
-          {
-            return nullptr;  // 資料毀損或回傳物件與同層具名名稱重複
-          }
-          frame.has_pending_name = false;
+          // 對應未引導裸大括號之閉合字元，此字符純屬雜訊無視之
+          next();
+          frame.noise_brace_depth--;
+          continue;
         }
-        parse_stack.pop_back();  // 顯式彈棧：結束當前層級，零 Call Stack 消耗
-        continue;
+
+        if (frame.terminator == '}')
+        {
+          next();  // 消耗終止符
+          if (frame.has_pending_name && frame.current_parent)
+          {
+            NodePtr tag = create_node(frame.pending_name, "", false);
+            if (!tag || !frame.current_parent->AttachChild(tag))
+            {
+              return nullptr;  // 資料毀損或回傳物件與同層具名名稱重複
+            }
+            frame.has_pending_name = false;
+          }
+          parse_stack.pop_back();  // 顯式彈棧：結束當前層級，零 Call Stack 消耗
+          continue;
+        }
       }
 
       // 0. 註解處理：支援 // 單行註解、/* ... */ 區塊註解、# 腳本風格單行註解
@@ -764,7 +776,7 @@ public:
       if (ch == '[')
       {
         // 若先前已有未完結之具名標籤（例如 [Tag1][Tag2]），先產出前一個純標籤
-        if (frame.has_pending_name)
+        if (frame.has_pending_name && frame.current_parent)
         {
           NodePtr tag = create_node(frame.pending_name, "", false);
           if (!tag || !frame.current_parent->AttachChild(tag))
@@ -778,15 +790,18 @@ public:
 
         next();  // 消耗 '['
         std::string name_s = read_name();
-        // 依照 ORKT 規範（RFC 3629 / §9.5 Fail-Fast）：名稱必須為合法 UTF-8 編碼
-        if (!ork::utf8::is_valid(name_s))
+        if (frame.current_parent)
         {
-          return nullptr;  // 名稱包含非法 UTF-8 位元組序列，立即判定毀損終止解析
+          // 依照 ORKT 規範（RFC 3629 / §9.5 Fail-Fast）：名稱必須為合法 UTF-8 編碼
+          if (!ork::utf8::is_valid(name_s))
+          {
+            return nullptr;  // 名稱包含非法 UTF-8 位元組序列，立即判定毀損終止解析
+          }
+          frame.pending_name = ork::utf8::to_u8string(name_s);
+          frame.has_pending_name = true;
+          frame.has_equal = false;
+          frame.active_child = nullptr;
         }
-        frame.pending_name = ork::utf8::to_u8string(name_s);
-        frame.has_pending_name = true;
-        frame.has_equal = false;
-        frame.active_child = nullptr;
         continue;
       }
 
@@ -807,42 +822,45 @@ public:
         next();  // 消耗 '"'
         std::string data_s = read_string();
 
-        if (frame.has_pending_name && frame.has_equal)
+        if (frame.current_parent)
         {
-          // 具名節點的資料賦值！
-          NodePtr child = create_node(frame.pending_name, data_s, true);
-          if (!child || !frame.current_parent->AttachChild(child))
+          if (frame.has_pending_name && frame.has_equal)
           {
-            return nullptr;  // 造不出或回傳物件與同層名稱重複，視為資料毀損！
-          }
-          frame.active_child = child;
-          frame.has_pending_name = false;
-          frame.pending_name.clear();
-          frame.has_equal = false;
-        }
-        else
-        {
-          // 若有尚未結算的 pending_name（但無等號），先結算前置標籤
-          if (frame.has_pending_name)
-          {
-            NodePtr tag = create_node(frame.pending_name, "", false);
-            if (!tag || !frame.current_parent->AttachChild(tag))
+            // 具名節點的資料賦值！
+            NodePtr child = create_node(frame.pending_name, data_s, true);
+            if (!child || !frame.current_parent->AttachChild(child))
             {
-              return nullptr;
+              return nullptr;  // 造不出或回傳物件與同層名稱重複，視為資料毀損！
             }
+            frame.active_child = child;
             frame.has_pending_name = false;
             frame.pending_name.clear();
             frame.has_equal = false;
           }
-
-          // 獨立匿名節點！純字串葉節點絕不搶佔後續子容器，杜絕語法歧義
-          NodePtr anon = create_node(u8"", data_s, true);
-          if (!anon || !frame.current_parent->AttachChild(anon))
+          else
           {
-            return nullptr;
+            // 若有尚未結算的 pending_name（但無等號），先結算前置標籤
+            if (frame.has_pending_name)
+            {
+              NodePtr tag = create_node(frame.pending_name, "", false);
+              if (!tag || !frame.current_parent->AttachChild(tag))
+              {
+                return nullptr;
+              }
+              frame.has_pending_name = false;
+              frame.pending_name.clear();
+              frame.has_equal = false;
+            }
+
+            // 獨立匿名節點！純字串葉節點絕不搶佔後續子容器，杜絕語法歧義
+            NodePtr anon = create_node(u8"", data_s, true);
+            if (!anon || !frame.current_parent->AttachChild(anon))
+            {
+              return nullptr;
+            }
+            frame.active_child = nullptr;
+            frame.has_equal = false;
           }
-          frame.active_child = nullptr;
-          frame.has_equal = false;
         }
         continue;
       }
@@ -852,37 +870,35 @@ public:
       {
         char term = '}';
         next();  // 消耗 '{'
-        NodePtr target = nullptr;
 
         if (frame.has_pending_name)
         {
-          // 純具名容器（例如 [Inventory] { ... }）
+          // 純具名容器（例如 [Inventory] { ... }）或匿名容器（[] { ... }）
           NodePtr container_node = create_node(frame.pending_name, "", false);
           if (!container_node || !frame.current_parent->AttachChild(container_node))
           {
             return nullptr;
           }
-          target = container_node;
           frame.has_pending_name = false;
           frame.pending_name.clear();
           frame.has_equal = false;
           frame.active_child = nullptr;
+          parse_stack.push_back({std::move(container_node), term, u8"", false, false, nullptr, 0});
         }
         else if (frame.active_child)
         {
-          // 緊接在具名賦值節點後的子容器（例如 [Player] = "Hero" { ... }）
-          target = frame.active_child;
+          // 緊接在具名賦值節點後的子容器（例如 [Player] = "Hero" { ... } 或 [] = "Data" { ... }）
+          NodePtr child = frame.active_child;
           frame.active_child = nullptr;
           frame.has_equal = false;
+          parse_stack.push_back({std::move(child), term, u8"", false, false, nullptr, 0});
         }
         else
         {
-          // 容器標頭鐵律：只要是容器，都必須由具名標頭 [Name] 或匿名標頭 [] 帶頭！
-          // 任何無標頭引導的孤立裸大括號，一律視為語法錯誤與文件毀損立即終止！
-          return nullptr;
+          // 孤立裸大括號：缺少標頭引導，前後的 '{' 與 '}' 字符本身視為非結構雜訊！
+          // 絕不開啟新容器層級，內部的合法節點（如字串、子容器）直接平鋪隸屬於當前容器
+          frame.noise_brace_depth++;
         }
-
-        parse_stack.push_back({std::move(target), term, u8"", false, false, nullptr});
         continue;
       }
 
