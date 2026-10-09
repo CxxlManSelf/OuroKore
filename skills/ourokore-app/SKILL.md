@@ -1,4 +1,4 @@
-﻿---
+---
 name: ourokore-app
 description: "OuroKore 應用端與第三方外掛開發指南、領域物件設計、記憶體 Heap 追蹤清空檢驗與生命週期安全錨定最佳實踐。"
 ---
@@ -186,8 +186,11 @@ std::shared_ptr<MonsterEntity> guard = root->PrependChild<MonsterEntity>(u8"Guar
 ```
 
 ### 5.2 外部工廠反序列化與 TreeIO 特權拓撲掛載 (Factory-First Deserialization)
-為支援異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」：反序列化時**不預先製造 node**，僅將字串內容（與節點名稱）送至外部工廠，成型後由 `TreeIO` 透過內部特權（`AttachChild`）掛載至父節點：
-* **工廠簽名**：`factory(const std::u8string &name, const std::string &data) -> NodePtr` 或 `factory(const std::string &data) -> NodePtr`。
+為支援異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」外部工廠模式（**舊版預先製造空殼節點之修改器模式與資料轉換模式已全數廢除移除**）：
+* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，自訂建構職責完全交由外部工廠負責，成型後由 `TreeIO` 透過內部特權（`AttachChild`）掛載至父節點。
+* **工廠簽名**：
+  1. `factory(const std::u8string &name, const std::string &data) -> NodePtr`（雙參，推薦）
+  2. `factory(const std::string &data) -> NodePtr`（單參，若 DSL 帶名稱標頭自動為節點補上名稱）
 * **資料毀損嚴格中止 (Fail-Fast)**：
   1. 若工廠造不出物件（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   2. 若回傳物件掛載時發現名稱與同層具名節點重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
@@ -215,7 +218,6 @@ auto scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, factory);
 }`，緊湊模式：`[]{...}`）。
 * **帶資料匿名容器**：輸出 `[] = "Data"` 標頭（緊湊模式：`[]="Data"{...}`）。
 * **純字串葉節點**：直接輸出 `"Data"`，狀態機保證絕不搶佔後續子容器，同層平級書寫 `"Data"` 與 `[] { ... }` 互為獨立兄弟節點。
-* **容器標頭結構規範與雜訊過濾（Header Invariant & Lenient Noise）**：只要是容器（含有子節點），**結構本體必然由具名標頭 `[Name]` 或匿名標頭 `[]` 起頭**（宣告未命名之容器結構，絕非排版間隔或區隔符號）。若文本中出現未帶標頭之孤立裸大括號 `{ ... }`，前後大括號符號純屬非結構文字雜訊逕行跳過忽略（不開啟子容器層級），內部合規之純字串葉節點直接平級納入當前容器。
 * **空葉節點**：無名無值無子節點表現為空字串引號 `""`。
 
 ```cpp

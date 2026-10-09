@@ -1,4 +1,4 @@
-﻿# 07. 樹狀物件節點與文字 DSL 指南 (Tree & TreeIO)
+# 07. 樹狀物件節點與文字 DSL 指南 (Tree & TreeIO)
 
 本章節介紹 OuroKore 基礎工具庫（`ourokore_base`）中的現代高效能階層物件節點 `TreeNode<T>`（`TreeNodeBase<Derived>`）與文字 DSL 串流工具 `TreeIO`。
 
@@ -85,7 +85,6 @@ OuroKore 文字 DSL 語法規則極致精簡、自洽且無歧義：
 }
 ```
 * **語法界線分明**：`"ItemData"` 為獨立字串葉節點，絕不貪婪搶佔後續容器；`[]` 作為下一個平級容器的顯式標頭，兩者互為兄弟，結構清晰工整。
-* **容器標頭鐵律與雜訊過濾（Header Invariant & Lenient Noise Rule）**：只要是容器（含有子節點），**都必須由具名標頭 `[Name]` 或匿名標頭 `[]` 起頭**（宣告未命名之容器結構，絕非用於排版間隔或兄弟節點區隔）。若文本中出現未帶標頭的孤立裸大括號 `{ ... }`，前後大括號 `{` 與 `}` 符號本身視為非結構文字雜訊逕行跳過忽略（不建立子容器層級），而其內部之合規純字串資料依然作為無名葉節點直接平級納入當前容器。
 * **無歧義保證**：當出現 `[IsAdmin]` 後緊接 `"草藥"`，狀態機能 100% 確定 `IsAdmin` 為無值標籤完成，而 `"草藥"` 為下一個獨立的匿名子節點！
 
 ### 註解語法原生支援
@@ -303,15 +302,17 @@ for (const auto &child : *dungeon) {
 
 ### 6.4 外部工廠反序列化與 TreeIO 特權拓撲掛載（支援異質樹動態還原）
 文字 DSL 是純字串串流，如何還原出具體的異質物件節點？`TreeIO` 支援「反轉控制（Inversion of Control）」外部工廠模式：
-* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，而是將節點名稱與字串內容送給應用端註冊的工廠：`factory(const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity>`。
-* **內部特權拓撲掛載（`AttachChild`）**：由工廠構造完成的異質物件實體，由 `TreeIO` 透過內部特權（`AttachChild` 為 `private`，宣告 `friend class TreeIO;`）安全掛載至父節點。一般外部程式碼無法直接調用 `AttachChild`，確保平時所有節點一律嚴格由父節點原地延伸構造。
+* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，自訂建構職責完全交由外部工廠負責（**舊版預先製造空殼節點之修改器模式與資料轉換模式已全數廢除移除**，徹底杜絕半成品物件）。
+* **支援的兩種工廠簽章**：
+  1. **雙參數工廠（推薦）**：`factory(const std::u8string &name, const std::string &data) -> std::shared_ptr<Node>`
+  2. **單參數工廠**：`factory(const std::string &data) -> std::shared_ptr<Node>`（若節點有名稱標頭，由狀態機自動補上 `SetName(name)`）
+* **內部特權拓撲掛載（`AttachChild`）**：由工廠構造完成的物件實體，由 `TreeIO` 透過內部特權（`AttachChild` 為 `private`，宣告 `friend class TreeIO;`）安全掛載至父節點。一般外部程式碼無法直接調用 `AttachChild`，確保平時所有節點一律嚴格由父節點原地延伸構造。
 * **嚴格資料毀損中斷（Fail-Fast / All-or-Nothing）**：
   1. 若工廠無法識別資料（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   2. 若回傳物件與同層名稱重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
-  3. 若節點名稱包含非法或非 UTF-8 位元組序列（依據 RFC 3629），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
-  4. **寬容雜訊過濾原則**：未帶標頭（無 `[Name]` 亦無 `[]`）的孤立裸大括號 `{ ... }`，前後符號純屬非結構雜訊忽視（不建立子容器層級），區塊內部合規資料則平級收錄於當前容器中。
 
 ```cpp
+// 範例 1：多型異質樹工廠反序列化
 auto hetero_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
     if (data.rfind("MONSTER:", 0) == 0) {
         // 解析資料並動態實例化 MonsterEntity
@@ -326,6 +327,16 @@ auto hetero_factory = [](const std::u8string &name, const std::string &data) -> 
 
 // 若字串合法且無同層同名衝突，回傳完整異質物件樹；若資料損壞或衝突，回傳 nullptr
 auto restored_scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, hetero_factory);
+
+// 範例 2：數值或純資料節點工廠反序列化
+auto int_root = TreeIO::DeserializeFromString<TreeNode<int>>(
+    dsl_text,
+    [](const std::u8string &name, const std::string &data) -> std::shared_ptr<TreeNode<int>> {
+        auto node = TreeNode<int>::CreateRoot(name);
+        node->SetData(std::stoi(data));
+        return node;
+    }
+);
 ```
 
 ---

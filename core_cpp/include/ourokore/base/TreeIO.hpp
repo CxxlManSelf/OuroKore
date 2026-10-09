@@ -483,12 +483,12 @@ public:
     {
       if constexpr (!std::is_same_v<std::decay_t<Func>, std::nullptr_t>)
       {
-        // 1. 工廠模式 A: 接收 (name, raw_str)，傳回 NodePtr
+        // 1. 外部工廠模式 A: 接收 (name, raw_str)，由工廠構造完成後傳回 NodePtr
         if constexpr (requires { { data_handler(name, raw_str) } -> std::convertible_to<NodePtr>; })
         {
           return data_handler(name, raw_str);
         }
-        // 2. 工廠模式 B: 僅接收 (raw_str)，傳回 NodePtr
+        // 2. 外部工廠模式 B: 僅接收 (raw_str)，由工廠構造完成後傳回 NodePtr
         else if constexpr (requires {
                              { data_handler(raw_str) } -> std::convertible_to<NodePtr>;
                            })
@@ -497,38 +497,6 @@ public:
           if (node && !name.empty() && node->GetName().empty())
           {
             node->SetName(name);
-          }
-          return node;
-        }
-        // 3. 修改器模式: 接收 (const NodePtr &, const std::string &)
-        else if constexpr (requires { data_handler(std::declval<NodePtr>(), raw_str); })
-        {
-          NodePtr node = NodeType::MakeNode(name);
-          if (!node)
-          {
-            return nullptr;
-          }
-          if (has_data_str)
-          {
-            data_handler(node, raw_str);
-          }
-          return node;
-        }
-        // 4. 資料轉換模式: 接收 (const std::string &)，回傳非 NodePtr
-        else if constexpr (requires { data_handler(raw_str); })
-        {
-          NodePtr node = NodeType::MakeNode(name);
-          if (!node)
-          {
-            return nullptr;
-          }
-          if (has_data_str)
-          {
-            auto val = data_handler(raw_str);
-            if constexpr (requires { node->SetData(val); })
-            {
-              node->SetData(val);
-            }
           }
           return node;
         }
@@ -897,6 +865,11 @@ public:
         }
         else
         {
+          if (parse_stack.size() == 1 && frame.current_parent == root_holder && !root_adopted_as_container &&
+              root_holder->ChildCount() == 0)
+          {
+            root_adopted_as_container = true;
+          }
           // 孤立裸大括號：缺少標頭引導，前後的 '{' 與 '}' 字符本身視為非結構雜訊！
           // 絕不開啟新容器層級，內部的合法節點（如字串、子容器）直接平鋪隸屬於當前容器
           frame.noise_brace_depth++;

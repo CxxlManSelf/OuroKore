@@ -1107,13 +1107,17 @@ for (const auto &child : *dungeon) {
 
 ### 6.4 外部工廠反序列化與 TreeIO 特權拓撲掛載（支援異質樹動態還原）
 文字 DSL 是純字串串流，如何還原出具體的異質物件節點？`TreeIO` 支援「反轉控制（Inversion of Control）」外部工廠模式：
-* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，而是將節點名稱與字串內容送給應用端註冊的工廠：`factory(const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity>`。
-* **內部特權拓撲掛載（`AttachChild`）**：由工廠構造完成的異質物件實體，由 `TreeIO` 透過內部特權（`AttachChild` 為 `private`，宣告 `friend class TreeIO;`）安全掛載至父節點。一般外部程式碼無法直接調用 `AttachChild`，確保平時所有節點一律嚴格由父節點原地延伸構造。
+* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，自訂建構職責完全交由外部工廠負責（**舊版預先製造空殼節點之修改器模式與資料轉換模式已全數廢除移除**，徹底杜絕半成品物件）。
+* **支援的兩種工廠簽章**：
+  1. **雙參數工廠（推薦）**：`factory(const std::u8string &name, const std::string &data) -> std::shared_ptr<Node>`
+  2. **單參數工廠**：`factory(const std::string &data) -> std::shared_ptr<Node>`（若節點有名稱標頭，由狀態機自動補上 `SetName(name)`）
+* **內部特權拓撲掛載（`AttachChild`）**：由工廠構造完成的物件實體，由 `TreeIO` 透過內部特權（`AttachChild` 為 `private`，宣告 `friend class TreeIO;`）安全掛載至父節點。一般外部程式碼無法直接調用 `AttachChild`，確保平時所有節點一律嚴格由父節點原地延伸構造。
 * **嚴格資料毀損中斷（Fail-Fast / All-or-Nothing）**：
   1. 若工廠無法識別資料（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   2. 若回傳物件與同層名稱重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
 
 ```cpp
+// 範例 1：多型異質樹工廠反序列化
 auto hetero_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {
     if (data.rfind("MONSTER:", 0) == 0) {
         // 解析資料並動態實例化 MonsterEntity
@@ -1128,6 +1132,16 @@ auto hetero_factory = [](const std::u8string &name, const std::string &data) -> 
 
 // 若字串合法且無同層同名衝突，回傳完整異質物件樹；若資料損壞或衝突，回傳 nullptr
 auto restored_scene = TreeIO::DeserializeFromString<BaseEntity>(dsl_text, hetero_factory);
+
+// 範例 2：數值或純資料節點工廠反序列化
+auto int_root = TreeIO::DeserializeFromString<TreeNode<int>>(
+    dsl_text,
+    [](const std::u8string &name, const std::string &data) -> std::shared_ptr<TreeNode<int>> {
+        auto node = TreeNode<int>::CreateRoot(name);
+        node->SetData(std::stoi(data));
+        return node;
+    }
+);
 ```
 
 ---

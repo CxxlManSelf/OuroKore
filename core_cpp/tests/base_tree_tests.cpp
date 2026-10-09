@@ -451,18 +451,23 @@ void TestCustomCRTPNode()
   assert(restored_skills != nullptr);
   assert((*restored_skills)[0]->entity_tag == "火球術");
 
-  // 4. 測試傳入自定義 Node Setter Handler
+  // 4. 測試傳入自定義工廠 Handler
   auto restored_with_handler = TreeIO::DeserializeFromString<CustomEntityNode>(
       dsl,
-      [](const std::shared_ptr<CustomEntityNode> &node, const std::string &val)
+      [](const std::u8string &name, const std::string &val) -> std::shared_ptr<CustomEntityNode>
       {
-        node->entity_tag = "OVERRIDE_" + val;
+        auto node = CustomEntityNode::CreateRoot(name);
+        if (node)
+        {
+          node->entity_tag = "OVERRIDE_" + val;
+        }
+        return node;
       }
   );
   assert(restored_with_handler->entity_tag == "OVERRIDE_勇者");
   assert((*restored_with_handler)[u8"Weapon"]->entity_tag == "OVERRIDE_傳說之劍");
 
-  // 5. 測試完全無 GetData() / SetData() 的純領域節點，全權由 lambda 自行處理 node
+  // 5. 測試完全無 GetData() / SetData() 的純領域節點，全權由工廠自行建立與解構
   class PureCustomNode : public TreeNodeBase<PureCustomNode>
   {
   public:
@@ -489,17 +494,22 @@ void TestCustomCRTPNode()
   std::cout << "  Pure Node DSL: " << pure_dsl << std::endl;
   assert(pure_dsl == "[PureHero]=\"Warrior:100\"");
 
-  // 反序列化：反向由 handler 自行解構並寫入 node 欄位
+  // 反序列化：由工廠建立節點並解構寫入 node 欄位傳回
   auto restored_pure = TreeIO::DeserializeFromString<PureCustomNode>(
       pure_dsl,
-      [](const std::shared_ptr<PureCustomNode> &node, const std::string &s)
+      [](const std::u8string &name, const std::string &s) -> std::shared_ptr<PureCustomNode>
       {
-        auto colon = s.find(':');
-        if (colon != std::string::npos)
+        auto node = PureCustomNode::CreateRoot(name);
+        if (node)
         {
-          node->my_label = s.substr(0, colon);
-          node->my_val = std::stoi(s.substr(colon + 1));
+          auto colon = s.find(':');
+          if (colon != std::string::npos)
+          {
+            node->my_label = s.substr(0, colon);
+            node->my_val = std::stoi(s.substr(colon + 1));
+          }
         }
+        return node;
       }
   );
   assert(restored_pure != nullptr);

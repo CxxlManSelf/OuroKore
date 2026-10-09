@@ -469,7 +469,6 @@ ready_event.set();
 * `ork::utf8::to_string(str)`：統一轉換為標準 `std::string`。
 * `ork::utf8::to_u8string(view)`：轉換為 C++20 原生 `std::u8string`。
 * `ork::utf8::is_string_like_v<T>`：編譯期萃取，判斷是否為類字串型別。
-* `ork::utf8::is_valid(str)`：RFC 3629 標準 UTF-8 合法性檢驗（排除非前導碼、超長編碼、UTF-16 代理字元與截斷序列）。
 
 ---
 

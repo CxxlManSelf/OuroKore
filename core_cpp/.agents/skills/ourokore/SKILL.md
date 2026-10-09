@@ -332,8 +332,12 @@ public:
 };
 auto custom_hero = TreeIO::DeserializeFromString<CustomEntityNode>(
     dsl_text,
-    [](const std::shared_ptr<CustomEntityNode> &node, const std::string &raw) {
-        node->tag = raw; // 支援 In-place Node Setter Handler
+    [](const std::u8string &name, const std::string &raw) -> std::shared_ptr<CustomEntityNode> {
+        auto node = CustomEntityNode::CreateRoot(name);
+        if (node) {
+            node->tag = raw; // 由外部工廠構造完成後傳回，框架特權安全掛載
+        }
+        return node;
     }
 );
 static_assert(std::is_same_v<decltype(custom_hero), std::shared_ptr<CustomEntityNode>>);

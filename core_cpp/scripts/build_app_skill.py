@@ -197,8 +197,11 @@ std::shared_ptr<MonsterEntity> guard = root->PrependChild<MonsterEntity>(u8"Guar
 ```
 
 ### 5.2 外部工廠反序列化與 TreeIO 特權拓撲掛載 (Factory-First Deserialization)
-為支援異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」：反序列化時**不預先製造 node**，僅將字串內容（與節點名稱）送至外部工廠，成型後由 `TreeIO` 透過內部特權（`AttachChild`）掛載至父節點：
-* **工廠簽名**：`factory(const std::u8string &name, const std::string &data) -> NodePtr` 或 `factory(const std::string &data) -> NodePtr`。
+為支援異質樹（Heterogeneous Tree）與嚴格物件構造不變量，`TreeIO` 支援「反轉控制（Inversion of Control）」外部工廠模式（**舊版預先製造空殼節點之修改器模式與資料轉換模式已全數廢除移除**）：
+* **反序列化不預先構造節點**：解析時不盲目實例化預設節點，自訂建構職責完全交由外部工廠負責，成型後由 `TreeIO` 透過內部特權（`AttachChild`）掛載至父節點。
+* **工廠簽名**：
+  1. `factory(const std::u8string &name, const std::string &data) -> NodePtr`（雙參，推薦）
+  2. `factory(const std::string &data) -> NodePtr`（單參，若 DSL 帶名稱標頭自動為節點補上名稱）
 * **資料毀損嚴格中止 (Fail-Fast)**：
   1. 若工廠造不出物件（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   2. 若回傳物件掛載時發現名稱與同層具名節點重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
