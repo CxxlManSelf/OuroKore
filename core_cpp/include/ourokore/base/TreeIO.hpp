@@ -489,7 +489,9 @@ public:
           return data_handler(name, raw_str);
         }
         // 2. 工廠模式 B: 僅接收 (raw_str)，傳回 NodePtr
-        else if constexpr (requires { { data_handler(raw_str) } -> std::convertible_to<NodePtr>; })
+        else if constexpr (requires {
+                             { data_handler(raw_str) } -> std::convertible_to<NodePtr>;
+                           })
         {
           auto node = data_handler(raw_str);
           if (node && !name.empty() && node->GetName().empty())
@@ -931,7 +933,6 @@ public:
 
     return root_holder;
   }
-
 };
 
 }  // namespace ork::base
