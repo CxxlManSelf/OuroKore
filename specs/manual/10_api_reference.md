@@ -1,4 +1,4 @@
-# 10. 公開 C++ API 參照手冊 (API Reference)
+﻿# 10. 公開 C++ API 參照手冊 (API Reference)
 
 本手冊彙整 OuroKore 面向應用開發者、外掛實作者與宿主主程式之所有公開核心類別、工具與介面，作為全套手冊之終端速查字典附錄。
 
@@ -169,6 +169,8 @@
 * **文字 DSL 串流 `TreeIO`**：
   * `Serialize(ostream, root, ...)` / `SerializeCompact(...)` / `SerializeToString(...)`
   * `Deserialize(istream, ...)` / `DeserializeFromString(...)`：支援外部工廠模式 `factory(name, data) -> NodePtr`，反轉職責不預先製造 node；工廠造不出物件或同層具名同名衝突時，視為資料毀損立即中止並回傳 `nullptr`。
+    * ⚠️ **容器標頭鐵律與格式毀損檢驗 (Fail-Fast)**：只要是容器（含有子節點），**都必須由具名標頭 [Name] 或匿名標頭 [] 帶頭**。若文本中出現任何未帶標頭之裸大括號 { ... }，剖析器視為文件不符規格與嚴重毀損，立即中止全體解析並回傳 
+ullptr。
   * 模式列舉：`CompactMode::Pretty`（Allman 風格排版）/ `CompactMode::Compact`（緊湊模式，保留關鍵字等號 `=`）。
 
 ---

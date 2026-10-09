@@ -877,22 +877,9 @@ public:
         }
         else
         {
-          // 純匿名容器（例如 { ... }）
-          if (parse_stack.size() == 1 && frame.current_parent == root_holder && !root_adopted_as_container &&
-              root_holder->ChildCount() == 0)
-          {
-            target = root_holder;
-            root_adopted_as_container = true;
-          }
-          else
-          {
-            NodePtr anon_container = create_node(u8"", "", false);
-            if (!anon_container || !frame.current_parent->AttachChild(anon_container))
-            {
-              return nullptr;
-            }
-            target = anon_container;
-          }
+          // 容器標頭鐵律：只要是容器，都必須由具名標頭 [Name] 或匿名標頭 [] 帶頭！
+          // 任何無標頭引導的孤立裸大括號，一律視為語法錯誤與文件毀損立即終止！
+          return nullptr;
         }
 
         parse_stack.push_back({std::move(target), term, u8"", false, false, nullptr});

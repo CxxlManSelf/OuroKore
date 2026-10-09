@@ -1,4 +1,4 @@
-# 07. 樹狀物件節點與文字 DSL 指南 (Tree & TreeIO)
+﻿# 07. 樹狀物件節點與文字 DSL 指南 (Tree & TreeIO)
 
 本章節介紹 OuroKore 基礎工具庫（`ourokore_base`）中的現代高效能階層物件節點 `TreeNode<T>`（`TreeNodeBase<Derived>`）與文字 DSL 串流工具 `TreeIO`。
 
@@ -85,6 +85,9 @@ OuroKore 文字 DSL 語法規則極致精簡、自洽且無歧義：
 }
 ```
 * **語法界線分明**：`"ItemData"` 為獨立字串葉節點，絕不貪婪搶佔後續容器；`[]` 作為下一個平級容器的顯式標頭，兩者互為兄弟，結構清晰工整。
+* **容器標頭鐵律（Header Invariant & Fail-Fast）**：只要是容器（含有子節點），**都必須由具名標頭 [Name] 或匿名標頭 [] 帶頭**（大括號 { ... } 絕不可作為無標頭的孤立實體出現）。若文本中出現任何未帶標頭的裸大括號（包含頂層或任何子階層），剖析器將判定為格式毀損並終止解析（回傳 
+ullptr）。
+ullptr）。
 * **無歧義保證**：當出現 `[IsAdmin]` 後緊接 `"草藥"`，狀態機能 100% 確定 `IsAdmin` 為無值標籤完成，而 `"草藥"` 為下一個獨立的匿名子節點！
 
 ### 註解語法原生支援
@@ -308,6 +311,8 @@ for (const auto &child : *dungeon) {
   1. 若工廠無法識別資料（回傳 `nullptr`），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   2. 若回傳物件與同層名稱重複，同樣視為毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
   3. 若節點名稱包含非法或非 UTF-8 位元組序列（依據 RFC 3629），視為資料毀損，**立即中止全體解析並向呼叫端回傳 `nullptr`**。
+  4. 若容器缺失標頭（任何未帶具名 [Name] 或匿名 [] 標頭的孤立裸大括號 { ... }），視為語法殘缺與資料毀損，**立即中止全體解析並向呼叫端回傳 
+ullptr**。
 
 ```cpp
 auto hetero_factory = [](const std::u8string &name, const std::string &data) -> std::shared_ptr<BaseEntity> {

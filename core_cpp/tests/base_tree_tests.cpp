@@ -779,12 +779,15 @@ void TestArrayOfObjectsSerialization()
   assert(r_obj2->HasChild(u8"item2"));
   assert((*r_obj2)[u8"item2"]->GetData() == "B");
 
-  // 2. 直接以原始 DSL 文字反序列化驗證（相容舊式括號與大括號）
+  // 2. 直接以標準 DSL 文字反序列化驗證（包含匿名子容器標頭 []）
   std::string user_dsl = R"(
+  []
   {
+    []
     {
       [item1] = "A"
     }
+    []
     {
       [item2] = "B"
     }
@@ -1307,8 +1310,8 @@ void TestExplicitAnonymousContainerDisambiguation()
   assert((*restored_compact2)[1]->GetData() == "ContainerPayload");
   assert((*restored_compact2)[1]->ChildCount() == 2);
 
-  // 4. 測試純大括號相容性：字串緊接純大括號亦能消歧義互為兄弟
-  std::string dsl3 = R"(
+  // 4. 測試缺失顯式標頭之殘缺語法防禦：字串後接裸大括號不合規格，視為文件毀損回傳 nullptr
+  std::string invalid_dsl = R"(
 {
   "ItemData"
   {
@@ -1317,11 +1320,8 @@ void TestExplicitAnonymousContainerDisambiguation()
   }
 }
 )";
-  auto root3 = TreeIO::DeserializeFromString(dsl3);
-  assert(root3 != nullptr);
-  assert(root3->ChildCount() == 2);
-  assert((*root3)[0]->GetData() == "ItemData");
-  assert((*root3)[1]->ChildCount() == 2);
+  auto invalid_root = TreeIO::DeserializeFromString(invalid_dsl);
+  assert(invalid_root == nullptr);  // 缺失顯式標頭 []，Fail-Fast 判定為文件毀損回傳 nullptr！
 
   std::cout << " -> 通過！" << std::endl;
 }
