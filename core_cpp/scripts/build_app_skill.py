@@ -236,11 +236,24 @@ TreeIO::Serialize(std::cout, root, CompactMode::Pretty);
 std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 ```
 
-### 5.4 整樹走訪黃金法則（死鎖防禦）
+### 5.4 容器能力、雜訊零參與與根節點閉環鐵律 (Container Capability & Root Closure Invariant)
+1. **容器能力判定**：
+   - 只有以 `[Name]` 或 `[]` 帶頭宣告的 `{}` 才具備容器能力（如 `[] { ... }`、`[root] { ... }`、`[Key] = "Val" { ... }`）。
+2. **雜訊零參與原則 (Zero Noise Participation)**：
+   - 未以 `[]` 帶頭的 `{` 與 `}` 純屬字元雜訊（同空白、註解），**絕對不參與容器 matching 與計數**。
+   - 雜訊絕不開啟容器層級，絕不可讓解析結果莫名滋生 `[]` 匿名容器。
+   - 雜訊不要求成對閉合，亦不可搶佔/誤關閉外層真正的容器。
+3. **廣義根節點閉環 (Root Closure)**：
+   - 根節點閉環不限於容器節點，純標籤（`[root]`、`[]`）、純資料（`"root"`）與具名賦值（`[Key] = "Val"`）均在完成時宣告閉環。
+   - 首個根節點一旦完成閉環，**後續緊隨之所有資料全數忽略不用管（Early Exit）**，精準拆箱傳回該節點實體。
+4. **未能閉環即資料毀損 (Fail-Fast)**：
+   - 反之，中括號截斷（`[root`）、引號截斷（`"root`）、等號懸空無值（`[Key] =`）、真正容器大括號未閉合、或無任何節點內容，100% 判定為資料毀損，`TreeIO::Deserialize` 立即回傳 `nullptr`。
+
+### 5.5 整樹走訪黃金法則（死鎖防禦）
 * ⚠️ **高壓線禁忌**：整棵樹共享同一個 `std::shared_mutex`（不可重入）。在持讀鎖走訪期間（`for (auto &child : *node)`），**絕對嚴禁調用 `AddChild`、`PrependChild`、`PushElement`、`RemoveChild` 等異動結構介面**，否則立即引發不可重入死鎖！
 * 異動需求請遵循「第一階段持讀鎖收集目標 -> 釋放讀鎖 -> 第二階段持寫鎖批次修改」之安全範式。
 
-### 5.5 節點清理狀態驗證 (TreeCleanupTracker)
+### 5.6 節點清理狀態驗證 (TreeCleanupTracker)
 * 欲檢查「整棵樹的所有節點是否均已全數清除釋放」，透過 `root->GetCleanupTracker()` 取得輕量弱引用共享鎖追蹤器：
 * `tracker.AreAllNodesCleanedUp()` / `tracker.IsCleanedUp()`：以 $O(1)$ 常數時間精準判定整棵樹是否已全數銷毀（鎖已 expired 即代表所有持有該鎖的節點均已析構），零遍歷開銷。
 '''

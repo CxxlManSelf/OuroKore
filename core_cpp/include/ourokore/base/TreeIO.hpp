@@ -543,9 +543,62 @@ public:
 
     auto next = [&]() -> int { return (pos < len) ? static_cast<unsigned char>(text[pos++]) : -1; };
 
-    // 讀取名稱至 ']'（支援 \] 與 \\ 轉義）
-    auto read_name = [&]() -> std::string
+    // 前瞻下一個有效字符（自動跳過空白與所有風格註解）
+    auto peek_next_token = [&]() -> int
     {
+      size_t p = pos;
+      while (p < len)
+      {
+        char c = text[p];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+        {
+          p++;
+          continue;
+        }
+        if (c == '/' && p + 1 < len)
+        {
+          if (text[p + 1] == '/')
+          {
+            p += 2;
+            while (p < len && text[p] != '\n' && text[p] != '\r')
+            {
+              p++;
+            }
+            continue;
+          }
+          if (text[p + 1] == '*')
+          {
+            p += 2;
+            while (p + 1 < len)
+            {
+              if (text[p] == '*' && text[p + 1] == '/')
+              {
+                p += 2;
+                break;
+              }
+              p++;
+            }
+            continue;
+          }
+        }
+        if (c == '#')
+        {
+          p++;
+          while (p < len && text[p] != '\n' && text[p] != '\r')
+          {
+            p++;
+          }
+          continue;
+        }
+        return static_cast<unsigned char>(c);
+      }
+      return -1;
+    };
+
+    // 讀取名稱至 ']'（支援 \] 與 \\ 轉義，回報是否完整閉合）
+    auto read_name = [&](bool &closed) -> std::string
+    {
+      closed = false;
       std::string name;
       while (pos < len)
       {
@@ -577,6 +630,7 @@ public:
         }
         else if (c == ']')
         {
+          closed = true;
           break;
         }
         else
@@ -587,9 +641,10 @@ public:
       return name;
     };
 
-    // 讀取字串內容至 '"'（原始字節直接讀取，支援 \"、\\、\0、\n、\r、\t 轉義）
-    auto read_string = [&]() -> std::string
+    // 讀取字串內容至 '"'（原始字節直接讀取，支援 \"、\\、\0、\n、\r、\t 轉義，回報是否完整閉合）
+    auto read_string = [&](bool &closed) -> std::string
     {
+      closed = false;
       std::string content;
       while (pos < len)
       {
@@ -624,6 +679,7 @@ public:
         }
         else if (c == '"')
         {
+          closed = true;
           break;
         }
         else
@@ -640,7 +696,6 @@ public:
     {
       return nullptr;
     }
-    bool root_adopted_as_container = false;
 
     // 非遞迴顯式走訪堆疊幀 (免疫巨深階層 Call Stack Overflow)
     struct ParseFrame
@@ -651,12 +706,11 @@ public:
       bool has_pending_name{false};
       bool has_equal{false};
       NodePtr active_child{nullptr};
-      size_t noise_brace_depth{0};
     };
 
     std::vector<ParseFrame> parse_stack;
     parse_stack.reserve(64);
-    parse_stack.push_back({root_holder, '\0', u8"", false, false, nullptr, 0});
+    parse_stack.push_back({root_holder, '\0', u8"", false, false, nullptr});
 
     while (pos < len && !parse_stack.empty())
     {
@@ -671,29 +725,23 @@ public:
       // 遇到容器終止符或閉合大括號（'}'）
       if (ch == '}')
       {
-        if (frame.noise_brace_depth > 0)
-        {
-          // 對應未引導裸大括號之閉合字元，此字符純屬雜訊無視之
-          next();
-          frame.noise_brace_depth--;
-          continue;
-        }
-
         if (frame.terminator == '}')
         {
           next();  // 消耗終止符
-          if (frame.has_pending_name && frame.current_parent)
-          {
-            NodePtr tag = create_node(frame.pending_name, "", false);
-            if (!tag || !frame.current_parent->AttachChild(tag))
-            {
-              return nullptr;  // 資料毀損或回傳物件與同層具名名稱重複
-            }
-            frame.has_pending_name = false;
-          }
           parse_stack.pop_back();  // 顯式彈棧：結束當前層級，零 Call Stack 消耗
+
+          // 核心規範鐵律：一個根節點完成閉環之後的資料就不用管它了（直接結束解析）
+          if (parse_stack.size() == 1)
+          {
+            break;
+          }
+
           continue;
         }
+
+        // 核心規範鐵律：雜訊沒有參與這種事，無對應容器之孤立閉合大括號 '}' 純屬雜訊無視之
+        next();
+        continue;
       }
 
       // 0. 註解處理：支援 // 單行註解、/* ... */ 區塊註解、# 腳本風格單行註解
@@ -742,13 +790,43 @@ public:
         continue;
       }
 
-      // 1. 遇到節點名稱標記 '['：建立具名新節點名稱緩衝
+      // 1. 遇到節點名稱標記 '['：具名節點或純標籤
       if (ch == '[')
       {
-        // 若先前已有未完結之具名標籤（例如 [Tag1][Tag2]），先產出前一個純標籤
-        if (frame.has_pending_name && frame.current_parent)
+        if (frame.has_equal)
         {
-          NodePtr tag = create_node(frame.pending_name, "", false);
+          return nullptr;  // 前置等號尚未獲取資料值即被新標籤截斷，資料毀損
+        }
+
+        next();  // 消耗 '['
+        bool name_closed = false;
+        std::string name_s = read_name(name_closed);
+        if (!name_closed || !ork::utf8::is_valid(name_s))
+        {
+          return nullptr;  // 中括號未閉合或包含非法 UTF-8，立即判定毀損終止解析
+        }
+
+        int next_tok = peek_next_token();
+        if (next_tok == '=')
+        {
+          // 準備賦值
+          frame.pending_name = ork::utf8::to_u8string(name_s);
+          frame.has_pending_name = true;
+          frame.has_equal = false;
+          frame.active_child = nullptr;
+        }
+        else if (next_tok == '{')
+        {
+          // 準備開啟具名容器（[root] { ... }）或匿名容器（[] { ... }）
+          frame.pending_name = ork::utf8::to_u8string(name_s);
+          frame.has_pending_name = true;
+          frame.has_equal = false;
+          frame.active_child = nullptr;
+        }
+        else
+        {
+          // 純標籤節點：[root] 或 []（無名、無資料、無下節點）
+          NodePtr tag = create_node(ork::utf8::to_u8string(name_s), "", false);
           if (!tag || !frame.current_parent->AttachChild(tag))
           {
             return nullptr;
@@ -756,21 +834,13 @@ public:
           frame.has_pending_name = false;
           frame.pending_name.clear();
           frame.has_equal = false;
-        }
-
-        next();  // 消耗 '['
-        std::string name_s = read_name();
-        if (frame.current_parent)
-        {
-          // 依照 ORKT 規範（RFC 3629 / §9.5 Fail-Fast）：名稱必須為合法 UTF-8 編碼
-          if (!ork::utf8::is_valid(name_s))
-          {
-            return nullptr;  // 名稱包含非法 UTF-8 位元組序列，立即判定毀損終止解析
-          }
-          frame.pending_name = ork::utf8::to_u8string(name_s);
-          frame.has_pending_name = true;
-          frame.has_equal = false;
           frame.active_child = nullptr;
+
+          // 核心規範鐵律：若處於頂層，純標籤根節點已完成閉環，後續資料不用管它了
+          if (parse_stack.size() == 1)
+          {
+            break;
+          }
         }
         continue;
       }
@@ -790,60 +860,73 @@ public:
       if (ch == '"')
       {
         next();  // 消耗 '"'
-        std::string data_s = read_string();
-
-        if (frame.current_parent)
+        bool str_closed = false;
+        std::string data_s = read_string(str_closed);
+        if (!str_closed)
         {
-          if (frame.has_pending_name && frame.has_equal)
+          return nullptr;  // 引號未閉合，立即判定毀損終止解析
+        }
+
+        if (frame.has_pending_name && frame.has_equal)
+        {
+          // 具名節點的資料賦值（[Key] = "Val"）
+          NodePtr child = create_node(frame.pending_name, data_s, true);
+          if (!child || !frame.current_parent->AttachChild(child))
           {
-            // 具名節點的資料賦值！
-            NodePtr child = create_node(frame.pending_name, data_s, true);
-            if (!child || !frame.current_parent->AttachChild(child))
-            {
-              return nullptr;  // 造不出或回傳物件與同層名稱重複，視為資料毀損！
-            }
+            return nullptr;  // 建立失敗或同層名稱重複，視為資料毀損
+          }
+          frame.has_pending_name = false;
+          frame.pending_name.clear();
+          frame.has_equal = false;
+
+          int next_tok = peek_next_token();
+          if (next_tok == '{')
+          {
+            // 緊隨子容器（[Key] = "Val" { ... }）
             frame.active_child = child;
-            frame.has_pending_name = false;
-            frame.pending_name.clear();
-            frame.has_equal = false;
           }
           else
           {
-            // 若有尚未結算的 pending_name（但無等號），先結算前置標籤
-            if (frame.has_pending_name)
-            {
-              NodePtr tag = create_node(frame.pending_name, "", false);
-              if (!tag || !frame.current_parent->AttachChild(tag))
-              {
-                return nullptr;
-              }
-              frame.has_pending_name = false;
-              frame.pending_name.clear();
-              frame.has_equal = false;
-            }
-
-            // 獨立匿名節點！純字串葉節點絕不搶佔後續子容器，杜絕語法歧義
-            NodePtr anon = create_node(u8"", data_s, true);
-            if (!anon || !frame.current_parent->AttachChild(anon))
-            {
-              return nullptr;
-            }
             frame.active_child = nullptr;
-            frame.has_equal = false;
+            // 核心規範鐵律：若處於頂層，具名賦值根節點已完成閉環，後續資料不用管它了
+            if (parse_stack.size() == 1)
+            {
+              break;
+            }
+          }
+        }
+        else
+        {
+          // 匿名純字串節點（"root" 純資料根節點）
+          NodePtr anon = create_node(u8"", data_s, true);
+          if (!anon || !frame.current_parent->AttachChild(anon))
+          {
+            return nullptr;
+          }
+          frame.active_child = nullptr;
+          frame.has_equal = false;
+
+          int next_tok = peek_next_token();
+          if (next_tok != '{')
+          {
+            // 核心規範鐵律：若處於頂層，純資料根節點已完成閉環，後續資料不用管它了
+            if (parse_stack.size() == 1)
+            {
+              break;
+            }
           }
         }
         continue;
       }
 
-      // 4. 遇到容器開啟符 '{'：顯式壓棧進入深層，完全非遞迴
+      // 4. 遇到容器開啟符 '{'：以 [] 帶頭的 {} 才具備容器能力
       if (ch == '{')
       {
         char term = '}';
-        next();  // 消耗 '{'
-
         if (frame.has_pending_name)
         {
-          // 純具名容器（例如 [Inventory] { ... }）或匿名容器（[] { ... }）
+          next();  // 消耗 '{'
+          // 純具名容器（[Inventory] { ... }）或顯式匿名容器（[] { ... }）
           NodePtr container_node = create_node(frame.pending_name, "", false);
           if (!container_node || !frame.current_parent->AttachChild(container_node))
           {
@@ -853,51 +936,43 @@ public:
           frame.pending_name.clear();
           frame.has_equal = false;
           frame.active_child = nullptr;
-          parse_stack.push_back({std::move(container_node), term, u8"", false, false, nullptr, 0});
+          parse_stack.push_back({std::move(container_node), term, u8"", false, false, nullptr});
+          continue;
         }
         else if (frame.active_child)
         {
-          // 緊接在具名賦值節點後的子容器（例如 [Player] = "Hero" { ... } 或 [] = "Data" { ... }）
+          next();  // 消耗 '{'
+          // 緊接在具名賦值節點後的子容器（[Player] = "Hero" { ... }）
           NodePtr child = frame.active_child;
           frame.active_child = nullptr;
           frame.has_equal = false;
-          parse_stack.push_back({std::move(child), term, u8"", false, false, nullptr, 0});
+          parse_stack.push_back({std::move(child), term, u8"", false, false, nullptr});
+          continue;
         }
         else
         {
-          if (parse_stack.size() == 1 && frame.current_parent == root_holder && !root_adopted_as_container &&
-              root_holder->ChildCount() == 0)
-          {
-            root_adopted_as_container = true;
-          }
-          // 孤立裸大括號：缺少標頭引導，前後的 '{' 與 '}' 字符本身視為非結構雜訊！
-          // 絕不開啟新容器層級，內部的合法節點（如字串、子容器）直接平鋪隸屬於當前容器
-          frame.noise_brace_depth++;
+          // 核心規範鐵律：雜訊沒有參與這種事，沒有 [] 帶頭的 '{' 純屬雜訊直接無視消耗！
+          next();
+          continue;
         }
-        continue;
       }
 
       // 5. 任何其他符號或空白或非預期字元：由寬容狀態機安全無視！
       next();
     }
 
-    // 若解析完畢時最外層有殘留的具名標籤，結算之
-    if (parse_stack.size() == 1 && parse_stack.back().has_pending_name)
+    // 核心規範鐵律：一個根節點還沒有完成閉環，但已經沒資料了，將被當作資料已毀損（回傳 nullptr）
+    if (parse_stack.size() > 1 ||
+        (!parse_stack.empty() && (parse_stack.back().has_pending_name || parse_stack.back().has_equal)) ||
+        (root_holder->ChildCount() == 0))
     {
-      auto &top_frame = parse_stack.back();
-      NodePtr tag = create_node(top_frame.pending_name, "", false);
-      if (!tag || !top_frame.current_parent->AttachChild(tag))
-      {
-        return nullptr;
-      }
-      top_frame.has_pending_name = false;
+      return nullptr;  // 未能閉環（大括號未閉合、中括號/等號殘留、無節點內容），判定為資料毀損
     }
 
     // 拆箱判定：
-    // 只有當 root_holder 未被頂層顯式括號直接作為匿名容器使用，
-    // 且頂層恰好僅解析出唯一一個獨立子節點時，方可進行安全拆箱（將其從 root_holder 解除綁定傳回）。
-    // 若頂層為匿名容器或多節點，則完整保留容器拓撲，絕不破壞結構一致性。
-    if (!root_adopted_as_container && root_holder->ChildCount() == 1)
+    // 一個節點是否具有容器能力，以 [] 或 [Name] 帶頭的 {} 才算。
+    // 沒有 [] 帶頭之 {} 純屬文字雜訊，頂層首個閉環節點安全拆箱傳回該實體。
+    if (root_holder->ChildCount() == 1)
     {
       auto first = root_holder->GetFirstChild();
       root_holder->RemoveChild(first);

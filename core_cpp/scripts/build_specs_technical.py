@@ -800,7 +800,174 @@ End Procedure
 * 背景執行緒在收到握手或達到逾時限制後，才執行作業系統級的動態庫卸載。
 ''', encoding="utf-8")
 
-    print("✅ specs/technical/ 全套 4 份高標準技術手冊已依據中性語言 RFC 規範重新生成完畢！")
+    # =========================================================================
+    # 05_orkt_format_spec.md
+    # =========================================================================
+    (tech_dir / "05_orkt_format_spec.md").write_text('''# 05. ORKT 樹狀結構文字交換格式規範 (ORKT Tree DSL RFC)
+
+本文件定義 OuroKore 樹狀結構文字交換格式（OuroKore Tree Text Format，簡稱 **ORKT**）的正式文法、有限狀態機（FSM）語意、容器能力判定與資料毀損公理。
+任何語言（C++、Rust、C#、Python、Go 等）實作 ORKT 相容之解析器與序列化器時，必須 100% 遵守本規範之狀態機轉換與防禦鐵律。
+
+---
+
+## 📜 1. 詞法元素與字串編碼 (Lexical Grammar & UTF-8 Invariant)
+
+1. **唯一強制字串編碼**：ORKT 串流內部文字 100% 強制使用 **UTF-8** 編碼。節點名稱若包含非法 UTF-8 位元組序列，解析器必須立即判定毀損並終止解析（Fail-Fast）。
+2. **註解類型（Lexical Comments）**：
+   - 單行註解：以 `//` 或 `#` 開頭，消耗至行尾（`\\n` / `\\r`）或 EOF。
+   - 區塊註解：以 `/*` 開頭，消耗至最近的 `*/` 或 EOF。
+3. **字串與二進位安全（String Literal）**：
+   - 字串由成對雙引號 `"` 包裹。
+   - 支援 0~255 全位元組原始資料（二進位安全零膨脹）。
+   - 轉義字元支援：`\\\\`、`\\"`、`\\0`、`\\n`、`\\r`、`\\t`。
+4. **節點名稱標籤（Node Identifier）**：
+   - 由成對中括號 `[` 與 `]` 包裹。
+   - 具名標籤：`[Name]`（支援 `\\]` 與 `\\\\` 轉義）。
+   - 匿名標籤：`[]`（空標籤，無名稱）。
+
+---
+
+## 📦 2. 容器能力判定公理 (Container Capability Invariant)
+
+> **核心定理：一個語法節點是否具備容器能力（能收納子節點），必須且只能以 `[]` 帶頭宣告的 `{}` 才算。**
+
+1. **合法容器形態（Container Nodes）**：
+   - **具名純容器**：`[Name] { ... }`
+   - **顯式匿名容器**：`[] { ... }`
+   - **具名帶值容器**：`[Name] = "Data" { ... }`
+   - **匿名帶值容器**：`[] = "Data" { ... }`
+2. **雜訊零參與公理 (Zero Noise Participation Invariant)**：
+   - 凡是**未以 `[]` 帶頭的 `{` 與 `}`，全體純屬文字雜訊**（與空白、換行、註解同等地位）！
+   - **雜訊絕對不具備容器能力**，絕不開啟新的結構層級，絕不可讓解析結果莫名滋生 `[]` 匿名容器。
+   - **雜訊徹底不參與容器成對匹配**：
+     - 雜訊 `{` 不要求成對閉合，也不計入巢狀深度。
+     - 雜訊 `{` 絕對不可搶佔或誤關閉外層真正的容器。
+
+```text
+範例：
+[]
+{
+{ // 雜訊：未以 [] 帶頭，純屬字元雜訊直接丟棄無視！
+    [ServerConfig] = "Production"
+    [ServerConfig2] = "Production"
+} // 此處 '}' 精準閉合第二行的真正容器，成功輸出包含兩項設定之匿名容器！
+```
+
+---
+
+## 🎯 3. 廣義根節點閉環狀態機 (Root Node Closure & Early Exit RFC)
+
+ORKT 在哲學上嚴格維持單一根節點（Single Root）交換模型。
+根節點閉環絕不限定於容器節點，任何**足以獨立完成一個節點**的語法單元，只要確認後續無接續容器 `{`，即宣告**根節點閉環完成**。
+
+### 3.1 根節點閉環判定表
+
+| 節點形態 | 語法結構 | 閉環判定時機 | 說明 |
+| :--- | :--- | :--- | :--- |
+| **具名純標籤** | `[root]` | 讀取完 `]`，後續非 `=` 且非 `{` | 具名、無資料、無下節點，立即閉環。 |
+| **匿名純標籤** | `[]` | 讀取完 `]`，後續非 `=` 且非 `{` | 無名、無資料、無下節點，立即閉環。 |
+| **純資料葉節點** | `"root"` | 讀取完引號 `"`，後續非 `{` | 無名、純字串資料、無下節點，立即閉環。 |
+| **具名賦值節點** | `[Key] = "Val"` | 讀取完數值字串，後續非 `{` | 具名葉節點，立即閉環。 |
+| **真正容器節點** | `[root] { ... }` / `[] { ... }` | 頂層匹配到對應閉合 `}` | 成對括號結束時完成閉環。 |
+
+### 3.2 閉環後忽略鐵律 (Early Exit on Closure)
+* 當頂層首個根節點完成閉環時，**解析器立即終止解析（Break Loop）**。
+* 緊隨在後的任何資料、多餘節點、多餘字串或文字雜訊，**全數忽略不用管它**。
+* 拆箱傳回該唯一的根節點實體。
+
+---
+
+## 🚨 4. Fail-Fast 資料毀損判定公理 (Data Corruption Axiom)
+
+> **核心公理：反過來說，若無法讓根節點完成閉環且資料已耗盡（EOF），100% 判定為資料毀損。**
+
+任何使節點處於懸空、截斷或不完整狀態的情形，解析器必須立即終止並回傳 NULL / nullptr：
+1. **中括號截斷**：`[root` 遭遇 EOF 前未匹配到結尾 `]`。
+2. **字串截斷**：`"root` 遭遇 EOF 前未匹配到結尾 `"`。
+3. **等號懸空**：`[Key] =` 遭遇 EOF 或等號後無有效值即遭遇新標籤 `[`。
+4. **容器未閉合**：真正容器（如 `[root] { ...` 或 `[] { ...`）遭遇 EOF 仍未匹配到對應的 `}`。
+5. **空資料無節點**：輸入字串為空（`""`）或僅包含註解與空白，未能產出任何合法根節點。
+
+---
+
+## 📊 5. 跨語言有限狀態機虛擬碼 (Neutral FSM Pseudocode)
+
+```text
+Structure ParseFrame:
+    current_parent: NodeHandle
+    terminator: Char // 僅在真正容器開啟時設為 '}'
+End Structure
+
+Function Deserialize(text: String) -> Nullable<NodeHandle>:
+    Let root_holder = CreateRootNode("")
+    Let stack = Stack<ParseFrame>()
+    stack.Push(ParseFrame(root_holder, '\0'))
+    
+    While HasTokens() Do
+        SkipWhitespaceAndComments()
+        Let token = NextToken()
+        
+        If token == '}' Then
+            If stack.Top().terminator == '}' Then
+                stack.Pop()
+                If stack.Size() == 1 Then
+                    Break // 頂層根容器閉環完成，立即終止！
+                End If
+            End If
+            // 雜訊 '}' 直接丟棄無視
+            Continue
+        End If
+        
+        If token == '[' Then
+            Let name = ReadName() // 未閉合則 Return Null
+            If PeekNextToken() == '=' Then
+                // 等待等號賦值
+            Else If PeekNextToken() == '{' Then
+                // 等待開啟真正容器
+            Else
+                // 純標籤節點：[root] 或 []
+                Let tag = CreateNode(name)
+                stack.Top().current_parent.Attach(tag)
+                If stack.Size() == 1 Then
+                    Break // 頂層純標籤根節點閉環完成，立即終止！
+                End If
+            End If
+            Continue
+        End If
+        
+        If token == '"' Then
+            Let data = ReadString() // 未閉合則 Return Null
+            Let node = CreateNode(pending_name, data)
+            stack.Top().current_parent.Attach(node)
+            If PeekNextToken() != '{' And stack.Size() == 1 Then
+                Break // 頂層葉節點根節點閉環完成，立即終止！
+            End If
+            Continue
+        End If
+        
+        If token == '{' Then
+            If HasPendingName() Or HasActiveChild() Then
+                // 以 [] 帶頭宣告之真正容器開啟！
+                Let container = CreateNode(pending_name)
+                stack.Top().current_parent.Attach(container)
+                stack.Push(ParseFrame(container, '}'))
+            Else
+                // 沒有 [] 帶頭的 '{' 純屬雜訊無視，絕不開啟容器！
+            End If
+            Continue
+        End If
+    End While
+    
+    If stack.Size() > 1 Or root_holder.ChildCount() == 0 Then
+        Return Null // 未能閉環，判定資料毀損！
+    End If
+    
+    Return root_holder.GetFirstChild() // 永遠精準拆箱唯一的根節點實體
+End Function
+```
+''', encoding="utf-8")
+
+    print("✅ specs/technical/ 全套 5 份高標準技術手冊已依據中性語言 RFC 規範重新生成完畢！")
 
 if __name__ == "__main__":
     import sys

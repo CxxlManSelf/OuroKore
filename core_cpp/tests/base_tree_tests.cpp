@@ -556,9 +556,9 @@ void TestUnboxingAndAnonymousContainerSafety()
 {
   std::cout << "[測試 11] 單元素匿名容器與精準拆箱拓撲保全測試..." << std::endl;
 
-  // 1. 頂層匿名單元素容器：絕不可被脫殼降級為葉節點
+  // 1. 頂層顯式匿名單元素容器：以 [] 帶頭的 {} 才具備容器能力，拓撲保全不被降級為葉節點
   {
-    auto single_arr = TreeIO::DeserializeFromString("{\"OnlyOneItem\"}");
+    auto single_arr = TreeIO::DeserializeFromString("[]{\"OnlyOneItem\"}");
     assert(single_arr != nullptr);
     assert(single_arr->ChildCount() == 1);
     assert((*single_arr)[0] != nullptr);
@@ -566,18 +566,35 @@ void TestUnboxingAndAnonymousContainerSafety()
     assert(single_arr->GetName().empty());  // 匿名容器不應帶有 __ROOT__ 魔術名稱
   }
 
-  // 2. 頂層匿名多元素容器：與單元素容器結構完全一致
+  // 1b. 未以 [] 帶頭的裸大括號 {"OnlyOneItem"}：不具備容器能力，大括號純屬雜訊，拆箱為純字串葉節點
   {
-    auto multi_arr = TreeIO::DeserializeFromString("{\"ItemA\" \"ItemB\"}");
+    auto bare_leaf = TreeIO::DeserializeFromString("{\"OnlyOneItem\"}");
+    assert(bare_leaf != nullptr);
+    assert(bare_leaf->ChildCount() == 0);
+    assert(bare_leaf->GetData() == "OnlyOneItem");
+    assert(bare_leaf->GetName().empty());
+  }
+
+  // 2. 頂層顯式匿名多元素容器：必須以 [] 帶頭宣告容器能力
+  {
+    auto multi_arr = TreeIO::DeserializeFromString("[]{\"ItemA\" \"ItemB\"}");
     assert(multi_arr != nullptr);
     assert(multi_arr->ChildCount() == 2);
     assert((*multi_arr)[0]->GetData() == "ItemA");
     assert((*multi_arr)[1]->GetData() == "ItemB");
   }
 
-  // 3. 頂層匿名單欄位容器：外層容器絕不可被破壞
+  // 2b. 未以 [] 帶頭的 {"ItemA" "ItemB"}：{} 純屬雜訊，首個節點 "ItemA" 閉環後即刻傳回，後續全數忽略，絕不長出 []
   {
-    auto single_obj = TreeIO::DeserializeFromString("{ [Setting] = \"On\" }");
+    auto bare_first = TreeIO::DeserializeFromString("{\"ItemA\" \"ItemB\"}");
+    assert(bare_first != nullptr);
+    assert(bare_first->ChildCount() == 0);
+    assert(bare_first->GetData() == "ItemA");
+  }
+
+  // 3. 頂層顯式匿名單欄位容器：帶有 [] 標頭宣告之匿名容器拓撲保全
+  {
+    auto single_obj = TreeIO::DeserializeFromString("[]{ [Setting] = \"On\" }");
     assert(single_obj != nullptr);
     assert(single_obj->ChildCount() == 1);
     assert(single_obj->HasChild(u8"Setting"));
@@ -585,9 +602,50 @@ void TestUnboxingAndAnonymousContainerSafety()
     assert(single_obj->GetName().empty());
   }
 
-  // 4. 頂層匿名多欄位容器
+  // 3b. 外部大括號包裹單一具名節點：外部大括號純屬雜訊，安全拆箱為具名根節點，絕不滋生 []
   {
-    auto multi_obj = TreeIO::DeserializeFromString("{ [A] = \"1\" [B] = \"2\" }");
+    auto named_single = TreeIO::DeserializeFromString("{ [Setting] = \"On\" }");
+    assert(named_single != nullptr);
+    assert(named_single->GetName() == u8"Setting");
+    assert(named_single->GetData() == "On");
+  }
+
+  // 3c. 使用者案例：外部大括號包裹包含子節點之具名根節點 [root] { "data" }，精準拆箱為 root 根節點
+  {
+    std::string user_dsl = R"(
+{
+  [root]
+  {
+    "data"
+  }
+}
+)";
+    auto user_root = TreeIO::DeserializeFromString(user_dsl);
+    assert(user_root != nullptr);
+    assert(user_root->GetName() == u8"root");
+    assert(user_root->ChildCount() == 1);
+    assert((*user_root)[0]->GetData() == "data");
+  }
+
+  // 3d. 使用者最新糾正案例：沒有 [] 帶頭的 {} 都是雜訊，絕不可滋生 [] 匿名容器！
+  {
+    std::string user_no_brackets = R"(
+{
+    [ServerConfig] = "Production"
+    [ServerConfig2] = "Production"
+}
+)";
+    auto user_single = TreeIO::DeserializeFromString(user_no_brackets);
+    assert(user_single != nullptr);
+    // 根節點閉環即刻結算，傳回 ServerConfig 實體，後續 ServerConfig2 忽略，絕不包裹進 []
+    assert(user_single->GetName() == u8"ServerConfig");
+    assert(user_single->GetData() == "Production");
+    assert(user_single->ChildCount() == 0);
+  }
+
+  // 4. 頂層顯式匿名多欄位容器：必須以 [] 帶頭宣告容器能力
+  {
+    auto multi_obj = TreeIO::DeserializeFromString("[]{ [A] = \"1\" [B] = \"2\" }");
     assert(multi_obj != nullptr);
     assert(multi_obj->HasChild(u8"A"));
     assert(multi_obj->HasChild(u8"B"));
@@ -612,6 +670,128 @@ void TestUnboxingAndAnonymousContainerSafety()
     assert(named_arr->GetName() == u8"Inventory");
     assert(named_arr->ChildCount() == 1);
     assert((*named_arr)[0]->GetData() == "Sword");
+  }
+
+  // 7. 鐵律測試：一個根節點完成閉環之後的資料就不用管它了
+  {
+    // A. 根節點閉環後緊跟第二個節點：第二個節點完全忽略
+    std::string dsl_two_nodes = R"(
+[FirstRoot] = "Primary"
+{
+  [Data] = "123"
+}
+[SecondIgnored] = "Trash"
+{
+  [Data] = "999"
+}
+)";
+    auto first_res = TreeIO::DeserializeFromString(dsl_two_nodes);
+    assert(first_res != nullptr);
+    assert(first_res->GetName() == u8"FirstRoot");
+    assert(first_res->GetData() == "Primary");
+    assert(first_res->ChildCount() == 1);
+    assert((*first_res)[u8"Data"]->GetData() == "123");
+
+    // B. 外層帶裸大括號，內部第一個根節點完成閉環後，後續節點與尾部括號全數忽略，傳回首個根節點
+    std::string dsl_cutoff = R"(
+{
+    [ServerConfig] = "Production"
+    {
+        [Host] = "127.0.0.1"
+        [Port] = "9000"
+        [MaxPlayers] = "500"
+    }
+
+    [ServerConfig2] = "Production"
+    {
+        [Host] = "127.0.0.1"
+        [Port] = "9000"
+        [MaxPlayers] = "500"
+    }
+}
+)";
+    auto cutoff_res = TreeIO::DeserializeFromString(dsl_cutoff);
+    assert(cutoff_res != nullptr);
+    assert(cutoff_res->GetName() == u8"ServerConfig");
+    assert(cutoff_res->GetData() == "Production");
+    assert(cutoff_res->ChildCount() == 3);
+    assert(cutoff_res->HasChild(u8"Host"));
+    assert(!cutoff_res->HasChild(u8"ServerConfig2"));  // 第二節點徹底被忽略
+
+    // C. 根節點閉環後帶有多餘雜訊字符與多餘大括號
+    std::string dsl_garbage_after_close = "[Config]{ [Flag] = \"True\" } } } 多餘任意說明文字";
+    auto clean_res = TreeIO::DeserializeFromString(dsl_garbage_after_close);
+    assert(clean_res != nullptr);
+    assert(clean_res->GetName() == u8"Config");
+    assert(clean_res->ChildCount() == 1);
+    assert((*clean_res)[u8"Flag"]->GetData() == "True");
+
+    // D. 使用者核心規範：非容器根節點閉環測試
+    // D-1: [root] 純標籤根節點閉環（具名、無資料、無下節點）
+    {
+      auto r_tag = TreeIO::DeserializeFromString("[root]\n多餘說明文字");
+      assert(r_tag != nullptr);
+      assert(r_tag->GetName() == u8"root");
+      assert(r_tag->GetData().empty());
+      assert(r_tag->ChildCount() == 0);
+    }
+
+    // D-2: [] 純標籤根節點閉環（無名、無資料、無下節點）
+    {
+      auto r_empty = TreeIO::DeserializeFromString("[] // 無名、無資料、無下節點\n[ExtraNode]");
+      assert(r_empty != nullptr);
+      assert(r_empty->GetName().empty());
+      assert(r_empty->GetData().empty());
+      assert(r_empty->ChildCount() == 0);
+    }
+
+    // D-3: "root" 純資料根節點閉環（無名、純資料、無下節點）
+    {
+      auto r_data = TreeIO::DeserializeFromString("\"root\" // 純資料的根結點\n\"ExtraData\"");
+      assert(r_data != nullptr);
+      assert(r_data->GetName().empty());
+      assert(r_data->GetData() == "root");
+      assert(r_data->ChildCount() == 0);
+    }
+
+    // D-4: [GameWorld] = "FantasyRealm" 具名賦值節點閉環，後續 "" 完全被忽略
+    {
+      std::string dsl_gw = "[GameWorld] = \"FantasyRealm\"\n\"\"";
+      auto r_gw = TreeIO::DeserializeFromString(dsl_gw);
+      assert(r_gw != nullptr);
+      assert(r_gw->GetName() == u8"GameWorld");
+      assert(r_gw->GetData() == "FantasyRealm");
+      assert(r_gw->ChildCount() == 0);
+    }
+  }
+
+  // 8. 核心規範鐵律測試：一個根節點還沒有完成閉環，但已經沒資料了，將被當作資料已毀損（回傳 nullptr）
+  {
+    // A. 具名根節點大括號未閉合且資料耗盡
+    std::string unclosed_named = "[ServerConfig] = \"Production\" { [Port] = \"9000\"";
+    assert(TreeIO::DeserializeFromString(unclosed_named) == nullptr);
+
+    // B. 顯式匿名容器未閉合且資料耗盡
+    std::string unclosed_anon = "[] { \"Item1\" \"Item2\"";
+    assert(TreeIO::DeserializeFromString(unclosed_anon) == nullptr);
+
+    // C. 僅有單一裸開口大括號或空括號且無節點（未能形成閉環，資料毀損）
+    assert(TreeIO::DeserializeFromString("{") == nullptr);
+    assert(TreeIO::DeserializeFromString("{}") == nullptr);
+
+    // F. 中括號未閉合即遇到 EOF（資料毀損）
+    assert(TreeIO::DeserializeFromString("[root") == nullptr);
+
+    // G. 引號未閉合即遇到 EOF（資料毀損）
+    assert(TreeIO::DeserializeFromString("\"root") == nullptr);
+
+    // H. 等號後無值即遇到 EOF（資料毀損）
+    assert(TreeIO::DeserializeFromString("[root] =") == nullptr);
+    assert(TreeIO::DeserializeFromString("[root] = \n   ") == nullptr);
+
+    // I. 完全無任何節點（空字串或僅有註解，無法完成閉環視為毀損）
+    assert(TreeIO::DeserializeFromString("") == nullptr);
+    assert(TreeIO::DeserializeFromString("   // 空白與註解\n   # 另一個註解\n") == nullptr);
   }
 
   std::cout << " -> 通過！" << std::endl;
@@ -722,14 +902,22 @@ void TestConsecutiveEmptyNodes()
     assert((*restored)[u8"Port"]->GetData() == "8080");
   }
 
-  // 4. 手寫無等號連續標籤 DSL：{[Tag1][Tag2][Tag3]}
+  // 4. 手寫無等號連續標籤 DSL：顯式匿名容器必須以 [] 帶頭
   {
-    auto restored = TreeIO::DeserializeFromString("{[Tag1][Tag2][Tag3]}");
+    auto restored = TreeIO::DeserializeFromString("[]{[Tag1][Tag2][Tag3]}");
     assert(restored != nullptr);
     assert(restored->ChildCount() == 3);
     assert(restored->HasChild(u8"Tag1"));
     assert(restored->HasChild(u8"Tag2"));
     assert(restored->HasChild(u8"Tag3"));
+  }
+
+  // 4b. 無 [] 帶頭之裸大括號 {[Tag1][Tag2][Tag3]}：{} 純屬雜訊，首個純標籤 [Tag1] 閉環即傳回，絕不滋生 []
+  {
+    auto bare_tag = TreeIO::DeserializeFromString("{[Tag1][Tag2][Tag3]}");
+    assert(bare_tag != nullptr);
+    assert(bare_tag->GetName() == u8"Tag1");
+    assert(bare_tag->ChildCount() == 0);
   }
 
   // 5. 驗證 Compact 模式下的連續空標籤與帶值節點混合（關鍵字等號必然保留）
@@ -1320,25 +1508,22 @@ void TestExplicitAnonymousContainerDisambiguation()
   assert((*restored_compact2)[1]->GetData() == "ContainerPayload");
   assert((*restored_compact2)[1]->ChildCount() == 2);
 
-  // 4. 測試無標頭裸大括號前後符號視為雜訊，內部葉節點平級保留
-  std::string noise_dsl = R"(
+  // 4. 使用者指定規範：雜訊沒有參與容器配對，未帶 [] 的孤立裸大括號純屬雜訊無視
+  std::string user_noise_dsl = R"(
 []
-{
-  "ItemData"
-  {
-    "Sub1"
-    "Sub2"
-  }
-  "ItemB"
+{ 
+{ // 雜訊
+    [ServerConfig] = "Production"
+    [ServerConfig2] = "Production"
 }
 )";
-  auto noise_root = TreeIO::DeserializeFromString(noise_dsl);
-  assert(noise_root != nullptr);
-  assert(noise_root->ChildCount() == 4);
-  assert((*noise_root)[0]->GetData() == "ItemData");
-  assert((*noise_root)[1]->GetData() == "Sub1");
-  assert((*noise_root)[2]->GetData() == "Sub2");
-  assert((*noise_root)[3]->GetData() == "ItemB");
+  auto user_noise_root = TreeIO::DeserializeFromString(user_noise_dsl);
+  assert(user_noise_root != nullptr);
+  assert(user_noise_root->ChildCount() == 2);
+  assert(user_noise_root->HasChild(u8"ServerConfig"));
+  assert(user_noise_root->HasChild(u8"ServerConfig2"));
+  assert((*user_noise_root)[u8"ServerConfig"]->GetData() == "Production");
+  assert((*user_noise_root)[u8"ServerConfig2"]->GetData() == "Production");
 
   std::cout << " -> 通過！" << std::endl;
 }
