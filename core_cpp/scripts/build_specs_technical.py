@@ -806,6 +806,7 @@ End Procedure
     (tech_dir / "05_orkt_format_spec.md").write_text('''# 05. ORKT 樹狀結構文字交換格式規範 (ORKT Tree DSL RFC)
 
 本文件定義 OuroKore 樹狀結構文字交換格式（OuroKore Tree Text Format，簡稱 **ORKT**）的正式文法、有限狀態機（FSM）語意、容器能力判定與資料毀損公理。
+
 任何語言（C++、Rust、C#、Python、Go 等）實作 ORKT 相容之解析器與序列化器時，必須 100% 遵守本規範之狀態機轉換與防禦鐵律。
 
 ---
@@ -843,8 +844,9 @@ End Procedure
      - 雜訊 `{` 不要求成對閉合，也不計入巢狀深度。
      - 雜訊 `{` 絕對不可搶佔或誤關閉外層真正的容器。
 
+範例結構展示：
+
 ```text
-範例：
 []
 {
 { // 雜訊：未以 [] 帶頭，純屬字元雜訊直接丟棄無視！
@@ -858,6 +860,7 @@ End Procedure
 ## 🎯 3. 廣義根節點閉環狀態機 (Root Node Closure & Early Exit RFC)
 
 ORKT 在哲學上嚴格維持單一根節點（Single Root）交換模型。
+
 根節點閉環絕不限定於容器節點，任何**足以獨立完成一個節點**的語法單元，只要確認後續無接續容器 `{`，即宣告**根節點閉環完成**。
 
 ### 3.1 根節點閉環判定表
@@ -871,6 +874,7 @@ ORKT 在哲學上嚴格維持單一根節點（Single Root）交換模型。
 | **真正容器節點** | `[root] { ... }` / `[] { ... }` | 頂層匹配到對應閉合 `}` | 成對括號結束時完成閉環。 |
 
 ### 3.2 閉環後忽略鐵律 (Early Exit on Closure)
+
 * 當頂層首個根節點完成閉環時，**解析器立即終止解析（Break Loop）**。
 * 緊隨在後的任何資料、多餘節點、多餘字串或文字雜訊，**全數忽略不用管它**。
 * 拆箱傳回該唯一的根節點實體。
@@ -882,6 +886,7 @@ ORKT 在哲學上嚴格維持單一根節點（Single Root）交換模型。
 > **核心公理：反過來說，若無法讓根節點完成閉環且資料已耗盡（EOF），100% 判定為資料毀損。**
 
 任何使節點處於懸空、截斷或不完整狀態的情形，解析器必須立即終止並回傳 NULL / nullptr：
+
 1. **中括號截斷**：`[root` 遭遇 EOF 前未匹配到結尾 `]`。
 2. **字串截斷**：`"root` 遭遇 EOF 前未匹配到結尾 `"`。
 3. **等號懸空**：`[Key] =` 遭遇 EOF 或等號後無有效值即遭遇新標籤 `[`。
@@ -901,7 +906,7 @@ End Structure
 Function Deserialize(text: String) -> Nullable<NodeHandle>:
     Let root_holder = CreateRootNode("")
     Let stack = Stack<ParseFrame>()
-    stack.Push(ParseFrame(root_holder, '\0'))
+    stack.Push(ParseFrame(root_holder, '\\0'))
     
     While HasTokens() Do
         SkipWhitespaceAndComments()
