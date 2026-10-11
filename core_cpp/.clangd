@@ -2,29 +2,25 @@
 
 CompileFlags:
   # 指定 CMake 產生的編譯資料庫 (compile_commands.json) 所在目錄
-  CompilationDatabase: build
+  CompilationDatabase: build_mingw
 
   # 指定預設使用的 C++ 編譯器絕對路徑
-  Compiler: 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe'
+  Compiler: 'C:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe'
 
-  # 新增 MinGW 目標平台、C++20 標準與系統標頭檔路徑，確保 clangd 能正確解析標頭檔
+  # 新增 MinGW 目標平台、C++23 標準與系統標頭檔路徑，確保 clangd 能正確解析標頭檔
   Add:
     - '--target=x86_64-w64-mingw32'
-    - '-std=c++20'
+    - '-std=c++23'
+    - '-D__cpp_concepts=202002L'
+    - '-D__cpp_lib_expected=202211L'
     - '-fno-builtin-__rdtsc'
-    - '-IC:/OuroKore/include'
-    - '-isystem'
-    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/c++'
-    - '-isystem'
-    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/c++/x86_64-w64-mingw32'
-    - '-isystem'
-    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include/c++/backward'
-    - '-isystem'
-    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include'
-    - '-isystem'
-    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.1.0/include-fixed'
-    - '-isystem'
-    - 'C:/x86_64-16.1.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/x86_64-w64-mingw32/include'
+    - '-Ic:/MySrc/OuroKore/core_cpp/include'
+    - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++'
+    - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/x86_64-w64-mingw32'
+    - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/backward'
+    - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include'
+    - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include-fixed'
+    - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/x86_64-w64-mingw32/include'
 
 
 

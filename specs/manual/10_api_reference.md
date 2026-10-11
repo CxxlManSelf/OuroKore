@@ -59,8 +59,8 @@
 ## 🔒 4. 併發同步守衛
 * **標頭檔**：`ourokore/component/OuroObject.hpp`
 * **類別**：
-  * `OuroReadLock`：共享讀鎖 RAII 守衛。
-  * `OuroWriteLock`：獨占寫鎖 RAII 守衛，**解構時自動原子標記 Dirty**。
+  * `OuroReadLock`：共享讀鎖 RAII 守衛。底層整合弱引用 Pinning 與獲取鎖後之 DCL 二次確認，若上鎖期間物件析構，安全拒絕存取並防範 UAF。
+  * `OuroWriteLock`：獨占寫鎖 RAII 守衛。同樣具備 Pinning 與 DCL 二次確認防禦，**解構時自動原子標記 Dirty**。
 
 ---
 
@@ -78,6 +78,7 @@
   * `RehydrateAsync<T>(HandleID id)` / `RehydrateAsync<T>(const OuroPtr<T> &ptr)`：非同步背景顯式復水。
   * `IsAlive(HandleID id)`：查詢物件是否存活（純 ControlBlock 查詢，零 I/O 保證）。
   * `GetStorageState(HandleID id)`：查詢物件當前 StorageState（純 ControlBlock 查詢，零 I/O 保證）。
+  * `IsPayloadLoaded(HandleID id)`：查詢目標物件之實體記憶體指標（Payload）是否已載入（純記憶體讀取，零 I/O 零復水，不要求強引用存活）。
   * `GetRootEdgeCount(HandleID id)`：查詢目標當前活躍根邊緣數量。
   * `SaveBatch(...)` / `LoadBatch(...)`：多核心平行批次操作。
 
@@ -88,14 +89,17 @@
 * **設計哲學與卸載原則**：
   * **禁絕手動卸載 (No Manual Unload)**：動態庫不提供手動 `unload()`，杜絕野指針與 vtable 懸空崩溃。
   * **生命週期反向錨定 (Life-Bound Retention)**：物件全數銷毀後自動安全卸載。呼叫端若長存 `load()` 回傳之初始句柄則永遠不卸載，完成綁定後應主動 `reset()` 或移交權杖。
+  * **C++23 強型別無例外錯誤處理**：提供 `try_load()` 與 `try_get_symbol()`，回傳 `Result<T>`，徹底杜絕跨 DLL 邊界例外逃逸。
 * **方法**：
   * `static DynamicLibrary load(std::string_view utf8_path, LibraryLoadFlags flags = Default)`：自 UTF-8 路徑載入動態庫。
+  * `static Result<DynamicLibrary> try_load(std::string_view utf8_path, LibraryLoadFlags flags = Default)`：自 UTF-8 路徑載入動態庫並回傳 `Result<DynamicLibrary>`（失敗包含 Status 錯誤碼與 UTF-8 原因）。
   * `void reset() noexcept`：放棄句柄持有（扣減引用計數）。
   * `bool is_loaded() const noexcept`：查詢是否載入成功。
   * `const std::string &get_last_error() const noexcept`：取得 UTF-8 系統錯誤訊息。
   * `std::string get_path_utf8() const noexcept`：取得規範路徑。
   * `size_t use_count() const noexcept`：取得存活引用計數。
   * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析導出符號。
+  * `template <typename FuncT> Result<FuncT> try_get_symbol(std::string_view name) const noexcept`：解析導出符號並回傳 `Result<FuncT>`。
   * `bool is_first_loaded() const noexcept`：查詢是否為進程內首次載入（0 -> 1）。
   * `template <typename FuncT, typename... Args> bool initialize_once(std::string_view symbol, Args&&... args)`：首次載入單次初始化。
   * `std::shared_ptr<const void> create_lifetime_token() const noexcept`：建立純生命週期權杖（輕量保活）。
@@ -193,6 +197,9 @@
   * `void Push(T item)` / `void Push(T&& item)`：執行緒安全寫入元素並喚醒等待者。
   * `bool TryPop(T &item)`：非阻塞嘗試取出元素（佇列為空時立即返回 false）。
   * `T WaitAndPop()` / `bool WaitAndPop(T &item, duration timeout)`：阻塞或限時等待取出元素。
+  * `Result<T> pop_expected()`：原生 C++23 `Result<T>` 阻塞取出（失敗/停止時回傳 Status）。
+  * `Result<T> pop_for_expected(duration timeout)`：原生 C++23 `Result<T>` 限時等待取出（逾時回傳 StatusCode::Timeout）。
+  * `Result<T> try_pop_expected()`：原生 C++23 `Result<T>` 非阻塞取出（為空回傳 StatusCode::Unavailable）。
   * `bool Empty() const` / `size_t Size() const` / `void Clear()`
 * **計數信號量 `ork::base::Semaphore`**：
   * `explicit Semaphore(ptrdiff_t initial_count)`
@@ -229,9 +236,27 @@
 
 ---
 
-## 🌐 12. 底層純 C ABI（Cross-Language FFI）分類索引
+## 🛡️ 12. 原生值語意錯誤處理：`ork::base::Result` / `ork::base::Status`
+* **標頭檔**：`<ourokore/base/Result.hpp>`
+* **命名空間**：`ork::base`（核心匯出別名 `ork::Result`、`ork::Status`、`ork::StatusCode`）
+* **狀態碼列舉 `StatusCode`**：
+  * `Ok`, `Cancelled`, `InvalidArgument`, `NotFound`, `AlreadyExists`, `PermissionDenied`, `ResourceExhausted`, `FailedPrecondition`, `Aborted`, `OutOfRange`, `Unimplemented`, `Internal`, `Unavailable`, `DataLoss`, `Timeout`, `Unknown`
+* **狀態類別 `Status`**：
+  * `Status(StatusCode code = Ok, std::string_view msg = "")`
+  * 工廠方法：`Status::Ok()`、`Status::InvalidArgument(msg)`、`Status::NotFound(msg)`、`Status::Timeout(msg)` 等
+  * `bool ok() const noexcept` / `explicit operator bool() const noexcept`
+  * `StatusCode code() const noexcept` / `const std::string &message() const noexcept`
+  * `std::string ToString() const`
+* **泛型結果樣板 `Result<T, E = Status>` 與 `StatusOr<T>`**：
+  * 基於 C++23 原生 `std::expected<T, E>` / `std::unexpected<E>`
+  * 支援 `.has_value()`, `operator*()`, `operator->()`, `.value()`, `.error()`, `.value_or(default_val)`
+  * 支援 C++23 Monadic operations：`.and_then()`, `.transform()`, `.or_else()`, `.transform_error()`
+
+---
+
+## 🌐 13. 底層純 C ABI（Cross-Language FFI）分類索引
 所有底層操作保證跨 DLL 邊界零例外逃逸，完整清單與參數規格請參見《[03. 純 C ABI 規格與記憶體佈局規範](../technical/03_c_abi_and_memory.md)》：
 * **類別 A：物件生命週期與工廠**（`ork_create_object`、`ork_retain_object`、`ork_release_object`、`ork_acquire_object_pointer`、`ork_release_object_pointer`）
-* **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）
+* **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_is_payload_loaded`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）
 * **類別 C：宿主全域特權**（`ork_host_initialize`、`ork_host_shutdown`、`ork_host_set_storage_driver`、`ork_host_trigger_dehydration_rescue` 等）
 * **類別 D：外掛 Heap 記憶體檢查**（`ork_heap_allocate`、`ork_heap_deallocate`、`ork_heap_is_clean`、`ork_heap_dump_leaks`、`ork_heap_assert_clean`）

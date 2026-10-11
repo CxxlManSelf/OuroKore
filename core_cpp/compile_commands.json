@@ -1,0 +1,176 @@
+[
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/base",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_BASE_EXPORTS -Dourokore_base_EXPORTS @CMakeFiles\\ourokore_base.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_base.dir\\src\\async\\ThreadPool.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\base\\src\\async\\ThreadPool.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/base/src/async/ThreadPool.cpp",
+  "output": "base/CMakeFiles/ourokore_base.dir/src/async/ThreadPool.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/base",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_BASE_EXPORTS -Dourokore_base_EXPORTS @CMakeFiles\\ourokore_base.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_base.dir\\src\\memory\\HeapTracker.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\base\\src\\memory\\HeapTracker.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/base/src/memory/HeapTracker.cpp",
+  "output": "base/CMakeFiles/ourokore_base.dir/src/memory/HeapTracker.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/base",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_BASE_EXPORTS -Dourokore_base_EXPORTS @CMakeFiles\\ourokore_base.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_base.dir\\src\\plugin\\DynamicLibrary.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\base\\src\\plugin\\DynamicLibrary.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/base/src/plugin/DynamicLibrary.cpp",
+  "output": "base/CMakeFiles/ourokore_base.dir/src/plugin/DynamicLibrary.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/base",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_BASE_EXPORTS -Dourokore_base_EXPORTS @CMakeFiles\\ourokore_base.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_base.dir\\src\\sync\\Semaphore.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\base\\src\\sync\\Semaphore.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/base/src/sync/Semaphore.cpp",
+  "output": "base/CMakeFiles/ourokore_base.dir/src/sync/Semaphore.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/base",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_BASE_EXPORTS -Dourokore_base_EXPORTS @CMakeFiles\\ourokore_base.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_base.dir\\src\\utils\\Hash.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\base\\src\\utils\\Hash.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/base/src/utils/Hash.cpp",
+  "output": "base/CMakeFiles/ourokore_base.dir/src/utils/Hash.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/core",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_CORE_EXPORTS -DOUROKORE_EXPORTS -Dourokore_core_EXPORTS @CMakeFiles\\ourokore_core.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_core.dir\\src\\CycleCollector.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\core\\src\\CycleCollector.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/core/src/CycleCollector.cpp",
+  "output": "core/CMakeFiles/ourokore_core.dir/src/CycleCollector.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/core",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_CORE_EXPORTS -DOUROKORE_EXPORTS -Dourokore_core_EXPORTS @CMakeFiles\\ourokore_core.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_core.dir\\src\\DeferredDeleteQueue.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\core\\src\\DeferredDeleteQueue.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/core/src/DeferredDeleteQueue.cpp",
+  "output": "core/CMakeFiles/ourokore_core.dir/src/DeferredDeleteQueue.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/core",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_CORE_EXPORTS -DOUROKORE_EXPORTS -Dourokore_core_EXPORTS @CMakeFiles\\ourokore_core.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_core.dir\\src\\Registry.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\core\\src\\Registry.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/core/src/Registry.cpp",
+  "output": "core/CMakeFiles/ourokore_core.dir/src/Registry.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/core",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_CORE_EXPORTS -DOUROKORE_EXPORTS -Dourokore_core_EXPORTS @CMakeFiles\\ourokore_core.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_core.dir\\src\\RuntimeContext.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\core\\src\\RuntimeContext.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/core/src/RuntimeContext.cpp",
+  "output": "core/CMakeFiles/ourokore_core.dir/src/RuntimeContext.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/core",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_CORE_EXPORTS -DOUROKORE_EXPORTS -Dourokore_core_EXPORTS @CMakeFiles\\ourokore_core.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_core.dir\\src\\TypeRegistry.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\core\\src\\TypeRegistry.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/core/src/TypeRegistry.cpp",
+  "output": "core/CMakeFiles/ourokore_core.dir/src/TypeRegistry.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/core",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -DOUROKORE_CORE_EXPORTS -DOUROKORE_EXPORTS -Dourokore_core_EXPORTS @CMakeFiles\\ourokore_core.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ourokore_core.dir\\src\\core.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\core\\src\\core.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/core/src/core.cpp",
+  "output": "core/CMakeFiles/ourokore_core.dir/src/core.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\basic_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\basic_tests.dir\\basic_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\basic_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/basic_tests.cpp",
+  "output": "tests/CMakeFiles/basic_tests.dir/basic_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\serialization_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\serialization_tests.dir\\serialization_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\serialization_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/serialization_tests.cpp",
+  "output": "tests/CMakeFiles/serialization_tests.dir/serialization_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\base_sync_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\base_sync_tests.dir\\base_sync_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\base_sync_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/base_sync_tests.cpp",
+  "output": "tests/CMakeFiles/base_sync_tests.dir/base_sync_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\base_threadpool_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\base_threadpool_tests.dir\\base_threadpool_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\base_threadpool_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/base_threadpool_tests.cpp",
+  "output": "tests/CMakeFiles/base_threadpool_tests.dir/base_threadpool_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\ouro_lru_dehydrator_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\ouro_lru_dehydrator_tests.dir\\ouro_lru_dehydrator_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\ouro_lru_dehydrator_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/ouro_lru_dehydrator_tests.cpp",
+  "output": "tests/CMakeFiles/ouro_lru_dehydrator_tests.dir/ouro_lru_dehydrator_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\core_async_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\core_async_tests.dir\\core_async_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\core_async_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/core_async_tests.cpp",
+  "output": "tests/CMakeFiles/core_async_tests.dir/core_async_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\cycle_collector_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\cycle_collector_tests.dir\\cycle_collector_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\cycle_collector_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/cycle_collector_tests.cpp",
+  "output": "tests/CMakeFiles/cycle_collector_tests.dir/cycle_collector_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -Dtest_plugin_dll_EXPORTS @CMakeFiles\\test_plugin_dll.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\test_plugin_dll.dir\\test_plugin_dll.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\test_plugin_dll.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/test_plugin_dll.cpp",
+  "output": "tests/CMakeFiles/test_plugin_dll.dir/test_plugin_dll.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\boundary_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\boundary_tests.dir\\boundary_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\boundary_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/boundary_tests.cpp",
+  "output": "tests/CMakeFiles/boundary_tests.dir/boundary_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\plugin_isolation_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\plugin_isolation_tests.dir\\plugin_isolation_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\plugin_isolation_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/plugin_isolation_tests.cpp",
+  "output": "tests/CMakeFiles/plugin_isolation_tests.dir/plugin_isolation_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\base_dynamic_library_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\base_dynamic_library_tests.dir\\base_dynamic_library_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\base_dynamic_library_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/base_dynamic_library_tests.cpp",
+  "output": "tests/CMakeFiles/base_dynamic_library_tests.dir/base_dynamic_library_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\type_system_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\type_system_tests.dir\\type_system_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\type_system_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/type_system_tests.cpp",
+  "output": "tests/CMakeFiles/type_system_tests.dir/type_system_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\base_hash_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\base_hash_tests.dir\\base_hash_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\base_hash_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/base_hash_tests.cpp",
+  "output": "tests/CMakeFiles/base_hash_tests.dir/base_hash_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\test_proxy.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\test_proxy.dir\\test_proxy.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\test_proxy.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/test_proxy.cpp",
+  "output": "tests/CMakeFiles/test_proxy.dir/test_proxy.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\base_tree_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\base_tree_tests.dir\\base_tree_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\base_tree_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/base_tree_tests.cpp",
+  "output": "tests/CMakeFiles/base_tree_tests.dir/base_tree_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 -Dtest_tracked_plugin_EXPORTS @CMakeFiles\\test_tracked_plugin.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\test_tracked_plugin.dir\\test_tracked_plugin.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\test_tracked_plugin.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/test_tracked_plugin.cpp",
+  "output": "tests/CMakeFiles/test_tracked_plugin.dir/test_tracked_plugin.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\base_heap_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\base_heap_tests.dir\\base_heap_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\base_heap_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/base_heap_tests.cpp",
+  "output": "tests/CMakeFiles/base_heap_tests.dir/base_heap_tests.cpp.obj"
+},
+{
+  "directory": "C:/MySrc/OuroKore/core_cpp/build_mingw/tests",
+  "command": "C:\\x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1\\mingw64\\bin\\g++.exe -DORK_HEAP_POLICY=1 @CMakeFiles\\base_result_tests.dir\\includes_CXX.rsp -std=c++23 -o CMakeFiles\\base_result_tests.dir\\base_result_tests.cpp.obj -c C:\\MySrc\\OuroKore\\core_cpp\\tests\\base_result_tests.cpp",
+  "file": "C:/MySrc/OuroKore/core_cpp/tests/base_result_tests.cpp",
+  "output": "tests/CMakeFiles/base_result_tests.dir/base_result_tests.cpp.obj"
+}
+]

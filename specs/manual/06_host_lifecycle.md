@@ -49,3 +49,16 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
 * 核心的**單向不可變防線**會安全拒絕該請求。
 * 回傳無效的 `HostContext`（`host.IsValid() == false`）。
 * 插件若嘗試在無效的 `HostContext` 上調用任何特權方法，核心立即拋出 `std::runtime_error` 越權異常，徹底隔絕特權穿透！
+
+---
+
+## 🚪 4. 雙層關閉防禦體系：Host RAII 與靜態單例退出防線
+
+為了保證不同呼叫場景下的進程完全安全落地，OuroKore 建立了內外兩層安全關閉體系：
+
+1. **第一道防線：Host 宿主標準 RAII 管理（運行期主動優雅終止）**
+   - 主程式持有唯一的 `HostContext`。當 `host` 離開作用域解構時，內部自動調用 `ork_shutdown_runtime()`。
+   - 此時進程健康、各執行緒仍可控，核心在名冊獨佔鎖保護下執行 `Registry::Clear()`、排空延遲銷毀隊列、停止背景執行緒並重置狀態。
+2. **第二道防線：純外掛環境與進程退出兜底（Exit-Time Lockless Tear-Down）**
+   - 在第三方外掛獨立單元測試、或未透過 `HostContext` 初始化的獨立模組中，主程式直接退出進入 CRT `exit()` 與作業系統 Loader Lock 階段。
+   - 核心長存的靜態註冊表解構子（`~Registry()`）**自動切換為無鎖兜底模式**（`ClearInternal(false)`），直接執行兩階段無鎖置換與釋放（先清空 Payload 再清空 ControlBlock），絕不嘗試獲取讀寫互斥鎖，徹底避免與 Windows Loader Lock 產生死鎖！

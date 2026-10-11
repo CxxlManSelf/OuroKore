@@ -105,12 +105,12 @@ extern "C"
     }
     try
     {
-      auto *cb = ork::Registry::GetInstance().GetControlBlock(target_id);
-      if (!cb)
+      auto pin = ork::Registry::GetInstance().AcquireControlBlock(target_id);
+      if (!pin)
       {
         return ORK_STATUS_ERROR_NOT_FOUND;
       }
-      if (cb->m_is_destructing.load(std::memory_order_acquire))
+      if (pin->m_is_destructing.load(std::memory_order_acquire))
       {
         return ORK_STATUS_ERROR_DESTRUCTING;
       }
@@ -359,7 +359,7 @@ extern "C"
 
   int32_t ORK_CALL ork_get_storage_state(HandleID target_id, uint8_t *out_state)
   {
-    if (!out_state)
+    if (target_id == ORK_ROOT_ID || !out_state)
     {
       return ORK_STATUS_ERROR_INVALID_ARG;
     }
@@ -374,8 +374,30 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_is_payload_loaded(HandleID target_id, int32_t *out_is_loaded)
+  {
+    if (target_id == ORK_ROOT_ID || !out_is_loaded)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      bool loaded = ork::Registry::GetInstance().IsPayloadLoaded(target_id);
+      *out_is_loaded = loaded ? 1 : 0;
+      return ORK_STATUS_OK;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
   int32_t ORK_CALL ork_mark_dirty(HandleID target_id)
   {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
     try
     {
       if (ork::Registry::GetInstance().MarkDirty(target_id))
@@ -392,7 +414,7 @@ extern "C"
 
   int32_t ORK_CALL ork_get_root_edge_count(HandleID target_id, uint32_t *out_count)
   {
-    if (!out_count)
+    if (target_id == ORK_ROOT_ID || !out_count)
     {
       return ORK_STATUS_ERROR_INVALID_ARG;
     }
@@ -505,7 +527,7 @@ extern "C"
 
   int32_t ORK_CALL ork_dehydrate_object(HandleID id, int32_t *out_success)
   {
-    if (!out_success)
+    if (id == ORK_ROOT_ID || !out_success)
     {
       return ORK_STATUS_ERROR_INVALID_ARG;
     }
@@ -549,12 +571,12 @@ extern "C"
     }
     try
     {
-      auto *cb = ork::Registry::GetInstance().GetControlBlock(target_id);
-      if (!cb)
+      auto pin = ork::Registry::GetInstance().AcquireControlBlock(target_id);
+      if (!pin)
       {
         return ORK_STATUS_ERROR_NOT_FOUND;
       }
-      *out_type_id = cb->m_type_id.load(std::memory_order_acquire);
+      *out_type_id = pin->m_type_id.load(std::memory_order_acquire);
       return ORK_STATUS_OK;
     }
     catch (...)
@@ -571,12 +593,12 @@ extern "C"
     }
     try
     {
-      auto *cb = ork::Registry::GetInstance().GetControlBlock(target_id);
-      if (!cb)
+      auto pin = ork::Registry::GetInstance().AcquireControlBlock(target_id);
+      if (!pin)
       {
         return ORK_STATUS_ERROR_NOT_FOUND;
       }
-      ork_type_id_t obj_type = cb->m_type_id.load(std::memory_order_acquire);
+      ork_type_id_t obj_type = pin->m_type_id.load(std::memory_order_acquire);
       if (obj_type == ORK_INVALID_TYPE_ID)
       {
         *out_is_instance = 0;
@@ -741,6 +763,10 @@ int32_t UnregisterObject(HandleID id)
 
 int32_t SetStorageState(HandleID target_id, uint8_t state)
 {
+  if (target_id == ORK_ROOT_ID)
+  {
+    return ORK_STATUS_ERROR_INVALID_ARG;
+  }
   try
   {
     if (ork::Registry::GetInstance().SetStorageState(target_id, state))
@@ -1016,7 +1042,11 @@ bool BindRuntimeObjectPayload(HandleID id,
   {
     return false;
   }
-  ork::internal::SetRehydrateFn(id, reinterpret_cast<ork_rehydrate_fn_t>(rehydrate_fn));
+  if (ork::internal::SetRehydrateFn(id, rehydrate_fn) != ORK_STATUS_OK)
+  {
+    ork::internal::BindObjectPayload(id, nullptr, nullptr, 0);
+    return false;
+  }
   return true;
 }
 
@@ -1032,25 +1062,25 @@ void MarkRuntimeObjectClean(HandleID id)
 
 bool SetRuntimeObjectModuleLoader(HandleID id, const ork::DynamicLibrary &loader)
 {
-  auto *cb = ork::Registry::GetInstance().GetControlBlock(id);
-  if (!cb)
+  auto pin = ork::Registry::GetInstance().AcquireControlBlock(id);
+  if (!pin)
   {
     return false;
   }
-  std::unique_lock<std::shared_mutex> lock(cb->m_rw_lock);
-  cb->m_module_loader = loader;
+  std::unique_lock<std::shared_mutex> lock(pin->m_rw_lock);
+  pin->m_module_loader = loader;
   return true;
 }
 
 ork::DynamicLibrary GetRuntimeObjectModuleLoader(HandleID id)
 {
-  auto *cb = ork::Registry::GetInstance().GetControlBlock(id);
-  if (!cb)
+  auto pin = ork::Registry::GetInstance().AcquireControlBlock(id);
+  if (!pin)
   {
     return {};
   }
-  std::shared_lock<std::shared_mutex> lock(cb->m_rw_lock);
-  return cb->m_module_loader;
+  std::shared_lock<std::shared_mutex> lock(pin->m_rw_lock);
+  return pin->m_module_loader;
 }
 
 }  // namespace ork::detail

@@ -551,16 +551,16 @@ End Function
    - **說明**：查詢型別註冊表中兩個 TypeID 是否具備派生繼承關係。
 7. `ork_lock_object`
    - **符號規格**：`Function ork_lock_object(target_id: UInt64) -> Int32`
-   - **說明**：取得目標物件控制區塊之獨占寫入互斥鎖。
+   - **說明**：取得目標物件控制區塊之獨占寫入互斥鎖。內部整合 Pinning（weak_count 原子遞增防被釋放）與獲取鎖後之 Double-Checked Locking (DCL) 二次確認；若等待取鎖期間物件已進入析構流程，內部自動解鎖、安全歸還 Pinning 並回傳錯誤碼，徹底防範 TOCTOU 競爭與 UAF。
 8. `ork_unlock_object`
    - **符號規格**：`Function ork_unlock_object(target_id: UInt64) -> Int32`
-   - **說明**：釋放目標物件控制區塊之獨占寫入互斥鎖。
+   - **說明**：釋放目標物件控制區塊之獨占寫入互斥鎖，並原子歸還 Pinning 引用。
 9. `ork_lock_object_shared`
    - **符號規格**：`Function ork_lock_object_shared(target_id: UInt64) -> Int32`
-   - **說明**：取得目標物件控制區塊之共享讀取鎖。
+   - **說明**：取得目標物件控制區塊之共享讀取鎖。內部同樣整合 Pinning 防護與獲取鎖後之 DCL 二次確認防禦。
 10. `ork_unlock_object_shared`
     - **符號規格**：`Function ork_unlock_object_shared(target_id: UInt64) -> Int32`
-    - **說明**：釋放目標物件控制區塊之共享讀取鎖。
+    - **說明**：釋放目標物件控制區塊之共享讀取鎖，並原子歸還 Pinning 引用。
 11. `ork_acquire_object_pointer`
     - **符號規格**：`Function ork_acquire_object_pointer(target_id: UInt64, out_obj: MutablePointer<RawPointer>) -> Int32`
     - **說明**：獲取目標物件實體指標；若目標物件處於脫水狀態，核心將自動透明觸發復水流程還原 Payload。
@@ -573,31 +573,34 @@ End Function
 14. `ork_get_storage_state`
     - **符號規格**：`Function ork_get_storage_state(target_id: UInt64, out_state: MutablePointer<UInt8>) -> Int32`
     - **說明**：查詢目標物件當前之 StorageState（0: UnsavedNew, 1: Clean, 2: Dirty, 3: Dehydrated）。
-15. `ork_mark_dirty`
+15. `ork_is_payload_loaded`
+    - **符號規格**：`Function ork_is_payload_loaded(target_id: UInt64, out_is_loaded: MutablePointer<Int32>) -> Int32`
+    - **說明**：查詢目標物件之實體記憶體指標（Payload）當前是否已載入至記憶體中（1: 已載入, 0: 未載入/脫水）。純記憶體原子讀取，零 I/O、不觸發自動復水，且不要求 `strong_count > 0`。
+16. `ork_mark_dirty`
     - **符號規格**：`Function ork_mark_dirty(target_id: UInt64) -> Int32`
     - **說明**：將目標物件狀態由 Clean 原子標記轉移為 Dirty。
-16. `ork_get_root_edge_count`
+17. `ork_get_root_edge_count`
     - **符號規格**：`Function ork_get_root_edge_count(target_id: UInt64, out_count: MutablePointer<UInt32>) -> Int32`
     - **說明**：查詢目標物件當前活躍之外部根指針（OuroPtr）引用計數。
-17. `ork_dehydrate_object`
+18. `ork_dehydrate_object`
     - **符號規格**：`Function ork_dehydrate_object(target_id: UInt64) -> Int32`
     - **說明**：對指定物件執行記憶體脫水；序列化落盤後安全釋放實體記憶體，保留控制區塊。
-18. `ork_register_edge`
+19. `ork_register_edge`
     - **符號規格**：`Function ork_register_edge(parent_id: UInt64, child_id: UInt64) -> Int32`
     - **說明**：向領域圖登記父物件至子物件之強引用拓撲邊緣（child 之 `strong_in_count` 遞增）。
-19. `ork_unregister_edge`
+20. `ork_unregister_edge`
     - **符號規格**：`Function ork_unregister_edge(parent_id: UInt64, child_id: UInt64) -> Int32`
     - **說明**：移除父對子之強引用拓撲邊緣（child 之 `strong_in_count` 遞減，降至 0 觸發延遲銷毀）。
-20. `ork_register_weak`
+21. `ork_register_weak`
     - **符號規格**：`Function ork_register_weak(target_id: UInt64) -> Int32`
     - **說明**：增加目標物件之無繫結弱引用計數（`unbound_count` 遞增）。
-21. `ork_unregister_weak`
+22. `ork_unregister_weak`
     - **符號規格**：`Function ork_unregister_weak(target_id: UInt64) -> Int32`
     - **說明**：減少目標物件之無繫結弱引用計數（`unbound_count` 遞減）。
-22. `ork_check_alive`
+23. `ork_check_alive`
     - **符號規格**：`Function ork_check_alive(target_id: UInt64, out_alive: MutablePointer<Int32>) -> Int32`
     - **說明**：查詢目標物件是否存活且未處於銷毀/墓碑態（純記憶體查詢，絕不引發脫水復水）。
-23. `ork_try_lock_weak`
+24. `ork_try_lock_weak`
     - **符號規格**：`Function ork_try_lock_weak(target_id: UInt64) -> Int32`
     - **說明**：嘗試原子晉升弱引用為根強引用，消滅 TOCTOU 競態。
 
@@ -605,7 +608,7 @@ End Function
 
 ### ⚙️ 類別 B：核心排程與延遲銷毀 (`core.h`)
 
-24. `ork_try_initialize_core`
+25. `ork_try_initialize_core`
     - **符號規格**：`Function ork_try_initialize_core() -> Int32`
     - **說明**：確保全域核心資料結構與背景服務初始化完成。
 25. `ork_collect_cycles`
@@ -798,6 +801,60 @@ End Procedure
 主程式在釋放外掛最後引用時，將收尾等待交棒給背景工作執行緒，背景線程以條件變數等待外掛調用 `on_ready_to_unload()` 握手信號：
 * 主程式執行緒耗時為 0ms，完全免疫外掛的卸載卡頓。
 * 背景執行緒在收到握手或達到逾時限制後，才執行作業系統級的動態庫卸載。
+
+---
+
+## 🔄 6. 脫水換頁與多執行緒併發復水雙重檢查鎖協議 (Concurrent Rehydration Double-Checked Locking RFC)
+
+當多個執行緒同時存取或復水同一個脫水物件時，核心實作必須保證序列化載入之執行緒安全與防死鎖：
+1. **ControlBlock 獨佔排他鎖保護**：
+   - 復水執行期必須首先獲取物件 ControlBlock 之獨佔寫鎖（`ork_lock_object`），確保同一物件在同一時刻僅允許單一執行緒執行串流反序列化與實體重綁。
+2. **Double-Checked Locking 雙重驗證鐵律**：
+   - 獲取寫鎖後，必須立即執行二次檢查判定前序執行緒是否已完成復水：
+     ```text
+     Condition IsAlreadyLoaded(id):
+         Return ork_get_storage_state(id) != Dehydrated AND ork_is_payload_loaded(id) == True
+     ```
+   - 若雙重條件成立，表示該物件之實體記憶體指標已就緒，當前執行緒必須立即安全早退（Return），嚴禁重複反序列化或二次覆寫實體指標。
+3. **持鎖期間嚴禁調用 `ork_acquire_object_pointer`**：
+   - 嚴禁在持有 `ork_lock_object` 期間呼叫 `ork_acquire_object_pointer`。
+   - 原因一（防止自我死鎖）：`ork_acquire_object_pointer` 在未獲取指標時會觸發 `rehydrate_fn`，造成同執行緒對不可重入鎖二次獲取而發生死鎖。
+   - 原因二（避免強引用阻斷）：`ork_acquire_object_pointer` 要求強引用計數 > 0，但手動復水期間外部智慧指標尚未建立，強引用為 0 會導致合法已載入物件被誤判為未載入，進而引發併發覆寫破壞。
+
+---
+
+## 🛡️ 7. 物件鎖定之二次確認與 TOCTOU 防禦規範 (Object Locking Double-Checked Locking RFC)
+
+為防範全域註冊表讀寫鎖（`m_registry_mutex`）與物件讀寫鎖（`cb->m_rw_lock`）產生 AB-BA 逆向死鎖，核心在 `ork_lock_object` 與 `ork_lock_object_shared` 中採用兩階段取鎖模型：
+1. **第一階段（Pinning 弱引用釘住）**：在持有 `m_registry_mutex` 共享讀鎖下尋找目標，原子遞增 `cb->m_weak_count`，隨後**立即釋放名冊讀鎖**。
+2. **第二階段（無鎖等待目標鎖）**：無名冊鎖保護下等待 `cb->m_rw_lock`（寫鎖或讀鎖）。
+3. **Double-Checked Locking 鐵律**：
+   - 在釋放名冊鎖至成功獲得物件鎖的排隊間隙，並發執行緒可能已發起物件銷毀（如 `UnregisterObject` 或延遲清理）。
+   - 因此，**成功獲取物件鎖後，必須立即二次驗證物件拆解旗標**：
+     ```text
+     If cb.is_destructing == True Then
+         ReleaseObjectLock(cb)      // 立即釋放剛獲取的讀寫鎖
+         ReleasePin(target_id, cb)  // 原子遞減 weak_count，若為最後持有者則清理墓碑
+         Return Error(ObjectNotFound / Destructing)
+     End If
+     ```
+   - 徹底杜絕呼叫端持有一把已指向被釋放 Payload 的死鎖，100% 杜絕 TOCTOU (Time-of-Check to Time-of-Use) 與 UAF。
+
+---
+
+## 🚪 8. 進程退出與靜態單例解構之無鎖清理防線 (Process Exit Lockless Tear-Down RFC)
+
+在 Windows/POSIX 作業系統中，進程終止（CRT `exit()`）與動態程式庫卸載（`LdrShutdownProcess`）期間，作業系統持有了進程級的 **Loader Lock**：
+1. **Loader Lock 期間禁止嘗試獲取讀寫互斥鎖**：
+   - 在 Loader Lock 期間，背景工作執行緒可能已被作業系統強制凍結或終止。
+   - 若靜態單例解構子（`~Registry()`）嘗試獲取 `std::shared_mutex`（在 MinGW 下底層為 `pthread_rwlock_wrlock`），會與作業系統同步物件或已凍結執行緒衝突，造成進程退出死鎖。
+2. **無鎖置換（Lockless Swap）兩階段清理架構**：
+   - 解構子（`~Registry()`）執行時，所有業務執行緒已經停止，無並發寫入威脅。解構子必須以無鎖模式執行 `ClearInternal(acquire_lock=false)`：
+     - 步驟一：無鎖極速換出名冊（`to_cleanup.swap(m_object_map)`）。
+     - 步驟二：無鎖依序調用 `cb->DeletePayload()` 釋放實體記憶體。
+     - 步驟三：無鎖依序 `delete cb` 釋放墓碑控制區塊。
+     - 步驟四：無鎖清空持久化映射名冊。
+   - 常規執行期重置（`ork::Registry::Clear()` / `ork_shutdown_runtime`）則維持獨佔寫入鎖保護（`acquire_lock=true`），達成靜態退出與動態排空的雙軌安全。
 ''', encoding="utf-8")
 
     # =========================================================================

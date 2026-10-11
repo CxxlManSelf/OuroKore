@@ -18,15 +18,18 @@
 
 ---
 
-## 語言標準與編譯要求規範 (C++20 Standard Invariant)
+## 語言標準與編譯要求規範 (C++23 Standard Invariant)
 
-> **核心原則：OuroKore 核心程式庫全體均以 ISO C++20 標準建立，使用端強烈建議以 C++20 以上標準進行開發。**
+> **核心原則：OuroKore 核心程式庫全體均以 ISO C++23 標準建立，使用端強烈建議以 C++23 以上標準進行開發。**
 
 1. **核心程式庫建置標準**：
-   - 專案根目錄 [CMakeLists.txt](file:///c:/MySrc/OuroKore/core_cpp/CMakeLists.txt) 強制指定 `CMAKE_CXX_STANDARD 20`、`CMAKE_CXX_STANDARD_REQUIRED ON`、`CMAKE_CXX_EXTENSIONS OFF`。所有核心庫（`ourokore_base`、`ourokore_core`）與單元測試均以標準 ISO C++20 進行編譯。
-2. **使用端（Client / Host / Plugin）開發規範**：
-   - **強烈建議使用端一律使用 C++20 或更高版本之標準（C++20+）開發**。
-   - 程式庫標頭檔使用了 C++20 語法特性、STL 特性與現代記憶體模型，使用端若低於 C++20 可能遭遇編譯期型別或標頭檔無法解析之錯誤，使用 C++20 以上能確保 ABI 佈局與模板相容性最佳化。
+   - 專案根目錄 [CMakeLists.txt](file:///c:/MySrc/OuroKore/core_cpp/CMakeLists.txt) 強制指定 `CMAKE_CXX_STANDARD 23`、`CMAKE_CXX_STANDARD_REQUIRED ON`、`CMAKE_CXX_EXTENSIONS OFF`。所有核心庫（`ourokore_base`、`ourokore_core`）與單元測試均以標準 ISO C++23 進行編譯。
+2. **現代值語意錯誤處理原語 (std::expected / Result<T, E>)**：
+   - 全面啟用 C++23 原生 `<expected>` 標頭檔與 `std::expected` / `std::unexpected`。
+   - Base 基礎層統一提供 `ork::base::Result<T, E>`（別名 `StatusOr<T>`）與通用 `Status` 類別，支援 Monadic 鏈式調用（`.and_then()`、`.transform()`、`.or_else()`），實現無例外開銷與強型別錯誤傳播。
+3. **使用端（Client / Host / Plugin）開發規範**：
+   - **強烈建議使用端一律使用 C++23 或更高版本之標準（C++23+）開發**。
+   - 程式庫標頭檔使用了 C++23 語法特性（如 `std::expected`）、STL 特性與現代記憶體模型，使用端若低於 C++23 可能遭遇編譯期型別或標頭檔無法解析之錯誤，使用 C++23 以上能確保 ABI 佈局與模板相容性最佳化。
 
 ---
 
@@ -101,7 +104,7 @@
 > **核心原則：基礎模組為底，通用工具統一收斂，型別識別碼全域唯一且長存。**
 
 1. **Base 模組職責邊界**：
-   - `ourokore_base` 僅提供零依賴、高效能且相容 C++20 `constexpr` 之現代系統基礎設施（執行緒池、同步原語、動態庫載入器、標準雜湊演算法 `Hash.hpp`）。
+   - `ourokore_base` 僅提供零依賴、高效能且相容 C++23 `constexpr` 之現代系統基礎設施（執行緒池、同步原語、動態庫載入器、標準雜湊演算法 `Hash.hpp`、錯誤處理 `Result.hpp`）。
    - 基礎層嚴格禁止逆向依賴 `ourokore_core`，確保通用工具庫可獨立被任何宿主或外掛共用。
 2. **全域唯一 TypeID 雜湊標準**：
    - 核心所有型別識別碼（`ork_type_id_t`）無論於編譯期 `ork::Subclass` 樣板基底或執行期字串註冊，**一律統一採用 `ork::base::Fnv1a64` 進行計算**，嚴禁各模組自定義重複邏輯。

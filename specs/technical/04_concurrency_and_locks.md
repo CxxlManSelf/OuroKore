@@ -102,3 +102,57 @@ End Procedure
 主程式在釋放外掛最後引用時，將收尾等待交棒給背景工作執行緒，背景線程以條件變數等待外掛調用 `on_ready_to_unload()` 握手信號：
 * 主程式執行緒耗時為 0ms，完全免疫外掛的卸載卡頓。
 * 背景執行緒在收到握手或達到逾時限制後，才執行作業系統級的動態庫卸載。
+
+---
+
+## 🔄 6. 脫水換頁與多執行緒併發復水雙重檢查鎖協議 (Concurrent Rehydration Double-Checked Locking RFC)
+
+當多個執行緒同時存取或復水同一個脫水物件時，核心實作必須保證序列化載入之執行緒安全與防死鎖：
+1. **ControlBlock 獨佔排他鎖保護**：
+   - 復水執行期必須首先獲取物件 ControlBlock 之獨佔寫鎖（`ork_lock_object`），確保同一物件在同一時刻僅允許單一執行緒執行串流反序列化與實體重綁。
+2. **Double-Checked Locking 雙重驗證鐵律**：
+   - 獲取寫鎖後，必須立即執行二次檢查判定前序執行緒是否已完成復水：
+     ```text
+     Condition IsAlreadyLoaded(id):
+         Return ork_get_storage_state(id) != Dehydrated AND ork_is_payload_loaded(id) == True
+     ```
+   - 若雙重條件成立，表示該物件之實體記憶體指標已就緒，當前執行緒必須立即安全早退（Return），嚴禁重複反序列化或二次覆寫實體指標。
+3. **持鎖期間嚴禁調用 `ork_acquire_object_pointer`**：
+   - 嚴禁在持有 `ork_lock_object` 期間呼叫 `ork_acquire_object_pointer`。
+   - 原因一（防止自我死鎖）：`ork_acquire_object_pointer` 在未獲取指標時會觸發 `rehydrate_fn`，造成同執行緒對不可重入鎖二次獲取而發生死鎖。
+   - 原因二（避免強引用阻斷）：`ork_acquire_object_pointer` 要求強引用計數 > 0，但手動復水期間外部智慧指標尚未建立，強引用為 0 會導致合法已載入物件被誤判為未載入，進而引發併發覆寫破壞。
+
+---
+
+## 🛡️ 7. 物件鎖定之二次確認與 TOCTOU 防禦規範 (Object Locking Double-Checked Locking RFC)
+
+為防範全域註冊表讀寫鎖（`m_registry_mutex`）與物件讀寫鎖（`cb->m_rw_lock`）產生 AB-BA 逆向死鎖，核心在 `ork_lock_object` 與 `ork_lock_object_shared` 中採用兩階段取鎖模型：
+1. **第一階段（Pinning 弱引用釘住）**：在持有 `m_registry_mutex` 共享讀鎖下尋找目標，原子遞增 `cb->m_weak_count`，隨後**立即釋放名冊讀鎖**。
+2. **第二階段（無鎖等待目標鎖）**：無名冊鎖保護下等待 `cb->m_rw_lock`（寫鎖或讀鎖）。
+3. **Double-Checked Locking 鐵律**：
+   - 在釋放名冊鎖至成功獲得物件鎖的排隊間隙，並發執行緒可能已發起物件銷毀（如 `UnregisterObject` 或延遲清理）。
+   - 因此，**成功獲取物件鎖後，必須立即二次驗證物件拆解旗標**：
+     ```text
+     If cb.is_destructing == True Then
+         ReleaseObjectLock(cb)      // 立即釋放剛獲取的讀寫鎖
+         ReleasePin(target_id, cb)  // 原子遞減 weak_count，若為最後持有者則清理墓碑
+         Return Error(ObjectNotFound / Destructing)
+     End If
+     ```
+   - 徹底杜絕呼叫端持有一把已指向被釋放 Payload 的死鎖，100% 杜絕 TOCTOU (Time-of-Check to Time-of-Use) 與 UAF。
+
+---
+
+## 🚪 8. 進程退出與靜態單例解構之無鎖清理防線 (Process Exit Lockless Tear-Down RFC)
+
+在 Windows/POSIX 作業系統中，進程終止（CRT `exit()`）與動態程式庫卸載（`LdrShutdownProcess`）期間，作業系統持有了進程級的 **Loader Lock**：
+1. **Loader Lock 期間禁止嘗試獲取讀寫互斥鎖**：
+   - 在 Loader Lock 期間，背景工作執行緒可能已被作業系統強制凍結或終止。
+   - 若靜態單例解構子（`~Registry()`）嘗試獲取 `std::shared_mutex`（在 MinGW 下底層為 `pthread_rwlock_wrlock`），會與作業系統同步物件或已凍結執行緒衝突，造成進程退出死鎖。
+2. **無鎖置換（Lockless Swap）兩階段清理架構**：
+   - 解構子（`~Registry()`）執行時，所有業務執行緒已經停止，無並發寫入威脅。解構子必須以無鎖模式執行 `ClearInternal(acquire_lock=false)`：
+     - 步驟一：無鎖極速換出名冊（`to_cleanup.swap(m_object_map)`）。
+     - 步驟二：無鎖依序調用 `cb->DeletePayload()` 釋放實體記憶體。
+     - 步驟三：無鎖依序 `delete cb` 釋放墓碑控制區塊。
+     - 步驟四：無鎖清空持久化映射名冊。
+   - 常規執行期重置（`ork::Registry::Clear()` / `ork_shutdown_runtime`）則維持獨佔寫入鎖保護（`acquire_lock=true`），達成靜態退出與動態排空的雙軌安全。

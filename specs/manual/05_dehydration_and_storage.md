@@ -71,6 +71,10 @@ if (result.success) {
 > **私有封閉防禦保證**：
 > 核心內部的復水底層回呼（`RehydrateCallback`）被嚴格收斂於私有實作中，回傳值為 `void` 且透過 ControlBlock 私有綁定，嚴格杜絕外洩物件原始裸指標。
 
+> [!TIP]
+> **多執行緒並發復水安全保證 (Double-Checked Locking Invariant)**：
+> 當多個工作執行緒同時嘗試對同一個已脫水 HandleID 進行復水時，核心透過 ControlBlock 獨佔寫鎖與雙重檢查鎖機制（`StorageState != Dehydrated` 且 `ork_is_payload_loaded == true`），保證同一時間僅有第一個取得鎖的執行緒執行藍圖反序列化，其餘執行緒安全早退，絕不重複載入或覆寫實體指標。
+
 ---
 
 ## 🔍 5. 儲存狀態與零 I/O 墓碑查詢保證 (Zero-I/O StorageState)
@@ -81,6 +85,9 @@ ork::StorageState state = ork::GetStorageState(boss_id);
 if (state == ork::StorageState::Dehydrated) {
     std::cout << "物件目前已脫水落盤，記憶體已釋放" << std::endl;
 }
+
+// 查詢實體 Payload 肉體是否已載入記憶體中（純記憶體讀取，零 I/O 零復水，不要求強引用存活）
+bool is_loaded = ork::IsPayloadLoaded(boss_id);
 
 // 🛡️ 零 I/O 保證：
 // 以下查詢純比對記憶體中之 ControlBlock 墓碑，絕對不會誘發磁碟 I/O 復水：

@@ -26,7 +26,6 @@ class ControlBlockPinGuard
 {
 public:
   ControlBlockPinGuard() noexcept = default;
-  ControlBlockPinGuard(HandleID id, ControlBlock *cb) noexcept;
   ~ControlBlockPinGuard();
 
   ControlBlockPinGuard(ControlBlockPinGuard &&other) noexcept;
@@ -44,6 +43,14 @@ public:
   void Reset();
 
 private:
+  friend class Registry;
+
+  /**
+   * @brief 私有建構子：僅授權 Registry::AcquireControlBlock 構造。
+   * 禁止任何外部手動構造帶有裸指標的 PinGuard，杜絕未遞增 weak_count 卻在解構時遞減引發之計數下溢與提早釋放 UAF 隱患。
+   */
+  ControlBlockPinGuard(HandleID id, ControlBlock *cb) noexcept;
+
   HandleID m_id{0};
   ControlBlock *m_cb{nullptr};
 };
@@ -167,6 +174,7 @@ public:
 
   // StorageState management
   uint8_t GetStorageState(HandleID target_id) const;
+  bool IsPayloadLoaded(HandleID target_id) const;
   bool SetStorageState(HandleID target_id, uint8_t state);
   bool MarkDirty(HandleID target_id);
   bool SetRehydrateFn(HandleID target_id, RehydrateFn fn);
@@ -202,6 +210,9 @@ private:
   ~Registry();
 
   HandleID GenerateUniqueID();
+
+  void ClearInternal(bool acquire_lock);
+
 
   /**
    * @brief 在持有 m_registry_mutex 獨佔寫入鎖的前提下，嚴格判定並銷毀 ControlBlock。

@@ -709,6 +709,10 @@ if (result.success) {
 > **私有封閉防禦保證**：
 > 核心內部的復水底層回呼（`RehydrateCallback`）被嚴格收斂於私有實作中，回傳值為 `void` 且透過 ControlBlock 私有綁定，嚴格杜絕外洩物件原始裸指標。
 
+> [!TIP]
+> **多執行緒並發復水安全保證 (Double-Checked Locking Invariant)**：
+> 當多個工作執行緒同時嘗試對同一個已脫水 HandleID 進行復水時，核心透過 ControlBlock 獨佔寫鎖與雙重檢查鎖機制（`StorageState != Dehydrated` 且 `ork_is_payload_loaded == true`），保證同一時間僅有第一個取得鎖的執行緒執行藍圖反序列化，其餘執行緒安全早退，絕不重複載入或覆寫實體指標。
+
 ---
 
 ## 🔍 5. 儲存狀態與零 I/O 墓碑查詢保證 (Zero-I/O StorageState)
@@ -719,6 +723,9 @@ ork::StorageState state = ork::GetStorageState(boss_id);
 if (state == ork::StorageState::Dehydrated) {
     std::cout << "物件目前已脫水落盤，記憶體已釋放" << std::endl;
 }
+
+// 查詢實體 Payload 肉體是否已載入記憶體中（純記憶體讀取，零 I/O 零復水，不要求強引用存活）
+bool is_loaded = ork::IsPayloadLoaded(boss_id);
 
 // 🛡️ 零 I/O 保證：
 // 以下查詢純比對記憶體中之 ControlBlock 墓碑，絕對不會誘發磁碟 I/O 復水：
@@ -801,6 +808,19 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
 * 核心的**單向不可變防線**會安全拒絕該請求。
 * 回傳無效的 `HostContext`（`host.IsValid() == false`）。
 * 插件若嘗試在無效的 `HostContext` 上調用任何特權方法，核心立即拋出 `std::runtime_error` 越權異常，徹底隔絕特權穿透！
+
+---
+
+## 🚪 4. 雙層關閉防禦體系：Host RAII 與靜態單例退出防線
+
+為了保證不同呼叫場景下的進程完全安全落地，OuroKore 建立了內外兩層安全關閉體系：
+
+1. **第一道防線：Host 宿主標準 RAII 管理（運行期主動優雅終止）**
+   - 主程式持有唯一的 `HostContext`。當 `host` 離開作用域解構時，內部自動調用 `ork_shutdown_runtime()`。
+   - 此時進程健康、各執行緒仍可控，核心在名冊獨佔鎖保護下執行 `Registry::Clear()`、排空延遲銷毀隊列、停止背景執行緒並重置狀態。
+2. **第二道防線：純外掛環境與進程退出兜底（Exit-Time Lockless Tear-Down）**
+   - 在第三方外掛獨立單元測試、或未透過 `HostContext` 初始化的獨立模組中，主程式直接退出進入 CRT `exit()` 與作業系統 Loader Lock 階段。
+   - 核心長存的靜態註冊表解構子（`~Registry()`）**自動切換為無鎖兜底模式**（`ClearInternal(false)`），直接執行兩階段無鎖置換與釋放（先清空 Payload 再清空 ControlBlock），絕不嘗試獲取讀寫互斥鎖，徹底避免與 Windows Loader Lock 產生死鎖！
 ''', encoding="utf-8")
 
     (manual_dir / "07_tree_and_dsl.md").write_text(r'''# 07. 樹狀物件節點與文字 DSL 指南 (Tree & TreeIO)
@@ -1296,7 +1316,7 @@ assert(!tracker.IsAlive());             // false！
     # 08_base_utilities.md
     (manual_dir / "08_base_utilities.md").write_text(r'''# 08. 基礎工具庫指南 (Base Foundation & Utilities)
 
-本章節介紹 OuroKore 基礎模組（`ourokore_base`）中提供的通用現代基礎設施與工具庫。這些工具零依賴上層核心邏輯（`ourokore_core`），遵循現代 ISO C++20 標準，具備高效能、跨平台與極致執行緒安全特性。
+本章節介紹 OuroKore 基礎模組（`ourokore_base`）中提供的通用現代基礎設施與工具庫。這些工具零依賴上層核心邏輯（`ourokore_core`），遵循現代 ISO C++23 標準，具備高效能、跨平台與極致執行緒安全特性。
 
 ---
 
@@ -1309,7 +1329,7 @@ assert(!tracker.IsAlive());             // false！
 |                           ourokore_base 基礎工具庫                                |
 +-----------------------------------------+-----------------------------------------+
 | 1. 動態模組載入器 (DynamicLibrary)       | 2. 現代編譯期雜湊模組 (Hash)            |
-|    - 生命週期反向錨定 (Life-Bound)      |    - C++20 constexpr 編譯期計算         |
+|    - 生命週期反向錨定 (Life-Bound)      |    - C++23 constexpr 編譯期計算         |
 |    - 弱引用晉升 (WeakDynamicLibrary)    |    - FNV-1a (TypeID 唯一標準)           |
 |    - 純存活權杖 (LifetimeToken)         |    - CRC32 / MurmurHash3 / HashCombine  |
 |    - 後置卸載通知與非同步離棧延遲卸載   |    - 使用者自訂字面量 (_fnv64, _crc32)  |
@@ -1320,7 +1340,10 @@ assert(!tracker.IsAlive());             // false！
 |    - 執行緒安全佇列 (ThreadSafeQueue)   |    - Windows Unicode W 邊界隔離         |
 |    - 計數信號量與事件 (Semaphore/Event) |                                         |
 +-----------------------------------------+-----------------------------------------+
-| 5. 樹狀物件節點與文字 DSL (Tree & TreeIO) ── 詳見《07. 樹狀物件節點與文字 DSL 指南》|
+| 5. 原生值語意錯誤處理 (Result/Expected) | 6. 樹狀物件節點與文字 DSL (Tree & TreeIO)|
+|    - std::expected 原生強型別無例外     |    - 保序向量與雜湊雙模態統合           |
+|    - Status / StatusCode 列舉           |    - C++23 std::derived_from 強型別直出 |
+|    - Monadic 鏈式調用 (.and_then 等)    |    - 詳見《07. 樹狀物件節點指南》       |
 +-----------------------------------------------------------------------------------+
 ```
 
@@ -1768,7 +1791,51 @@ ready_event.set();
 
 ---
 
-## 🌳 5. 現代樹狀物件節點與文字 DSL 串流 (Tree & TreeIO)
+## 🛡️ 5. 原生值語意錯誤處理與 Monadic 操作 (Result.hpp & std::expected)
+
+* **標頭檔**：`<ourokore/base/Result.hpp>`
+* **命名空間**：`ork::base`（或別名 `ork::Result` / `ork::Status`）
+
+OuroKore 全面擁抱 ISO C++23 原生 `<expected>`，提供現代值語意錯誤處理基石，徹底告別傳統 C++ 例外跨 DLL 崩潰與易被忽略的錯誤碼：
+
+### 5.1 核心型別
+* **`ork::base::StatusCode`**：標準狀態碼列舉（`Ok`、`InvalidArgument`、`NotFound`、`AlreadyExists`、`Timeout`、`ResourceExhausted`、`PermissionDenied`、`Internal`、`Unavailable` 等）。
+* **`ork::base::Status`**：輕量值語意狀態物件，包含 `StatusCode` 與 UTF-8 錯誤訊息字串。提供 `ok()`、`code()`、`message()` 等查詢方法，並支援 `operator bool()`。
+* **`ork::base::Result<T, E>`**：基於 ISO C++23 原生 `std::expected<T, E>` 之泛型結果包裝器（預設 `E = Status`）。
+* **`ork::base::StatusOr<T>`**：`Result<T, Status>` 之等價別名。
+
+### 5.2 現代 Monadic 鏈式調用範例
+```cpp
+#include <ourokore/base/Result.hpp>
+
+ork::base::Result<int> parse_version(std::string_view str) {
+    if (str.empty()) {
+        return ork::base::unexpected(ork::base::Status::InvalidArgument("版本字串為空"));
+    }
+    return 1;
+}
+
+// 支援 C++23 Monadic 鏈式呼叫
+auto result = parse_version("1.0.0")
+    .transform([](int v) { return v * 10; })
+    .and_then([](int v) -> ork::base::Result<int> {
+        return v + 5;
+    });
+
+if (result) {
+    std::cout << "計算版本號: " << *result << std::endl;
+} else {
+    std::cerr << "失敗: " << result.error().message() << std::endl;
+}
+```
+
+### 5.3 基礎工具原生整合
+* **動態庫安全載入**：`ork::base::DynamicLibrary::try_load(path)` 返回 `Result<DynamicLibrary>`；`lib.try_get_symbol<Fn>(name)` 返回 `Result<Fn>`。
+* **並行佇列**：`ork::base::ThreadSafeQueue<T>::pop_expected()` 返回 `Result<T>`，在佇列為空或停止時返回強型別錯誤碼。
+
+---
+
+## 🌳 6. 現代樹狀物件節點與文字 DSL 串流 (Tree & TreeIO)
 
 適用於階層實體、異質領域物件階層、設定檔、屬性樹、文字 DSL 串流存取與遊戲腳本配置。
 詳細深入指南請參閱專章：
@@ -1964,8 +2031,8 @@ ork::PluginHeap::assert_clean("MyPlugin");
 ## 🔒 4. 併發同步守衛
 * **標頭檔**：`ourokore/component/OuroObject.hpp`
 * **類別**：
-  * `OuroReadLock`：共享讀鎖 RAII 守衛。
-  * `OuroWriteLock`：獨占寫鎖 RAII 守衛，**解構時自動原子標記 Dirty**。
+  * `OuroReadLock`：共享讀鎖 RAII 守衛。底層整合弱引用 Pinning 與獲取鎖後之 DCL 二次確認，若上鎖期間物件析構，安全拒絕存取並防範 UAF。
+  * `OuroWriteLock`：獨占寫鎖 RAII 守衛。同樣具備 Pinning 與 DCL 二次確認防禦，**解構時自動原子標記 Dirty**。
 
 ---
 
@@ -1983,6 +2050,7 @@ ork::PluginHeap::assert_clean("MyPlugin");
   * `RehydrateAsync<T>(HandleID id)` / `RehydrateAsync<T>(const OuroPtr<T> &ptr)`：非同步背景顯式復水。
   * `IsAlive(HandleID id)`：查詢物件是否存活（純 ControlBlock 查詢，零 I/O 保證）。
   * `GetStorageState(HandleID id)`：查詢物件當前 StorageState（純 ControlBlock 查詢，零 I/O 保證）。
+  * `IsPayloadLoaded(HandleID id)`：查詢目標物件之實體記憶體指標（Payload）是否已載入（純記憶體讀取，零 I/O 零復水，不要求強引用存活）。
   * `GetRootEdgeCount(HandleID id)`：查詢目標當前活躍根邊緣數量。
   * `SaveBatch(...)` / `LoadBatch(...)`：多核心平行批次操作。
 
@@ -1993,14 +2061,17 @@ ork::PluginHeap::assert_clean("MyPlugin");
 * **設計哲學與卸載原則**：
   * **禁絕手動卸載 (No Manual Unload)**：動態庫不提供手動 `unload()`，杜絕野指針與 vtable 懸空崩溃。
   * **生命週期反向錨定 (Life-Bound Retention)**：物件全數銷毀後自動安全卸載。呼叫端若長存 `load()` 回傳之初始句柄則永遠不卸載，完成綁定後應主動 `reset()` 或移交權杖。
+  * **C++23 強型別無例外錯誤處理**：提供 `try_load()` 與 `try_get_symbol()`，回傳 `Result<T>`，徹底杜絕跨 DLL 邊界例外逃逸。
 * **方法**：
   * `static DynamicLibrary load(std::string_view utf8_path, LibraryLoadFlags flags = Default)`：自 UTF-8 路徑載入動態庫。
+  * `static Result<DynamicLibrary> try_load(std::string_view utf8_path, LibraryLoadFlags flags = Default)`：自 UTF-8 路徑載入動態庫並回傳 `Result<DynamicLibrary>`（失敗包含 Status 錯誤碼與 UTF-8 原因）。
   * `void reset() noexcept`：放棄句柄持有（扣減引用計數）。
   * `bool is_loaded() const noexcept`：查詢是否載入成功。
   * `const std::string &get_last_error() const noexcept`：取得 UTF-8 系統錯誤訊息。
   * `std::string get_path_utf8() const noexcept`：取得規範路徑。
   * `size_t use_count() const noexcept`：取得存活引用計數。
   * `template <typename FuncT> auto get_symbol(std::string_view name) const noexcept`：解析導出符號。
+  * `template <typename FuncT> Result<FuncT> try_get_symbol(std::string_view name) const noexcept`：解析導出符號並回傳 `Result<FuncT>`。
   * `bool is_first_loaded() const noexcept`：查詢是否為進程內首次載入（0 -> 1）。
   * `template <typename FuncT, typename... Args> bool initialize_once(std::string_view symbol, Args&&... args)`：首次載入單次初始化。
   * `std::shared_ptr<const void> create_lifetime_token() const noexcept`：建立純生命週期權杖（輕量保活）。
@@ -2098,6 +2169,9 @@ ork::PluginHeap::assert_clean("MyPlugin");
   * `void Push(T item)` / `void Push(T&& item)`：執行緒安全寫入元素並喚醒等待者。
   * `bool TryPop(T &item)`：非阻塞嘗試取出元素（佇列為空時立即返回 false）。
   * `T WaitAndPop()` / `bool WaitAndPop(T &item, duration timeout)`：阻塞或限時等待取出元素。
+  * `Result<T> pop_expected()`：原生 C++23 `Result<T>` 阻塞取出（失敗/停止時回傳 Status）。
+  * `Result<T> pop_for_expected(duration timeout)`：原生 C++23 `Result<T>` 限時等待取出（逾時回傳 StatusCode::Timeout）。
+  * `Result<T> try_pop_expected()`：原生 C++23 `Result<T>` 非阻塞取出（為空回傳 StatusCode::Unavailable）。
   * `bool Empty() const` / `size_t Size() const` / `void Clear()`
 * **計數信號量 `ork::base::Semaphore`**：
   * `explicit Semaphore(ptrdiff_t initial_count)`
@@ -2134,10 +2208,28 @@ ork::PluginHeap::assert_clean("MyPlugin");
 
 ---
 
-## 🌐 12. 底層純 C ABI（Cross-Language FFI）分類索引
+## 🛡️ 12. 原生值語意錯誤處理：`ork::base::Result` / `ork::base::Status`
+* **標頭檔**：`<ourokore/base/Result.hpp>`
+* **命名空間**：`ork::base`（核心匯出別名 `ork::Result`、`ork::Status`、`ork::StatusCode`）
+* **狀態碼列舉 `StatusCode`**：
+  * `Ok`, `Cancelled`, `InvalidArgument`, `NotFound`, `AlreadyExists`, `PermissionDenied`, `ResourceExhausted`, `FailedPrecondition`, `Aborted`, `OutOfRange`, `Unimplemented`, `Internal`, `Unavailable`, `DataLoss`, `Timeout`, `Unknown`
+* **狀態類別 `Status`**：
+  * `Status(StatusCode code = Ok, std::string_view msg = "")`
+  * 工廠方法：`Status::Ok()`、`Status::InvalidArgument(msg)`、`Status::NotFound(msg)`、`Status::Timeout(msg)` 等
+  * `bool ok() const noexcept` / `explicit operator bool() const noexcept`
+  * `StatusCode code() const noexcept` / `const std::string &message() const noexcept`
+  * `std::string ToString() const`
+* **泛型結果樣板 `Result<T, E = Status>` 與 `StatusOr<T>`**：
+  * 基於 C++23 原生 `std::expected<T, E>` / `std::unexpected<E>`
+  * 支援 `.has_value()`, `operator*()`, `operator->()`, `.value()`, `.error()`, `.value_or(default_val)`
+  * 支援 C++23 Monadic operations：`.and_then()`, `.transform()`, `.or_else()`, `.transform_error()`
+
+---
+
+## 🌐 13. 底層純 C ABI（Cross-Language FFI）分類索引
 所有底層操作保證跨 DLL 邊界零例外逃逸，完整清單與參數規格請參見《[03. 純 C ABI 規格與記憶體佈局規範](../technical/03_c_abi_and_memory.md)》：
 * **類別 A：物件生命週期與工廠**（`ork_create_object`、`ork_retain_object`、`ork_release_object`、`ork_acquire_object_pointer`、`ork_release_object_pointer`）
-* **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）
+* **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_is_payload_loaded`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）
 * **類別 C：宿主全域特權**（`ork_host_initialize`、`ork_host_shutdown`、`ork_host_set_storage_driver`、`ork_host_trigger_dehydration_rescue` 等）
 * **類別 D：外掛 Heap 記憶體檢查**（`ork_heap_allocate`、`ork_heap_deallocate`、`ork_heap_is_clean`、`ork_heap_dump_leaks`、`ork_heap_assert_clean`）
 ''', encoding="utf-8")

@@ -267,6 +267,9 @@ void Test3_SingleObject_Dehydration_Rehydration(ork::HostContext &host)
   auto weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
   ork::HandleID original_id = weapon.GetTargetID();
   assert(weapon(&WeaponObject::GetStorageState) == ork::StorageState::UnsavedNew);
+  assert(ork::IsPayloadLoaded(original_id) == true);
+  int32_t c_loaded = 0;
+  assert(ork_is_payload_loaded(original_id, &c_loaded) == ORK_STATUS_OK && c_loaded == 1);
 
   weapon(&WeaponObject::SetDamage, 250);
 
@@ -277,12 +280,16 @@ void Test3_SingleObject_Dehydration_Rehydration(ork::HostContext &host)
 
   // Verify ControlBlock retains StorageState::Dehydrated even after payload memory is freed!
   assert(ork::GetStorageState(original_id) == ork::StorageState::Dehydrated);
+  assert(ork::IsPayloadLoaded(original_id) == false);
+  assert(ork_is_payload_loaded(original_id, &c_loaded) == ORK_STATUS_OK && c_loaded == 0);
 
   // Rehydrate: reload payload and re-bind to same HandleID!
   auto rehydrated_weapon = ork::Rehydrate<WeaponObject>(original_id);
   assert(rehydrated_weapon.GetTargetID() == original_id);
   assert(rehydrated_weapon(&WeaponObject::GetDamage) == 250);
   assert(rehydrated_weapon(&WeaponObject::GetStorageState) == ork::StorageState::Clean);
+  assert(ork::IsPayloadLoaded(original_id) == true);
+  assert(ork_is_payload_loaded(original_id, &c_loaded) == ORK_STATUS_OK && c_loaded == 1);
 
   // Modify property via WriteLock -> automatically marked Dirty!
   rehydrated_weapon(&WeaponObject::SetDamage, 300);

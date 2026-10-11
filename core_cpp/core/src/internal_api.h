@@ -6,6 +6,8 @@
 namespace ork::internal
 {
 
+using ork_rehydrate_fn_t = void (*)(HandleID id);
+
 /**
  * @brief Reserve a HandleID and create a ControlBlock with a null payload.
  * Used internally by CreateObject two-phase construction.

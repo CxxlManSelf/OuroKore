@@ -1,6 +1,6 @@
 # 08. 基礎工具庫指南 (Base Foundation & Utilities)
 
-本章節介紹 OuroKore 基礎模組（`ourokore_base`）中提供的通用現代基礎設施與工具庫。這些工具零依賴上層核心邏輯（`ourokore_core`），遵循現代 ISO C++20 標準，具備高效能、跨平台與極致執行緒安全特性。
+本章節介紹 OuroKore 基礎模組（`ourokore_base`）中提供的通用現代基礎設施與工具庫。這些工具零依賴上層核心邏輯（`ourokore_core`），遵循現代 ISO C++23 標準，具備高效能、跨平台與極致執行緒安全特性。
 
 ---
 
@@ -13,7 +13,7 @@
 |                           ourokore_base 基礎工具庫                                |
 +-----------------------------------------+-----------------------------------------+
 | 1. 動態模組載入器 (DynamicLibrary)       | 2. 現代編譯期雜湊模組 (Hash)            |
-|    - 生命週期反向錨定 (Life-Bound)      |    - C++20 constexpr 編譯期計算         |
+|    - 生命週期反向錨定 (Life-Bound)      |    - C++23 constexpr 編譯期計算         |
 |    - 弱引用晉升 (WeakDynamicLibrary)    |    - FNV-1a (TypeID 唯一標準)           |
 |    - 純存活權杖 (LifetimeToken)         |    - CRC32 / MurmurHash3 / HashCombine  |
 |    - 後置卸載通知與非同步離棧延遲卸載   |    - 使用者自訂字面量 (_fnv64, _crc32)  |
@@ -24,7 +24,10 @@
 |    - 執行緒安全佇列 (ThreadSafeQueue)   |    - Windows Unicode W 邊界隔離         |
 |    - 計數信號量與事件 (Semaphore/Event) |                                         |
 +-----------------------------------------+-----------------------------------------+
-| 5. 樹狀物件節點與文字 DSL (Tree & TreeIO) ── 詳見《07. 樹狀物件節點與文字 DSL 指南》|
+| 5. 原生值語意錯誤處理 (Result/Expected) | 6. 樹狀物件節點與文字 DSL (Tree & TreeIO)|
+|    - std::expected 原生強型別無例外     |    - 保序向量與雜湊雙模態統合           |
+|    - Status / StatusCode 列舉           |    - C++23 std::derived_from 強型別直出 |
+|    - Monadic 鏈式調用 (.and_then 等)    |    - 詳見《07. 樹狀物件節點指南》       |
 +-----------------------------------------------------------------------------------+
 ```
 
@@ -472,7 +475,51 @@ ready_event.set();
 
 ---
 
-## 🌳 5. 現代樹狀物件節點與文字 DSL 串流 (Tree & TreeIO)
+## 🛡️ 5. 原生值語意錯誤處理與 Monadic 操作 (Result.hpp & std::expected)
+
+* **標頭檔**：`<ourokore/base/Result.hpp>`
+* **命名空間**：`ork::base`（或別名 `ork::Result` / `ork::Status`）
+
+OuroKore 全面擁抱 ISO C++23 原生 `<expected>`，提供現代值語意錯誤處理基石，徹底告別傳統 C++ 例外跨 DLL 崩潰與易被忽略的錯誤碼：
+
+### 5.1 核心型別
+* **`ork::base::StatusCode`**：標準狀態碼列舉（`Ok`、`InvalidArgument`、`NotFound`、`AlreadyExists`、`Timeout`、`ResourceExhausted`、`PermissionDenied`、`Internal`、`Unavailable` 等）。
+* **`ork::base::Status`**：輕量值語意狀態物件，包含 `StatusCode` 與 UTF-8 錯誤訊息字串。提供 `ok()`、`code()`、`message()` 等查詢方法，並支援 `operator bool()`。
+* **`ork::base::Result<T, E>`**：基於 ISO C++23 原生 `std::expected<T, E>` 之泛型結果包裝器（預設 `E = Status`）。
+* **`ork::base::StatusOr<T>`**：`Result<T, Status>` 之等價別名。
+
+### 5.2 現代 Monadic 鏈式調用範例
+```cpp
+#include <ourokore/base/Result.hpp>
+
+ork::base::Result<int> parse_version(std::string_view str) {
+    if (str.empty()) {
+        return ork::base::unexpected(ork::base::Status::InvalidArgument("版本字串為空"));
+    }
+    return 1;
+}
+
+// 支援 C++23 Monadic 鏈式呼叫
+auto result = parse_version("1.0.0")
+    .transform([](int v) { return v * 10; })
+    .and_then([](int v) -> ork::base::Result<int> {
+        return v + 5;
+    });
+
+if (result) {
+    std::cout << "計算版本號: " << *result << std::endl;
+} else {
+    std::cerr << "失敗: " << result.error().message() << std::endl;
+}
+```
+
+### 5.3 基礎工具原生整合
+* **動態庫安全載入**：`ork::base::DynamicLibrary::try_load(path)` 返回 `Result<DynamicLibrary>`；`lib.try_get_symbol<Fn>(name)` 返回 `Result<Fn>`。
+* **並行佇列**：`ork::base::ThreadSafeQueue<T>::pop_expected()` 返回 `Result<T>`，在佇列為空或停止時返回強型別錯誤碼。
+
+---
+
+## 🌳 6. 現代樹狀物件節點與文字 DSL 串流 (Tree & TreeIO)
 
 適用於階層實體、異質領域物件階層、設定檔、屬性樹、文字 DSL 串流存取與遊戲腳本配置。
 詳細深入指南請參閱專章：

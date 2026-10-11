@@ -22,13 +22,10 @@ Registry::Registry()
 
 Registry::~Registry()
 {
-  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
-  for (auto &pair : m_object_map)
-  {
-    delete pair.second;
-  }
-  m_object_map.clear();
+  ClearInternal(/*acquire_lock=*/false);
 }
+
+
 
 Registry &Registry::GetInstance()
 {
@@ -92,11 +89,11 @@ bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn, o
     }
     if (!obj)
     {
-      cb->m_destroy_fn = nullptr;
+      cb->m_destroy_fn.store(nullptr, std::memory_order_release);
     }
     else if (destroy_fn)
     {
-      cb->m_destroy_fn = destroy_fn;
+      cb->m_destroy_fn.store(destroy_fn, std::memory_order_release);
     }
     if (type_id != 0)
     {
@@ -134,26 +131,42 @@ bool Registry::SetObjectType(HandleID target_id, ork_type_id_t type_id)
 
 bool Registry::UnregisterObject(HandleID id)
 {
-  std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
-  auto it = m_object_map.find(id);
-  if (it != m_object_map.end())
+  ControlBlock *cb = nullptr;
   {
-    ControlBlock *cb = it->second;
-    // 取消預留 (Rollback Reservation)：解除預留保護並釋放已有 payload
-    cb->m_is_reserved.store(false, std::memory_order_release);
-    cb->DeletePayload();
-    bool expected = false;
-    bool should_notify = cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
-    bool destroyed = TryDestroyControlBlockLocked(id, cb);
-    lock.unlock();
-
-    if (should_notify)
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(id);
+    if (it == m_object_map.end())
     {
-      NotifyObjectDestroyed(id);
+      return false;
     }
-    return destroyed;
+    cb = it->second;
+    // 在讀鎖保護下原子遞增 weak_count，牢牢釘住 ControlBlock 生命週期防 UAF
+    cb->m_weak_count.fetch_add(1, std::memory_order_relaxed);
   }
-  return false;
+
+  // 取消預留 (Rollback Reservation)：解除預留保護
+  cb->m_is_reserved.store(false, std::memory_order_release);
+
+  // 【核心安全性保證】：在完全無名冊鎖狀態下執行 Payload 解構，徹底杜絕析構內部調用 Registry 引發的重入死鎖！
+  cb->DeletePayload();
+
+  bool expected = false;
+  bool should_notify = cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+
+  // 歸還剛才借用的 weak_count，並在名冊獨佔鎖保護下嘗試回收 ControlBlock 墓碑
+  bool destroyed = false;
+  uint32_t prev_weak = cb->m_weak_count.fetch_sub(1, std::memory_order_acq_rel);
+  if (prev_weak == 1)
+  {
+    std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
+    destroyed = TryDestroyControlBlockLocked(id, cb);
+  }
+
+  if (should_notify)
+  {
+    NotifyObjectDestroyed(id);
+  }
+  return destroyed;
 }
 
 bool Registry::RegisterEdge(HandleID owner_id, HandleID target_id)
@@ -506,59 +519,94 @@ bool Registry::TryLockWeak(HandleID target_id)
 
 bool Registry::LockObject(HandleID target_id)
 {
-  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-  auto it = m_object_map.find(target_id);
-  if (it == m_object_map.end())
+  ControlBlock *cb = nullptr;
   {
-    return false;
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+    if (cb->m_is_destructing.load(std::memory_order_acquire))
+    {
+      return false;
+    }
+    cb->m_weak_count.fetch_add(1, std::memory_order_relaxed);
   }
-  ControlBlock *cb = it->second;
+  // 提前釋放 m_registry_mutex 讀鎖再等待 cb->m_rw_lock，徹底防範與 unique_lock(m_registry_mutex) 產生 AB-BA 死鎖
+  cb->m_rw_lock.lock();
+
+  // 二次確認 (Double Check)：在鎖定期間若物件已被標記為析構，立即解鎖、釋放釘住狀態並返回失敗，徹底防範 TOCTOU 與 UAF
   if (cb->m_is_destructing.load(std::memory_order_acquire))
   {
+    cb->m_rw_lock.unlock();
+    ReleasePin(target_id, cb);
     return false;
   }
-  cb->m_rw_lock.lock();
   return true;
 }
 
 bool Registry::UnlockObject(HandleID target_id)
 {
-  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-  auto it = m_object_map.find(target_id);
-  if (it == m_object_map.end())
+  ControlBlock *cb = nullptr;
   {
-    return false;
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
   }
-  it->second->m_rw_lock.unlock();
+  cb->m_rw_lock.unlock();
+  ReleasePin(target_id, cb);
   return true;
 }
 
 bool Registry::LockObjectShared(HandleID target_id)
 {
-  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-  auto it = m_object_map.find(target_id);
-  if (it == m_object_map.end())
+  ControlBlock *cb = nullptr;
   {
-    return false;
-  }
-  ControlBlock *cb = it->second;
-  if (cb->m_is_destructing.load(std::memory_order_acquire))
-  {
-    return false;
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+    if (cb->m_is_destructing.load(std::memory_order_acquire))
+    {
+      return false;
+    }
+    cb->m_weak_count.fetch_add(1, std::memory_order_relaxed);
   }
   cb->m_rw_lock.lock_shared();
+
+  // 二次確認 (Double Check)：在鎖定期間若物件已被標記為析構，立即解鎖、釋放釘住狀態並返回失敗，徹底防範 TOCTOU 與 UAF
+  if (cb->m_is_destructing.load(std::memory_order_acquire))
+  {
+    cb->m_rw_lock.unlock_shared();
+    ReleasePin(target_id, cb);
+    return false;
+  }
   return true;
 }
 
 bool Registry::UnlockObjectShared(HandleID target_id)
 {
-  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-  auto it = m_object_map.find(target_id);
-  if (it == m_object_map.end())
+  ControlBlock *cb = nullptr;
   {
-    return false;
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
   }
-  it->second->m_rw_lock.unlock_shared();
+  cb->m_rw_lock.unlock_shared();
+  ReleasePin(target_id, cb);
   return true;
 }
 
@@ -588,7 +636,7 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
   }
 
   // 3. 冷路徑（自動復水）：在讀鎖內安全拷貝復水回呼指標，解鎖後執行以徹底防止遞迴重入死鎖
-  RehydrateFn rehydrate_fn = cb->m_rehydrate_fn;
+  RehydrateFn rehydrate_fn = cb->m_rehydrate_fn.load(std::memory_order_acquire);
   lock.unlock();
 
   if (rehydrate_fn != nullptr)
@@ -615,6 +663,17 @@ uint8_t Registry::GetStorageState(HandleID target_id) const
     return it->second->m_storage_state.load(std::memory_order_relaxed);
   }
   return 0;  // Default UnsavedNew
+}
+
+bool Registry::IsPayloadLoaded(HandleID target_id) const
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end())
+  {
+    return it->second->m_payload.load(std::memory_order_acquire) != nullptr;
+  }
+  return false;
 }
 
 bool Registry::SetStorageState(HandleID target_id, uint8_t state)
@@ -644,46 +703,36 @@ bool Registry::MarkDirty(HandleID target_id)
 
 bool Registry::SetRehydrateFn(HandleID target_id, RehydrateFn fn)
 {
-  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-  auto it = m_object_map.find(target_id);
-  if (it != m_object_map.end())
+  ControlBlockPinGuard pin = AcquireControlBlock(target_id);
+  if (!pin)
   {
-    it->second->m_rehydrate_fn = fn;
-    return true;
+    return false;
   }
-  return false;
+  pin->m_rehydrate_fn.store(fn, std::memory_order_release);
+  return true;
 }
 
 bool Registry::SetDestroyFn(HandleID target_id, DestroyFn fn)
 {
-  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-  auto it = m_object_map.find(target_id);
-  if (it != m_object_map.end())
+  ControlBlockPinGuard pin = AcquireControlBlock(target_id);
+  if (!pin)
   {
-    it->second->m_destroy_fn = fn;
-    return true;
+    return false;
   }
-  return false;
+  pin->m_destroy_fn.store(fn, std::memory_order_release);
+  return true;
 }
 
 bool Registry::DestroyPayload(HandleID target_id)
 {
-  ControlBlock *cb = nullptr;
+  // 在讀鎖保護下原子釘住 ControlBlock 壽命，防範次生縫隙並發銷毀引發 UAF
+  ControlBlockPinGuard pin = AcquireControlBlock(target_id);
+  if (!pin)
   {
-    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
-    auto it = m_object_map.find(target_id);
-    if (it == m_object_map.end())
-    {
-      return false;
-    }
-    cb = it->second;
+    return false;
   }
-  if (cb)
-  {
-    cb->DeletePayload();
-    return true;
-  }
-  return false;
+  pin->DeletePayload();
+  return true;
 }
 
 uint32_t Registry::GetRootEdgeCount(HandleID target_id) const
@@ -733,12 +782,24 @@ void Registry::NotifyObjectDestroyed(HandleID id)
 
 void Registry::Clear()
 {
+  ClearInternal(/*acquire_lock=*/true);
+}
+
+void Registry::ClearInternal(bool acquire_lock)
+{
   std::unordered_map<HandleID, ControlBlock *> to_cleanup;
+  if (acquire_lock)
   {
     std::unique_lock<std::shared_mutex> lock(m_registry_mutex);
     // 1. 在獨佔鎖內極速換出整張名冊，並清空銷毀回呼
     to_cleanup.swap(m_object_map);
     m_object_destroyed_cb.store(nullptr, std::memory_order_release);
+  }
+  else
+  {
+    // 在解構期（CRT exit / Loader Lock 階段），無並發威脅，無鎖直接 swap，杜絕死鎖
+    to_cleanup.swap(m_object_map);
+    m_object_destroyed_cb.store(nullptr, std::memory_order_relaxed);
   }
 
   // 2. 第一階段：在無鎖狀態下，先釋放所有殘留的 payload 實體
@@ -759,10 +820,16 @@ void Registry::Clear()
   }
 
   // 4. 清理持久化映射名冊
+  if (acquire_lock)
   {
     std::unique_lock<std::shared_mutex> p_lock(m_persistent_mutex);
     m_persistent_map.clear();
   }
+  else
+  {
+    m_persistent_map.clear();
+  }
 }
+
 
 }  // namespace ork

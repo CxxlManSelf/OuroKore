@@ -32,10 +32,10 @@ struct ControlBlock
   std::atomic<OuroObject *> m_payload{nullptr};
 
   // Auto-rehydration function pointer callback (persisted across dehydration)
-  RehydrateFn m_rehydrate_fn{nullptr};
+  std::atomic<RehydrateFn> m_rehydrate_fn{nullptr};
 
   // In-place deleter callback function pointer (executes in creating module's CRT)
-  DestroyFn m_destroy_fn{nullptr};
+  std::atomic<DestroyFn> m_destroy_fn{nullptr};
 
   // 動態模組載入器（生命週期反向錨定：只要 ControlBlock 存活，即使脫水 DLL 亦保證不被卸載）
   DynamicLibrary m_module_loader;
@@ -85,8 +85,7 @@ struct ControlBlock
     OuroObject *to_delete = m_payload.exchange(nullptr, std::memory_order_acq_rel);
     if (to_delete)
     {
-      DestroyFn destroy_fn = m_destroy_fn;
-      m_destroy_fn = nullptr;
+      DestroyFn destroy_fn = m_destroy_fn.exchange(nullptr, std::memory_order_acq_rel);
       if (destroy_fn)
       {
         destroy_fn(to_delete);
@@ -101,7 +100,7 @@ struct ControlBlock
   ~ControlBlock()
   {
     DeletePayload();
-    ReleaseModuleLoader();
+    m_module_loader.reset();
   }
 };
 

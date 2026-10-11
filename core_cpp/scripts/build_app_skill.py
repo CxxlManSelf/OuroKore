@@ -256,6 +256,44 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 ### 5.6 節點清理狀態驗證 (TreeCleanupTracker)
 * 欲檢查「整棵樹的所有節點是否均已全數清除釋放」，透過 `root->GetCleanupTracker()` 取得輕量弱引用共享鎖追蹤器：
 * `tracker.AreAllNodesCleanedUp()` / `tracker.IsCleanedUp()`：以 $O(1)$ 常數時間精準判定整棵樹是否已全數銷毀（鎖已 expired 即代表所有持有該鎖的節點均已析構），零遍歷開銷。
+
+---
+
+## 🛡️ 6. 現代值語意錯誤處理最佳實踐 (Result & std::expected)
+
+在 OuroKore 系統中，強烈推薦應用端全面採用 ISO C++23 原生 `std::expected` 風格之值語意錯誤處理，杜絕 C++ 例外逃逸與未檢查錯誤碼：
+
+1. **結果包裝與狀態碼**：
+   - 使用 `ork::base::Result<T>`（或 `ork::Result<T>`）作為可能失敗函式的回傳型別。
+   - 失敗時使用 `ork::base::unexpected(ork::base::Status::NotFound("找不到資源"))` 回傳標準 `Status`。
+2. **C++23 Monadic 鏈式調用**：
+   - 善用 `.transform()`、`.and_then()` 與 `.or_else()` 進行函式式管道串接，保持業務邏輯扁平清晰。
+3. **基礎工具相容性**：
+   - 動態外掛載入可使用 `ork::DynamicLibrary::try_load()` 與 `lib.try_get_symbol<Fn>()`。
+   - 多執行緒佇列消費可使用 `queue.pop_expected()` 與 `queue.try_pop_expected()`。
+
+---
+
+## 🔄 7. 脫水換頁、實體載入狀態查詢與復水安全 (Dehydration & Payload Loading Invariant)
+
+1. **儲存四態與實體載入查詢（純記憶體零 I/O 保證）**：
+   - `ork::GetStorageState(id)`：查詢物件當前 StorageState（`UnsavedNew(0)`、`Clean(1)`、`Dirty(2)`、`Dehydrated(3)`）。
+   - `ork::IsPayloadLoaded(id)`：查詢物件之實體記憶體指標（Payload）是否已載入記憶體中。此操作為純記憶體原子讀取，零 I/O、不觸發自動復水，且不要求 `strong_count > 0`。
+   - `ork_is_payload_loaded(id, &out_loaded)`：底層純 C ABI 對應介面，供跨語言（C#/Rust）安全呼叫。
+2. **多執行緒併發復水安全 (Concurrent Rehydration Safety)**：
+   - 當多個工作執行緒同時對同一個已脫水 HandleID 調用 `ork::Rehydrate<T>(id)` 時，核心底層由 ControlBlock 獨佔寫鎖與雙重檢查鎖（`StorageState != Dehydrated` 且 `ork_is_payload_loaded == true`）雙重防護。
+   - 第一個取得鎖的執行緒負責反序列化建構實體，後續排隊執行緒安全早退，絕不重複反序列化亦不覆寫實體指標。
+
+---
+
+## 🔒 8. 物件鎖定之二次確認與雙層退出防線 (Object Locking DCL & Safe Tear-Down)
+
+1. **物件讀寫鎖 Double-Checked Locking (DCL) 保證**：
+   - 在多執行緒環境下使用 `OuroReadLock` 與 `OuroWriteLock`（底層調用 `ork_lock_object` / `ork_lock_object_shared`），核心在防死鎖兩階段取鎖流程中整合了 Pinning 弱引用釘住防護與獲取鎖後之 DCL 二次確認。
+   - 若在等待排隊上鎖期間目標物件已被標記為析構，核心自動立即解鎖、歸還弱引用並返回失敗，徹底防範 TOCTOU 競爭與 UAF。
+2. **雙層關閉防禦體系**：
+   - **標準 Host 應用端**：透過 `HostContext` RAII 作用域自然解構，在運行期安全呼叫 `ork_shutdown_runtime()`，主動排空磁碟與延遲銷毀隊列。
+   - **外掛獨立退出 / 異常終止**：若未經 `HostContext`（如純外掛測試），靜態單例解構子 `~Registry()` 自動切換為無鎖兜底置換清理，徹底避免在 Windows Loader Lock 期間獲取讀寫互斥鎖而發生死鎖。
 '''
     skill_file.write_text(content, encoding="utf-8")
     print("✅ 應用端 AI 技能檔 ../skills/ourokore-app/SKILL.md 生成完畢！")

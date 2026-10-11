@@ -63,3 +63,8 @@ set_target_properties(test_tracked_plugin PROPERTIES
 )
 add_dependencies(base_heap_tests test_tracked_plugin)
 
+add_executable(base_result_tests base_result_tests.cpp)
+target_link_libraries(base_result_tests ourokore_base)
+add_dependencies(base_result_tests test_plugin_dll)
+
+

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ourokore/base/export.h"
+#include "ourokore/base/Result.hpp"
 
 namespace ork
 {
@@ -117,6 +118,35 @@ public:
   static DynamicLibrary load(const std::filesystem::path &path, LibraryLoadFlags flags = LibraryLoadFlags::Default);
 
   /**
+   * @brief 嘗試載入動態庫 (基於 ISO C++23 std::expected)
+   * @return 成功回傳 DynamicLibrary 實例；失敗回傳帶有錯誤訊息之 Status::NotFound
+   */
+  static Result<DynamicLibrary> try_load(std::string_view utf8_path, LibraryLoadFlags flags = LibraryLoadFlags::Default)
+  {
+    auto lib = load(utf8_path, flags);
+    if (!lib)
+    {
+      return Err(StatusCode::NotFound, lib.get_last_error());
+    }
+    return Ok(std::move(lib));
+  }
+
+  static Result<DynamicLibrary> try_load(const char *utf8_path, LibraryLoadFlags flags = LibraryLoadFlags::Default)
+  {
+    return try_load(std::string_view(utf8_path ? utf8_path : ""), flags);
+  }
+
+  static Result<DynamicLibrary> try_load(const std::filesystem::path &path, LibraryLoadFlags flags = LibraryLoadFlags::Default)
+  {
+    auto lib = load(path, flags);
+    if (!lib)
+    {
+      return Err(StatusCode::NotFound, lib.get_last_error());
+    }
+    return Ok(std::move(lib));
+  }
+
+  /**
    * @brief 放棄當前持有的動態庫句柄（扣減引用計數）
    *
    * 使當前 DynamicLibrary 實例變為未載入狀態。若動態庫已透過 bind_lifecycle() 
@@ -172,6 +202,27 @@ public:
     {
       return reinterpret_cast<FuncT *>(get_raw_symbol(symbol_name));
     }
+  }
+
+  /**
+   * @brief 嘗試取得型別安全符號 (基於 ISO C++23 std::expected)
+   * @return 成功回傳函式指標；失敗回傳帶有錯誤訊息之 Status::NotFound
+   */
+  template <typename FuncT>
+  Result<std::conditional_t<std::is_pointer_v<FuncT>, FuncT, FuncT *>>
+  try_get_symbol(std::string_view symbol_name) const noexcept
+  {
+    auto fn = get_symbol<FuncT>(symbol_name);
+    if (!fn)
+    {
+      std::string err = get_last_error();
+      if (err.empty())
+      {
+        err = "Symbol not found: " + std::string(symbol_name);
+      }
+      return Err(StatusCode::NotFound, err);
+    }
+    return Ok(fn);
   }
 
   /**

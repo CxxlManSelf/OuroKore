@@ -14,10 +14,6 @@ typedef struct OuroObject OuroObject;
  */
 typedef void (*ork_destroy_fn_t)(OuroObject* payload);
 
-/**
- * @brief Function pointer callback type for auto-rehydrating a dehydrated object.
- */
-typedef void (*ork_rehydrate_fn_t)(HandleID id);
 
 /**
  * @brief Register a newly created object to the registry.
@@ -87,6 +83,16 @@ ORK_API int32_t ORK_CALL ork_get_active_owner(HandleID* out_owner_id);
  * @return ORK_STATUS_OK on success, or an error code.
  */
 ORK_API int32_t ORK_CALL ork_get_storage_state(HandleID target_id, uint8_t* out_state);
+
+/**
+ * @brief Checks whether the physical object payload is currently loaded in memory.
+ * This operation is 100% thread-safe, pure in-memory check without triggering auto-rehydration
+ * and does NOT require strong reference count > 0.
+ * @param target_id The HandleID of the target object.
+ * @param out_is_loaded Pointer to receive 1 if payload pointer is non-null, 0 if null.
+ * @return ORK_STATUS_OK on success, or an error code.
+ */
+ORK_API int32_t ORK_CALL ork_is_payload_loaded(HandleID target_id, int32_t* out_is_loaded);
 
 /**
  * @brief Automatically marks an object's ControlBlock as Dirty if currently Clean.

@@ -86,24 +86,27 @@ void DeferredDeleteQueue::Push(HandleID id)
 
 void DeferredDeleteQueue::ProcessItem(HandleID id)
 {
-  ControlBlock *cb = Registry::GetInstance().GetControlBlock(id);
-  if (cb)
+  ControlBlockPinGuard pin_guard = Registry::GetInstance().AcquireControlBlock(id);
+  if (pin_guard)
   {
+    ControlBlock *cb = pin_guard.Get();
+
     // 第一階段：多執行緒平行物理銷毀 Payload
     // 壓平遞迴解構：若 payload 解構時引發子物件 ork_unregister_edge 且 Strong==0，
     // 子物件會被 Push 進 DeferredDeleteQueue，而不是在當前呼叫棧深處遞迴！
     OuroObject *to_delete = nullptr;
     DestroyFn destroy_fn = nullptr;
     bool should_notify = false;
+    bool is_dead = false;
     {
       std::unique_lock<std::shared_mutex> payload_lock(cb->m_rw_lock);
       if (cb->m_strong_count.load(std::memory_order_acquire) == 0)
       {
+        is_dead = true;
         to_delete = cb->m_payload.exchange(nullptr, std::memory_order_acq_rel);
         if (to_delete)
         {
-          destroy_fn = cb->m_destroy_fn;
-          cb->m_destroy_fn = nullptr;
+          destroy_fn = cb->m_destroy_fn.exchange(nullptr, std::memory_order_acq_rel);
         }
         bool expected = false;
         if (cb->m_destruction_notified.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
@@ -113,18 +116,22 @@ void DeferredDeleteQueue::ProcessItem(HandleID id)
       }
     }
 
-    if (to_delete)
+    if (is_dead)
     {
-      if (destroy_fn)
+      if (to_delete)
       {
-        destroy_fn(to_delete);
-      }
-      else
-      {
-        to_delete->DestroySelf();
+        if (destroy_fn)
+        {
+          destroy_fn(to_delete);
+        }
+        else
+        {
+          to_delete->DestroySelf();
+        }
       }
 
-      // Payload 物理銷毀完畢，程式已安全回到 ourokore_core 空間。
+      // 無論是剛完成 Payload 物理銷毀，或是早已脫水（Payload 為空），
+      // 物件之實體生命週期均已終結，程式均已安全回到 ourokore_core 空間。
       // 立即釋放動態庫引用：即使後續 ControlBlock 仍作為墓碑長存（WeakCount > 0），DLL 亦可安全卸載！
       cb->ReleaseModuleLoader();
     }
@@ -134,6 +141,9 @@ void DeferredDeleteQueue::ProcessItem(HandleID id)
     {
       Registry::GetInstance().NotifyObjectDestroyed(id);
     }
+
+    // 任務收尾：顯式釋放釘住守衛
+    pin_guard.Reset();
 
     // 第二階段：若 WeakCount 亦為 0，自 Registry 抹除 ControlBlock
     Registry::GetInstance().DestroyControlBlockIfDead(id);

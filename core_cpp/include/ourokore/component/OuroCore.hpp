@@ -64,12 +64,11 @@ bool Save(const OuroPtr<T> &ptr)
     {
       OuroReadLock lock(obj);
       PackBlueprint(obj, *stream);
+      // 顯式提交串流（若 PackBlueprint 拋出例外，stream 自動解構回滾丟棄，不執行 Commit）
+      stream->Commit();
+      detail::MarkRuntimeObjectClean(id);
     }
 
-    // 顯式提交串流（若 PackBlueprint 拋出例外，stream 自動解構回滾丟棄，不執行 Commit）
-    stream->Commit();
-
-    detail::MarkRuntimeObjectClean(id);
     return true;
   });
 }
@@ -96,9 +95,10 @@ bool Load(const OuroPtr<T> &ptr)
     {
       OuroWriteLock lock(obj);
       UnpackBlueprint(obj, *stream);
+      detail::MarkRuntimeObjectClean(id);
+      lock.SuppressDirty();
     }
 
-    detail::MarkRuntimeObjectClean(id);
     return true;
   });
 }
@@ -182,6 +182,18 @@ inline StorageState GetStorageState(HandleID id)
 }
 
 /**
+ * @brief 查詢指定 HandleID 之物件實體 Payload 是否已載入記憶體中（純記憶體讀取，零 I/O 零復水，不要求強引用存活）
+ * @param id 目標物件 HandleID
+ * @return 若 Payload 指標非空則回傳 true，否則回傳 false
+ */
+inline bool IsPayloadLoaded(HandleID id)
+{
+  if (id == 0) return false;
+  int32_t loaded = 0;
+  return (ork_is_payload_loaded(id, &loaded) == ORK_STATUS_OK) && (loaded != 0);
+}
+
+/**
  * @brief 查詢指定 HandleID 當前被活躍 OuroPtr 持有之根邊緣數量
  * @param id 目標物件 HandleID
  * @return 活躍根邊緣計數
@@ -233,27 +245,44 @@ class Rehydrator
     // 1. RAII Exclusive Lock on ControlBlock to guarantee thread-safe serialization for concurrent Rehydrate/Dehydrate calls
     struct RehydrateExclusiveLock
     {
-      HandleID m_id;
+      HandleID m_id = 0;
+      bool m_locked = false;
+
       explicit RehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
       {
-        ork_lock_object(m_id);
+        if (m_id == 0)
+        {
+          throw std::runtime_error("OuroKore Rehydrate Error: Invalid HandleID.");
+        }
+        int32_t status = ork_lock_object(m_id);
+        if (status != ORK_STATUS_OK)
+        {
+          throw std::runtime_error("OuroKore Rehydrate Error: Failed to acquire exclusive lock on object.");
+        }
+        m_locked = true;
       }
-      ~RehydrateExclusiveLock()
+
+      ~RehydrateExclusiveLock() noexcept
       {
-        ork_unlock_object(m_id);
+        if (m_locked)
+        {
+          ork_unlock_object(m_id);
+        }
       }
+
+      RehydrateExclusiveLock(const RehydrateExclusiveLock &) = delete;
+      RehydrateExclusiveLock &operator=(const RehydrateExclusiveLock &) = delete;
     } lock_guard(id);
 
     // 2. Double-Checked Locking: check if object payload was restored while waiting for the lock
     uint8_t state_val = 0;
+    int32_t is_loaded = 0;
     if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK &&
-        static_cast<StorageState>(state_val) != StorageState::Dehydrated)
+        static_cast<StorageState>(state_val) != StorageState::Dehydrated &&
+        ork_is_payload_loaded(id, &is_loaded) == ORK_STATUS_OK &&
+        is_loaded != 0)
     {
-      ::OuroObject *raw_obj = nullptr;
-      if (ork_acquire_object_pointer(id, &raw_obj) == ORK_STATUS_OK && raw_obj)
-      {
-        return;  // Object payload is already loaded
-      }
+      return;  // Object payload is already loaded
     }
 
     auto stream = detail::OpenRuntimeReadStream(id);

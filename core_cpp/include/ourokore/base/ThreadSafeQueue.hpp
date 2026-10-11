@@ -6,6 +6,7 @@
 #include <mutex>
 #include <queue>
 #include <utility>
+#include "Result.hpp"
 
 namespace ork::base
 {
@@ -126,6 +127,65 @@ public:
   }
 
   /**
+   * @brief 阻塞等待取出隊首元素 (基於 C++23 std::expected)
+   * @return 成功回傳元素 T；若佇列已停止且空回傳 Status::Aborted
+   */
+  Result<T> pop_expected()
+  {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_cv.wait(lock, [this]() { return m_stopped || !m_queue.empty(); });
+    if (m_queue.empty())
+    {
+      return Err(StatusCode::Aborted, "Queue stopped and empty");
+    }
+    T val = std::move(m_queue.front());
+    m_queue.pop();
+    return Ok(std::move(val));
+  }
+
+  /**
+   * @brief 在指定逾時內等待取出隊首元素 (基於 C++23 std::expected)
+   * @param rel_time 最長等待時間
+   * @return 成功回傳元素 T；逾時回傳 Status::Timeout；佇列已停止回傳 Status::Aborted
+   */
+  template <typename Rep, typename Period>
+  Result<T> pop_for_expected(const std::chrono::duration<Rep, Period> &rel_time)
+  {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (!m_cv.wait_for(lock, rel_time, [this]() { return m_stopped || !m_queue.empty(); }))
+    {
+      return Err(StatusCode::Timeout, "Queue pop timed out");
+    }
+    if (m_queue.empty())
+    {
+      return Err(StatusCode::Aborted, "Queue stopped and empty");
+    }
+    T val = std::move(m_queue.front());
+    m_queue.pop();
+    return Ok(std::move(val));
+  }
+
+  /**
+   * @brief 非阻塞嘗試取出隊首元素 (基於 C++23 std::expected)
+   * @return 成功回傳元素 T；佇列為空回傳 Status::Unavailable；已停止回傳 Status::Aborted
+   */
+  Result<T> try_pop_expected()
+  {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (m_queue.empty())
+    {
+      if (m_stopped)
+      {
+        return Err(StatusCode::Aborted, "Queue is stopped");
+      }
+      return Err(StatusCode::Unavailable, "Queue is empty");
+    }
+    T val = std::move(m_queue.front());
+    m_queue.pop();
+    return Ok(std::move(val));
+  }
+
+  /**
    * @brief 停止佇列並喚醒所有等待中的執行緒
    */
   void stop()
@@ -183,3 +243,9 @@ private:
 };
 
 }  // namespace ork::base
+
+namespace ork
+{
+  using base::ThreadSafeQueue;
+}
+

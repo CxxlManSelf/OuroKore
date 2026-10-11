@@ -327,9 +327,20 @@ public:
   {
     if (m_target_id != 0)
     {
-      ork_mark_dirty(m_target_id);
+      if (m_mark_dirty)
+      {
+        ork_mark_dirty(m_target_id);
+      }
       ork_unlock_object(m_target_id);
     }
+  }
+
+  /**
+   * @brief 抑制解構時自動標記 Dirty（適用於反序列化載入等寫入後直接同步 Clean 之場景）
+   */
+  void SuppressDirty() noexcept
+  {
+    m_mark_dirty = false;
   }
 
   OuroWriteLock(const OuroWriteLock &) = delete;
@@ -337,6 +348,7 @@ public:
 
 private:
   HandleID m_target_id = 0;
+  bool m_mark_dirty = true;
 };
 
 /**

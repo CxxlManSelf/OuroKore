@@ -171,16 +171,28 @@ bool RuntimeContext::Dehydrate(HandleID id)
   // 2. RAII 獨佔寫鎖
   struct DehydrateExclusiveLock
   {
-    HandleID m_id;
+    HandleID m_id = 0;
+    bool m_locked = false;
     explicit DehydrateExclusiveLock(HandleID target_id) : m_id(target_id)
     {
-      ork_lock_object(m_id);
+      if (m_id != 0 && ork_lock_object(m_id) == ORK_STATUS_OK)
+      {
+        m_locked = true;
+      }
     }
     ~DehydrateExclusiveLock()
     {
-      ork_unlock_object(m_id);
+      if (m_locked)
+      {
+        ork_unlock_object(m_id);
+      }
     }
   } lock_guard(id);
+
+  if (!lock_guard.m_locked)
+  {
+    return false;
+  }
 
   // 在鎖定下雙重檢查 root_count
   if (ork_get_root_edge_count(id, &root_count) != ORK_STATUS_OK || root_count > 0)

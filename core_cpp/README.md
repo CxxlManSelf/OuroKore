@@ -4,24 +4,24 @@
 
 ---
 
-## ⚡ 語言標準與編譯要求 (C++20 Standard Invariant)
+## ⚡ 語言標準與編譯要求 (C++23 Standard Invariant)
 
 > ⚠️ **重要環境規範**：
-> **OuroKore 核心程式庫全體（包含 `ourokore_base` 與 `ourokore_core`）均嚴格採用 ISO C++20 標準建立。**
+> **OuroKore 核心程式庫全體（包含 `ourokore_base` 與 `ourokore_core`）均嚴格採用 ISO C++23 標準建立。**
 > 
-> 為確保公開標頭檔中的現代 C++ 模板（例如 `OwningHandle<T>`、`OuroPtr<T>`）、STL 資料結構記憶體佈局、多執行緒同步原語與最佳化編譯相容性：
-> **程式庫的使用端（無論是 Host 主程式或外掛 Component/Plugin）強烈建議一律採用 C++20 或更高標準（C++20+）進行開發與建置。**
+> 為確保公開標頭檔中的現代 C++ 模板（例如 `OwningHandle<T>`、`OuroPtr<T>`）、原生值語意錯誤處理（`std::expected` / `Result<T, E>`）、STL 資料結構記憶體佈局、多執行緒同步原語與最佳化編譯相容性：
+> **程式庫的使用端（無論是 Host 主程式或外掛 Component/Plugin）強烈建議一律採用 C++23 或更高標準（C++23+）進行開發與建置。**
 
 ### CMake 使用端配置建議
 
-在您的應用程式或插件 CMake 專案中，請確保啟用 C++20。針對動態外掛（Plugin），**強制使用 `MODULE` 庫類型**：
+在您的應用程式或插件 CMake 專案中，請確保啟用 C++23。針對動態外掛（Plugin），**強制使用 `MODULE` 庫類型**：
 
 #### 1. 宿主主程式 (Host Executable)
 ```cmake
 cmake_minimum_required(VERSION 3.10)
 project(MyOuroKoreApp LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -37,7 +37,7 @@ target_link_libraries(MyOuroKoreApp PRIVATE ourokore_core ourokore_base)
 cmake_minimum_required(VERSION 3.10)
 project(MyOuroKorePlugin LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -155,6 +155,54 @@ player.WithObject([](PlayerObject &p) {
 });
 ```
 
+### 4. 併發存取與執行緒安全鎖定 (Concurrency & Locking Invariant)
+
+領域物件內部狀態修改與唯讀查詢，推薦配合 RAII 鎖定守衛使用：
+
+```cpp
+class PlayerObject : public ork::Subclass<PlayerObject, ork::OuroObject>
+{
+public:
+    int GetHp() const {
+        ork::OuroReadLock lock(*this); // 共享讀鎖
+        return m_hp;
+    }
+
+    void SetHp(int hp) {
+        ork::OuroWriteLock lock(*this); // 獨占寫鎖，解構時自動原子標記 Dirty！
+        m_hp = hp;
+    }
+
+private:
+    int m_hp{100};
+};
+```
+
+> 🛡️ **Double-Checked Locking (DCL) 與防死鎖保證**：
+> 核心底層在 `ork_lock_object` 與 `ork_lock_object_shared` 中整合了 **Pinning 弱引用釘住防護** 與 **獲取鎖後 DCL 二次確認**。若在上鎖排隊等待期間物件已被併發標記析構，核心自動立即解鎖並回滾弱引用，安全返回失敗，徹底杜絕 TOCTOU (Time-of-Check to Time-of-Use) 與 UAF 記憶體崩潰。
+
+### 5. 外掛 Heap 記憶體追蹤與清空檢驗 (Plugin Heap Tracking)
+
+為防範動態載入的第三方外掛（MODULE）在卸載時殘留記憶體洩漏，OuroKore 基礎庫提供編譯期雙軌方案與一行啟用機制：
+
+```cpp
+#include <ourokore/base/PluginHeap.hpp>
+
+// 在外掛主實作檔宣告：一行啟用全域 operator new/delete/new[]/delete[] 受管追蹤
+ORK_ENABLE_PLUGIN_HEAP_TRACKING()
+
+// 外掛卸載收尾時進行零洩漏檢驗：
+extern "C" PLUGIN_EXPORT int32_t PluginShutdown() {
+    if (!ork::PluginHeap::is_clean()) {
+        std::cerr << ork::PluginHeap::dump_leaks_to_string("MyPlugin");
+        return -1; // 告知宿主尚有殘留記憶體未釋放！
+    }
+    return 0;
+}
+```
+
+* **編譯期雙軌政策**：透過 `cmake -DOUROKORE_HEAP_POLICY=A`（方案 A：Debug 詳細診斷 / Release 零開銷直通系統 malloc）或 `cmake -DOUROKORE_HEAP_POLICY=B`（方案 B：Release 保持輕量原子無鎖計數）自由切換。
+
 ---
 
 ## 🧭 核心架構特色
@@ -168,6 +216,7 @@ player.WithObject([](PlayerObject &p) {
 2. **記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)**：
    - 物件生命週期支援 `UnsavedNew`、`Clean`、`Dirty`、`Dehydrated` 四種儲存狀態。
    - 在記憶體壓力或 LRU 策略觸發時將 Dirty 物件序列化落盤並安全釋放記憶體 Payload，保留 ControlBlock。存取時透明按需自 `IStorageDriver` 復原。
+   - 支援純記憶體零 I/O 查詢：`GetStorageState(id)`、`IsAlive(id)` 以及 `IsPayloadLoaded(id)`（純原子讀取，不要求強引用存活，零 I/O 零復水）。
 
 3. **全域型別系統與安全多型轉型 (Type System & Safe Casting)**：
    - 控制區塊（ControlBlock）墓碑長存 64 位元唯一 `TypeID`，物件脫水換頁至磁碟後**仍可進行型別檢查與繼承判定，絕不引發非預期 I/O 穿透復水**。
@@ -176,9 +225,11 @@ player.WithObject([](PlayerObject &p) {
 
 4. **Base 通用現代基礎工具庫 (Base Foundation & Utilities)**：
    - **現代樹狀結構容器與文字 DSL 串流 (Tree & TreeIO Utilities)**：[Tree.hpp](include/ourokore/base/Tree.hpp) 與 [TreeIO.hpp](include/ourokore/base/TreeIO.hpp) 採用保序 vector 與 unordered_map 單一容器雙模態統合架構，形態由資料純度自動推導（具名物件與匿名陣列元素統一採用 `{}` 容器），支援 CRTP 強型別領域節點自適應、寬容狀態機反序列化、3 種緊湊模式與百萬層顯式堆疊防爆棧析構。
+   - **原生值語意錯誤處理與 Monadic 操作 (Result & Expected)**：[Result.hpp](include/ourokore/base/Result.hpp) 深度整合 ISO C++23 原生 `std::expected` / `std::unexpected`，提供統一 `Status`、`StatusCode` 與 `Result<T, E>` / `StatusOr<T>`，支援 `.and_then()`、`.transform()`、`.or_else()` 函式式鏈式調用，全面賦予 `DynamicLibrary`（`try_load()`、`try_get_symbol()`）與 `ThreadSafeQueue`（`pop_expected()`、`try_pop_expected()`）現代無例外錯誤處理能力。
    - **高效能跨平台執行緒池與同步原語 (ThreadPool & Synchronization)**：提供 [FixedThreadPool](include/ourokore/base/ThreadPool.hpp) 與負載自適應彈性伸縮 [DynamicThreadPool](include/ourokore/base/ThreadPool.hpp)，支援 Future/Promise 與 Fire-and-Forget 任務排程；搭配跨平台 [Semaphore & Event](include/ourokore/base/Semaphore.hpp) 與 MPMC 阻塞佇列 [ThreadSafeQueue](include/ourokore/base/ThreadSafeQueue.hpp)。
    - **動態模組載入器 (DynamicLibrary)**：[DynamicLibrary.hpp](include/ourokore/base/DynamicLibrary.hpp) 禁絕手動卸載，具備物件生命週期反向錨定（Life-Bound Retention）。應用端將產生物件綁定後放棄 `load()` 初始句柄（或呼叫 `reset()`），待所有物件解構後自動安全卸載；完整支援**首度/重複載入識別與單次初始化**（`is_first_loaded()`、`initialize_once()`）、**兩階段卸載掛鉤**（卸載前收尾 `add_cleanup_hook`、卸載後通知 `add_post_unload_hook`）、**防自毀非同步離棧延遲卸載**（`enable_deferred_unload()`）、**百萬節點純存活權杖**（`create_lifetime_token()`）以及**弱引用安全晉升重獲**（`WeakDynamicLibrary::lock()`）。
-   - **標準 C++20 現代雜湊模組 (Hash Utilities)**：[Hash.hpp](include/ourokore/base/Hash.hpp) 全面支援編譯期常數 `constexpr`，內建 FNV-1a (32/64-bit)、CRC32 (IEEE 802.3)、MurmurHash3 (32-bit)、`HashCombine` 及使用者自訂字面量（`_fnv64`、`_crc32`），供型別計算、屬性鍵比對與資料完整性校驗使用。
+   - **外掛記憶體追蹤與清空檢驗 (PluginHeap)**：[PluginHeap.hpp](include/ourokore/base/PluginHeap.hpp) 提供雙軌方案與全域重載，支援外掛卸載前清空檢驗與記憶體洩漏診斷。
+   - **標準現代編譯期雜湊模組 (Hash Utilities)**：[Hash.hpp](include/ourokore/base/Hash.hpp) 全面支援編譯期常數 `constexpr`，內建 FNV-1a (32/64-bit)、CRC32 (IEEE 802.3)、MurmurHash3 (32-bit)、`HashCombine` 及使用者自訂字面量（`_fnv64`、`_crc32`），供型別計算、屬性鍵比對與資料完整性校驗使用。
    - **全域 UTF-8 零拷貝輔助工具 (UTF-8 Utilities)**：[utf8.hpp](include/ourokore/base/utf8.hpp) 提供各類字串與視圖統一轉型，杜絕本地 ANSI 亂碼，全面落實全域 UTF-8 標準。
 
 5. **三層邊界隔離與跨語言 FFI 友善架構**：
@@ -187,10 +238,18 @@ player.WithObject([](PlayerObject &p) {
    - **Plugin/Component 隔離**：僅限使用受管物件、讀寫鎖與安全唯讀查詢，嚴禁碰觸系統級特權。
    - **底層純 C ABI**：所有功能均有完備的純 C 函式（`c_api/`），禁止 C++ 例外跨越 DLL 邊界，便於未來接入 C#、Rust、Python 與 Go。
 
+6. **雙層安全退出防禦體系 (Dual-Layer Safe Tear-Down)**：
+   - **第一道防線（標準 Host 程式）**：`HostContext` RAII 作用域自然解構觸發 `ork_shutdown_runtime()`，主動排空磁碟與延遲隊列並清空名冊。
+   - **第二道防線（外掛獨立環境 / 退出兜底）**：核心靜態註冊表解構子（`~Registry()`）自動切換為無鎖置換清理模式，杜絕在 Windows Loader Lock 期間因同步鎖定引發死鎖。
+
 ---
 
-## 📚 相關規範與文件指引
+## 📚 應用端手冊與完整文檔導引
 
-- **架構規範與開發守則**：[AGENTS.md](file:///c:/MySrc/OuroKore/core_cpp/AGENTS.md)
-- **API 三層邊界與 FFI 準則**：[.agents/rules/api_boundaries.md](file:///c:/MySrc/OuroKore/core_cpp/.agents/rules/api_boundaries.md)
-- **AI 助理架構維護技能指引**：[.agents/skills/ourokore/SKILL.md](file:///c:/MySrc/OuroKore/core_cpp/.agents/skills/ourokore/SKILL.md)
+| 文檔類別 | 路徑 | 說明 |
+| :--- | :--- | :--- |
+| **應用端 AI 技能手冊** | `skills/ourokore-app/SKILL.md` | AI 助理與開發者專用實戰避坑與範本指南 |
+| **應用端使用手冊 (Manual)** | `specs/manual/` | 全套 10 冊使用者說明書手冊（快速上手、拓撲、脫水、宿主、樹 DSL、基礎庫、Heap 追蹤、API 字典） |
+| **技術架構與 RFC 規範** | `specs/technical/` | 全套 5 冊跨語言底層規範手冊（系統架構、二進位協議、C ABI 記憶體、併發鎖階層、ORKT 語法） |
+| **核心架構規範與守則** | `core_cpp/AGENTS.md` | C++ 核心維護、三層邊界隔離與開發鐵律規範 |
+

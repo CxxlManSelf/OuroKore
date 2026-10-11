@@ -8,6 +8,11 @@
   },
   "[c]": {
     "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
-  }
+  },
+  "clangd.arguments": [
+    "--query-driver=C:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe,C:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/c++.exe",
+    "--background-index",
+    "--header-insertion=never"
+  ]
 }
 
