@@ -188,3 +188,48 @@
 47. `ork_heap_reset`
     - **符號規格**：`Function ork_heap_reset() -> Void`
     - **說明**：重設 HeapTracker 統計數據與記錄。
+
+---
+
+### 🆔 類別 E：Base 模組 UUID / GUID 介面 (`uuid_api.h`)
+> 提供符合 RFC 4122 與 RFC 9562 規範之 128 位元 UUID 純 C ABI 介面，支援跨語言 FFI（C# P/Invoke、Rust extern "C"、Python ctypes/cffi），保證零例外逃逸。
+
+48. `ork_uuid_nil`
+    - **符號規格**：`Function ork_uuid_nil() -> ork_uuid_t`
+    - **說明**：產生全 0 的 Nil UUID。
+49. `ork_uuid_max`
+    - **符號規格**：`Function ork_uuid_max() -> ork_uuid_t`
+    - **說明**：產生全 0xFF 的 Max UUID。
+50. `ork_uuid_generate_v4`
+    - **符號規格**：`Function ork_uuid_generate_v4() -> ork_uuid_t`
+    - **說明**：產生密碼學安全隨機型 UUIDv4。
+51. `ork_uuid_generate_v7`
+    - **符號規格**：`Function ork_uuid_generate_v7() -> ork_uuid_t`
+    - **說明**：產生時間排序型 UUIDv7（Unix 毫秒時間戳記 + 嚴格單調計數器 + 隨機熵）。
+52. `ork_uuid_generate_v7_with_time`
+    - **符號規格**：`Function ork_uuid_generate_v7_with_time(timestamp_ms: UInt64) -> ork_uuid_t`
+    - **說明**：指定 Unix 紀元毫秒時間戳記產生 UUIDv7。
+53. `ork_uuid_is_nil`
+    - **符號規格**：`Function ork_uuid_is_nil(uuid: Pointer<ork_uuid_t>) -> Int32`
+    - **說明**：判定是否為 Nil UUID（1 代表是，0 代表否，-1 代表無效指標）。
+54. `ork_uuid_is_max`
+    - **符號規格**：`Function ork_uuid_is_max(uuid: Pointer<ork_uuid_t>) -> Int32`
+    - **說明**：判定是否為 Max UUID（1 代表是，0 代表否，-1 代表無效指標）。
+55. `ork_uuid_get_version`
+    - **符號規格**：`Function ork_uuid_get_version(uuid: Pointer<ork_uuid_t>) -> Int32`
+    - **說明**：取得 UUID 版本號（如 4 或 7，指標無效傳回 -1）。
+56. `ork_uuid_get_variant`
+    - **符號規格**：`Function ork_uuid_get_variant(uuid: Pointer<ork_uuid_t>) -> Int32`
+    - **說明**：取得 UUID 變體代碼（RFC 4122/9562 為 1，指標無效傳回 -1）。
+57. `ork_uuid_get_timestamp_ms`
+    - **符號規格**：`Function ork_uuid_get_timestamp_ms(uuid: Pointer<ork_uuid_t>, out_ms: MutablePointer<UInt64>) -> Int32`
+    - **說明**：提取 UUIDv7 之 Unix 毫秒時間戳記（成功傳回 0，非 v7 或指標無效傳回負數錯誤碼）。
+58. `ork_uuid_to_string`
+    - **符號規格**：`Function ork_uuid_to_string(uuid: Pointer<ork_uuid_t>, out_buf: MutablePointer<Char>, buf_size: UInt64, uppercase: Int32) -> Int32`
+    - **說明**：將 UUID 轉為標準 36 字元橫線字串（成功傳回 36，緩衝區不足或失敗傳回負數錯誤碼）。
+59. `ork_uuid_from_string`
+    - **符號規格**：`Function ork_uuid_from_string(str: CString, out_uuid: MutablePointer<ork_uuid_t>) -> Int32`
+    - **說明**：從字串解析 UUID（支援 36 字元標準、32 字元緊湊、38 字元大括號格式，成功傳回 0，格式錯誤傳回負數）。
+60. `ork_uuid_compare`
+    - **符號規格**：`Function ork_uuid_compare(a: Pointer<ork_uuid_t>, b: Pointer<ork_uuid_t>) -> Int32`
+    - **說明**：比較兩個 UUID 的 16 位元組字典序（傳回 <0, 0, >0）。

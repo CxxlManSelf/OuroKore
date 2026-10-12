@@ -1,4 +1,4 @@
-﻿# OuroKore Base 基礎工具庫規劃與實作完成度報告
+# OuroKore Base 基礎工具庫規劃與實作完成度報告
 
 本文件詳細記錄 OuroKore 基礎模組（`ourokore_base`）自 2026 年 9 月規劃以來的原始設計目標、六大子系統之工具清單、當前實作完成狀況，以及尚未實作之項目表列。
 
@@ -109,7 +109,7 @@
 | **全域 UTF-8 文字輔助工具** | `utf8.hpp`，提供 `as_view`、`to_string`、`to_u8string`、`is_string_like_v`，Windows W 版 API 邊界轉換隔離 | ✅ **已完成** | [utf8.hpp](include/ourokore/base/utf8.hpp) |
 | **現代編譯期雜湊模組** | `Hash.hpp`，`constexpr` FNV-1a (32/64)、CRC32、MurmurHash3、`HashCombine`、字面量 `_fnv64` / `_crc32` | ✅ **已完成** | [Hash.hpp](include/ourokore/base/Hash.hpp) |
 | **輕量非同步結構化日誌** | Async Logger，基於佇列與背景執行緒的非阻塞日誌器 | ❌ **未完成** | 原計畫建議，尚未實作 |
-| **UUID / GUID 生成與解析** | 跨平台 UUID V4 / V7 生成器 | ❌ **未完成** | 原計畫建議，尚未實作 |
+| **UUID / GUID 生成與解析** | `Uuid`，符合 RFC 4122 / RFC 9562 規範，跨平台密碼學安全隨機 UUIDv4、時間排序單調 UUIDv7，C++23 constexpr 解析、`_uuid` 字面量、`Result<Uuid>`、三路比較 `<=>`、`std::format` 特化與純 C ABI `uuid_api.h` | 🌟 **超額完成** | [Uuid.hpp](include/ourokore/base/Uuid.hpp)、[uuid_api.h](include/ourokore/base/uuid_api.h) |
 | **事件匯流排 / 委派** | EventBus / Signal-Slot，模組解耦廣播機制 | ❌ **未完成** | 原計畫建議，尚未實作 |
 
 ---
@@ -124,4 +124,4 @@
 3. **其餘 Base 待實作工具之建議優先順序**：
    - **非同步日誌**：`AsyncLogger`（提供非阻塞式系統診斷日誌）。
    - **高精度定時器**：`TimerScheduler`（通用定時排程引擎）。
-   - **進階池化按需擴充**：`ObjectPool` / `ArenaAllocator`、`UUID` 生成器與 `Channel`。
+   - **進階池化按需擴充**：`ObjectPool` / `ArenaAllocator` 與 `Channel`（UUID 生成器已完成）。

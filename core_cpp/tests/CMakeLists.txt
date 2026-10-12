@@ -67,4 +67,8 @@ add_executable(base_result_tests base_result_tests.cpp)
 target_link_libraries(base_result_tests ourokore_base)
 add_dependencies(base_result_tests test_plugin_dll)
 
+add_executable(base_uuid_tests base_uuid_tests.cpp)
+target_link_libraries(base_uuid_tests ourokore_base)
+
+
 

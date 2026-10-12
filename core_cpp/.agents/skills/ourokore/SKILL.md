@@ -388,6 +388,43 @@ ork::base::Event event(ork::base::EventResetMode::AutoReset, false);
 // event.wait(); event.set();
 ```
 
+### 2.9 Base 現代 UUID 工具模組 (Uuid Utilities)
+在 `<ourokore/base/Uuid.hpp>` 與 `<ourokore/base/uuid_api.h>` 中提供符合 RFC 4122 與 RFC 9562 規範的 128 位元 UUID/GUID 工具：
+```cpp
+#include <ourokore/base/Uuid.hpp>
+using namespace ork::base;
+using namespace ork::base::literals::uuid_literals;
+
+// 1. 編譯期常數與常數字面量 (_uuid)
+constexpr Uuid fixed_id = "018f2f4c-5353-7b3b-8105-df4d3855a02e"_uuid;
+static_assert(fixed_id.Version() == 7);
+static_assert(fixed_id.Variant() == 1);
+
+// 2. 隨機型 UUIDv4 (密碼學安全隨機數)
+Uuid rand_id = Uuid::GenerateV4();
+
+// 3. 時間排序型 UUIDv7 (Unix 毫秒時間戳記 + 嚴格單調計數器 + 安全隨機熵，資料庫索引友善)
+Uuid v7_id = Uuid::GenerateV7();
+uint64_t ts = v7_id.TimestampMs(); // 取得 48 位元毫秒時間戳
+
+// 4. 零例外安全字串解析 (Result<Uuid>) 與格式化
+auto parse_res = Uuid::FromString("018f2f4c-5353-7b3b-8105-df4d3855a02e");
+if (parse_res.has_value()) {
+    Uuid id = *parse_res;
+    std::string std_str = id.ToString();        // 36 字元標準橫線格式
+    std::string compact = id.ToCompactString(); // 32 字元緊湊格式
+    std::string braced  = id.ToBracedString();  // 38 字元大括號格式
+}
+
+// 5. C++20 / C++23 std::format 支援
+std::string formatted = std::format("{:S}", v7_id); // 大寫標準格式
+
+// 6. 三路比較運算子 (<=>) 與 STL 容器整合 (UUIDv7 自然維持時間排序)
+std::map<Uuid, std::string> entity_map;
+std::unordered_set<Uuid> entity_set;
+```
+
+
 ---
 
 ## ⚖️ 3. 核心擴展鐵律 (Core Contributor Invariants)

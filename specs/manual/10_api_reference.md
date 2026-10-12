@@ -254,9 +254,50 @@
 
 ---
 
-## 🌐 13. 底層純 C ABI（Cross-Language FFI）分類索引
+## 🆔 13. 現代 128 位元 UUID/GUID 工具：`ork::base::Uuid` / `uuid_api.h`
+* **標頭檔**：
+  * `<ourokore/base/Uuid.hpp>`
+  * `<ourokore/base/uuid_api.h>`
+* **命名空間**：`ork::base`（字面量在 `ork::base::literals::uuid_literals`）
+* **靜態常數與工廠方法**：
+  * `static constexpr Uuid Nil() noexcept`：全 0 Nil UUID。
+  * `static constexpr Uuid Max() noexcept`：全 0xFF Max UUID。
+  * `static Uuid GenerateV4() noexcept`：產生密碼學安全隨機 UUIDv4。
+  * `static Uuid GenerateV7() noexcept`：產生時間排序單調 UUIDv7（Unix 毫秒時間戳 + 單調計數器 + 隨機熵）。
+  * `static Uuid FromUnixTimeMsV7(uint64_t timestamp_ms) noexcept`：指定時間戳產生 UUIDv7。
+* **狀態查詢與欄位解構**：
+  * `bool IsNil() const noexcept` / `bool IsMax() const noexcept` / `explicit operator bool() const noexcept`
+  * `uint8_t Version() const noexcept`：取得版本號（如 4 或 7）。
+  * `uint8_t Variant() const noexcept`：取得變體號（RFC 4122/9562 為 1）。
+  * `uint64_t TimestampMs() const noexcept`：提取 UUIDv7 前 48 位元毫秒時間戳。
+  * `uint64_t HighBits() const noexcept` / `uint64_t LowBits() const noexcept`：高低 64 位元整數。
+  * `const std::array<uint8_t, 16>& Bytes() const noexcept` / `const uint8_t* Data() const noexcept`
+* **序列化與格式化**：
+  * `std::string ToString(bool uppercase = false) const`：標準 36 字元橫線格式。
+  * `std::string ToCompactString(bool uppercase = false) const`：32 字元無橫線緊湊格式。
+  * `std::string ToBracedString(bool uppercase = false) const`：38 字元大括號格式。
+  * `void ToChars(char* out_36, bool uppercase = false) const noexcept`：零配置輸出至緩衝區。
+* **反序列化與編譯期字面量**：
+  * `static Result<Uuid> FromString(std::string_view str) noexcept`：無例外安全解析。
+  * `static std::optional<Uuid> TryParse(std::string_view str) noexcept`
+  * `static constexpr std::optional<Uuid> ParseConstexpr(std::string_view str) noexcept`
+  * `constexpr Uuid operator""_uuid(const char* str, size_t len)`：編譯期常數字面量。
+* **STL 整合特化**：
+  * `std::hash<ork::base::Uuid>`
+  * `std::formatter<ork::base::Uuid>`（支援格式標記：`{:S}` 大寫、`{:c}` / `{:C}` 緊湊、`{:b}` / `{:B}` 大括號）
+* **純 C ABI 介面（修飾 `ORK_CALL`）**：
+  * `ork_uuid_nil()` / `ork_uuid_max()`
+  * `ork_uuid_generate_v4()` / `ork_uuid_generate_v7()` / `ork_uuid_generate_v7_with_time(ts)`
+  * `ork_uuid_is_nil(u)` / `ork_uuid_is_max(u)` / `ork_uuid_get_version(u)` / `ork_uuid_get_variant(u)`
+  * `ork_uuid_get_timestamp_ms(u, out_ms)`
+  * `ork_uuid_to_string(u, buf, size, upper)` / `ork_uuid_from_string(str, out_u)` / `ork_uuid_compare(a, b)`
+
+---
+
+## 🌐 14. 底層純 C ABI（Cross-Language FFI）分類索引
 所有底層操作保證跨 DLL 邊界零例外逃逸，完整清單與參數規格請參見《[03. 純 C ABI 規格與記憶體佈局規範](../technical/03_c_abi_and_memory.md)》：
 * **類別 A：物件生命週期與工廠**（`ork_create_object`、`ork_retain_object`、`ork_release_object`、`ork_acquire_object_pointer`、`ork_release_object_pointer`）
 * **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_is_payload_loaded`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）
 * **類別 C：宿主全域特權**（`ork_host_initialize`、`ork_host_shutdown`、`ork_host_set_storage_driver`、`ork_host_trigger_dehydration_rescue` 等）
 * **類別 D：外掛 Heap 記憶體檢查**（`ork_heap_allocate`、`ork_heap_deallocate`、`ork_heap_is_clean`、`ork_heap_dump_leaks`、`ork_heap_assert_clean`）
+* **類別 E：UUID / GUID 工具**（`ork_uuid_nil`、`ork_uuid_max`、`ork_uuid_generate_v4`、`ork_uuid_generate_v7`、`ork_uuid_generate_v7_with_time`、`ork_uuid_is_nil`、`ork_uuid_is_max`、`ork_uuid_get_version`、`ork_uuid_get_variant`、`ork_uuid_get_timestamp_ms`、`ork_uuid_to_string`、`ork_uuid_from_string`、`ork_uuid_compare`）

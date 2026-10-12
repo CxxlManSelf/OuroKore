@@ -286,3 +286,21 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 2. **雙層關閉防禦體系**：
    - **標準 Host 應用端**：透過 `HostContext` RAII 作用域自然解構，在運行期安全呼叫 `ork_shutdown_runtime()`，主動排空磁碟與延遲銷毀隊列。
    - **外掛獨立退出 / 異常終止**：若未經 `HostContext`（如純外掛測試），靜態單例解構子 `~Registry()` 自動切換為無鎖兜底置換清理，徹底避免在 Windows Loader Lock 期間獲取讀寫互斥鎖而發生死鎖。
+
+---
+
+## 🆔 9. 現代 128 位元 UUID/GUID 工具最佳實踐 (Uuid.hpp & uuid_api.h)
+
+在應用端、領域實體設計或分散式通信中，若需要全局唯一識別碼、落盤主鍵或資料庫索引友好鍵值，直接使用 Base 工具庫提供之 `ork::base::Uuid`：
+
+1. **UUIDv4（隨機識別碼） vs UUIDv7（時間排序單調識別碼）**：
+   - 一般隨機唯一識別：`auto id = ork::base::Uuid::GenerateV4();`
+   - 資料庫叢集索引、日誌追蹤或有時序性實體：**強烈推薦使用 `ork::base::Uuid::GenerateV7()`**。
+     前 48 位元為 Unix 毫秒時間戳，內建 12 位元單調計數器，**保證緊密迴圈下生成時嚴格單調遞增（`<`）**，大幅減輕 B-Tree 索引頁分裂開銷！
+2. **編譯期常數字面量**：
+   - 引用標頭檔 `<ourokore/base/Uuid.hpp>` 與 `using namespace ork::base::literals::uuid_literals;`
+   - `constexpr auto kRootId = "018f2f4c-5353-7b3b-8105-df4d3855a02e"_uuid;`
+   - 在編譯期完成解析與驗證，零執行期開銷。
+3. **無例外字串解析與 std::format 輸出**：
+   - `auto res = ork::base::Uuid::FromString(str);` 回傳 `Result<Uuid>`，無例外安全。
+   - 格式化輸出支援 `std::format("{}", id)`（標準）、`std::format("{:S}", id)`（大寫）、`std::format("{:c}", id)`（32 字元緊湊）。
