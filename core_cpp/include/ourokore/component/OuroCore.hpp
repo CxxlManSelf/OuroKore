@@ -31,6 +31,12 @@ inline auto SubmitAsyncHelper(F&& f) -> std::future<std::invoke_result_t<F>>
   SubmitRuntimeTask([task]() { (*task)(); });
   return fut;
 }
+
+template <typename T>
+inline void ObjectDeleter(::OuroObject *raw_obj)
+{
+  delete static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
+}
 }  // namespace detail
 
 /**
@@ -73,34 +79,99 @@ bool Save(const OuroPtr<T> &ptr)
   });
 }
 
-/**
- * @brief Load (revert/refresh) object state from persistent storage driver into an existing living object via pure streaming.
- */
-template <typename T>
-bool Load(const OuroPtr<T> &ptr)
+namespace detail
 {
-  if (!ptr)
+template <typename T>
+class Loader
+{
+public:
+  static bool Execute(const OuroPtr<T> &ptr)
   {
-    throw std::runtime_error("OuroKore Load Error: Invalid or null OuroPtr.");
-  }
+    if (!ptr)
+    {
+      throw std::runtime_error("OuroKore Load Error: Invalid or null OuroPtr.");
+    }
 
-  HandleID id = ptr.GetTargetID();
-  return ptr.WithObject([id](T &obj) {
+    HandleID id = ptr.GetTargetID();
     auto stream = detail::OpenRuntimeReadStream(id);
     if (!stream)
     {
       return false;
     }
 
+    // 【第一階段：影子空殼建造與全量邊界/Slot真實驗證 (Shadow Staging)】
+    ActiveOwnerGuard owner_guard(id);
+    void *mem = ::operator new(sizeof(T));
+    T *new_shell = nullptr;
+    try
     {
-      OuroWriteLock lock(obj);
-      UnpackBlueprint(obj, *stream);
-      detail::MarkRuntimeObjectClean(id);
-      lock.SuppressDirty();
+      detail::ActiveObjectGuard obj_guard;
+      new_shell = ::new (mem) T();
+    }
+    catch (...)
+    {
+      ::operator delete(mem);
+      throw;
     }
 
+    std::unique_ptr<T> shell_guard(new_shell);
+    shell_guard->SetObjectID(id);
+
+    // 反序列化 Payload 與 Slot 邊緣拓撲
+    // 🛡️ 強例外安全：若串流損毀或反序列化拋出任何例外，
+    // shell_guard 解構釋放記憶體，並撤銷 new_shell 剛掛上的所有邊緣，原生物件 100% 毫髮無傷！
+    UnpackBlueprint(*shell_guard, *stream);
+
+    // 【第二階段：核心原子置換提交 (Atomic Swap & Commit)】
+    ::OuroObject *raw_new = reinterpret_cast<::OuroObject *>(static_cast<OuroObject *>(shell_guard.get()));
+    ::OuroObject *old_raw = nullptr;
+    ork_destroy_fn_t old_destroy_fn = nullptr;
+
+    int32_t status = ork_swap_object_payload(id, raw_new, &detail::ObjectDeleter<T>, &old_raw, &old_destroy_fn);
+    if (status != ORK_STATUS_OK)
+    {
+      throw std::runtime_error("OuroKore Load Error: Failed to swap payload in ControlBlock.");
+    }
+
+    // 置換成功，所有權正式移交 ControlBlock
+    shell_guard.release();
+
+    // 釋放舊實體（完全遵循標準 C++ 解構語意：先執行衍生類別 ~T()，隨後其內部成員 Handle 解構子自然觸發 ReleaseAll）
+    if (old_raw)
+    {
+      if (old_destroy_fn)
+      {
+        old_destroy_fn(old_raw);
+      }
+      else
+      {
+        detail::ObjectDeleter<T>(old_raw);
+      }
+    }
+
+    // 🛡️ 關鍵防護：Clean 狀態已在 ControlBlock::SwapPayload 持有 m_rw_lock 期間原子標記！
+    // 嚴禁在此處盲目覆蓋 MarkRuntimeObjectClean(id)，徹底杜絕覆蓋解鎖後其他執行緒並發寫入所標記的 Dirty 狀態！
     return true;
-  });
+  }
+};
+}  // namespace detail
+
+/**
+ * @brief 透過兩階段藍綠置換（Two-Phase Shadow Swap）從持久化儲存載入/還原物件狀態
+ *
+ * 核心強例外安全（Strong Exception Safety）與在途調用釘住（In-Flight Pinning）保證：
+ * 1. 第一階段（影子空殼建造與驗證）：
+ *    在獨立記憶體配置全新 T 實體 new_shell，完整反序列化 Payload 與 Edge Roster。
+ *    若串流損毀或任何反序列化失敗，new_shell 解構釋放並撤銷剛加上的邊緣，原生物件 100% 毫髮無傷！
+ * 2. 第二階段（核心原子置換提交）：
+ *    在獨占寫鎖下，呼叫 ork_swap_object_payload 原子將 ControlBlock 指標置換為 new_shell，並遞增世代號。
+ *    內部執行 DrainInFlight 等待所有在途調用歸零，徹底消滅 TOCTOU 與 UAF 時間差！
+ *    最後安全釋放舊物件邊緣並銷毀舊肉體，標記 Clean。
+ */
+template <typename T>
+bool Load(const OuroPtr<T> &ptr)
+{
+  return detail::Loader<T>::Execute(ptr);
 }
 
 /**
@@ -220,12 +291,6 @@ OuroPtr<T> Rehydrate(HandleID id);
 
 namespace detail
 {
-template <typename T>
-inline void ObjectDeleter(::OuroObject *raw_obj)
-{
-  delete static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
-}
-
 /**
  * @brief 封閉式型別專屬復水管理器（Private Rehydrator）
  * 內部 Execute 與 Callback 均為 private，僅授權 ork::Rehydrate 與 CreateObjectInternal 調用，

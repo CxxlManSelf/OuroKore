@@ -289,18 +289,14 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 
 ---
 
-## 🆔 9. 現代 128 位元 UUID/GUID 工具最佳實踐 (Uuid.hpp & uuid_api.h)
+## 💾 9. 全域狀態保存與兩階段藍綠載入最佳實踐 (Save & Blue-Green Load Best Practices)
 
-在應用端、領域實體設計或分散式通信中，若需要全局唯一識別碼、落盤主鍵或資料庫索引友好鍵值，直接使用 Base 工具庫提供之 `ork::base::Uuid`：
-
-1. **UUIDv4（隨機識別碼） vs UUIDv7（時間排序單調識別碼）**：
-   - 一般隨機唯一識別：`auto id = ork::base::Uuid::GenerateV4();`
-   - 資料庫叢集索引、日誌追蹤或有時序性實體：**強烈推薦使用 `ork::base::Uuid::GenerateV7()`**。
-     前 48 位元為 Unix 毫秒時間戳，內建 12 位元單調計數器，**保證緊密迴圈下生成時嚴格單調遞增（`<`）**，大幅減輕 B-Tree 索引頁分裂開銷！
-2. **編譯期常數字面量**：
-   - 引用標頭檔 `<ourokore/base/Uuid.hpp>` 與 `using namespace ork::base::literals::uuid_literals;`
-   - `constexpr auto kRootId = "018f2f4c-5353-7b3b-8105-df4d3855a02e"_uuid;`
-   - 在編譯期完成解析與驗證，零執行期開銷。
-3. **無例外字串解析與 std::format 輸出**：
-   - `auto res = ork::base::Uuid::FromString(str);` 回傳 `Result<Uuid>`，無例外安全。
-   - 格式化輸出支援 `std::format("{}", id)`（標準）、`std::format("{:S}", id)`（大寫）、`std::format("{:c}", id)`（32 字元緊湊）。
+1. **事務落盤 (`ork::Save`)**：
+   - 在物件完成修改後調用 `ork::Save(ptr)` 或 `ork::Save(id)`。
+   - 若狀態為 `Dirty` 或 `UnsavedNew`，自動落盤並原子標記為 `Clean`。
+2. **兩階段藍綠熱載入 (`ork::Load`)**：
+   - **第一階段（陰影建構）**：在乾淨獨立的沙盒中建構新實體與拓撲圖；若有任何格式損毀或拋出異常，100% 乾淨銷毀陰影物件，原運行中系統毫髮無傷（強例外安全）。
+   - **第二階段（原子置換）**：由 `m_swap_mutex` 全域序列化置換，鎖內原子替換 Payload 並標記 `Clean`（防覆蓋並發標髒）；在鎖外等待舊世代槽位在途釘住計數排空歸零（Drain），隨後由標準 C++ 解構流程（`old_destroy_fn`）自然析構舊實體，領域物件解構期間 Handles 依然完整可用。
+3. **`OuroPtr` 原生極速調用與在途釘住**：
+   - 透過 `operator()(Fn&&, Args&&...)` 調用成員函式，內部由 `InFlightPinGuard` 原子釘住實體槽位，保證調用期間記憶體不被置換提前釋放。
+   - 原子快取指標 `m_cached_ptr` 與世代號 `m_cached_generation` 提供 100% Data-Race Free 極速調用；若物件處於孤島拆解態（`m_is_destructing == true`），第一時間原子清空快取並拋出異常，徹底杜絕 UAF。

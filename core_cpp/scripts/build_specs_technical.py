@@ -525,9 +525,9 @@ End Function
 
 ---
 
-## 📋 2. 純 C ABI 導出符號規範 (共 37 個導出函式)
+## 📋 2. 純 C ABI 導出符號規範 (共 42 個導出函式)
 
-以下以**中性二進位介面符號規格（Neutral ABI Specification）**完整定義 37 個導出函式：
+以下以**中性二進位介面符號規格（Neutral ABI Specification）**完整定義 42 個導出函式：
 
 ### 📦 類別 A：組件生命週期、型別系統與弱引用 (`component_api.h`)
 
@@ -603,33 +603,45 @@ End Function
 24. `ork_try_lock_weak`
     - **符號規格**：`Function ork_try_lock_weak(target_id: UInt64) -> Int32`
     - **說明**：嘗試原子晉升弱引用為根強引用，消滅 TOCTOU 競態。
+25. `ork_pin_in_flight`
+    - **符號規格**：`Function ork_pin_in_flight(target_id: UInt64, slot: UInt32) -> Int32`
+    - **說明**：在途調用釘住（In-Flight Pinning）：原子遞增目標物件指定世代槽位（`slot & 1`）之釘住計數，保證調用期間實體不被置換釋放。
+26. `ork_unpin_in_flight`
+    - **符號規格**：`Function ork_unpin_in_flight(target_id: UInt64, slot: UInt32) -> Int32`
+    - **說明**：在途調用解釘（In-Flight Unpinning）：原子遞減目標物件指定世代槽位（`slot & 1`）之釘住計數。
+27. `ork_get_object_generation`
+    - **符號規格**：`Function ork_get_object_generation(target_id: UInt64, out_generation: MutablePointer<UInt64>) -> Int32`
+    - **說明**：查詢目標物件當前之實體世代號（Generation）。每次 Load 置換或脫水復水時遞增。
+28. `ork_swap_object_payload`
+    - **符號規格**：`Function ork_swap_object_payload(target_id: UInt64, new_payload: RawPointer, new_destroy_fn: FunctionPointer, out_old_payload: MutablePointer<RawPointer>, out_old_destroy_fn: MutablePointer<FunctionPointer>) -> Int32`
+    - **說明**：原子藍綠置換物件實體 Payload：於寫鎖內換入新實體並遞增 generation，立即釋放寫鎖後在鎖外排空舊世代 slot 之在途調用，並將舊實體傳回呼叫端銷毀。
 
 ---
 
 ### ⚙️ 類別 B：核心排程與延遲銷毀 (`core.h`)
 
-25. `ork_try_initialize_core`
+29. `ork_try_initialize_core`
     - **符號規格**：`Function ork_try_initialize_core() -> Int32`
     - **說明**：確保全域核心資料結構與背景服務初始化完成。
-25. `ork_collect_cycles`
+30. `ork_collect_cycles`
     - **符號規格**：`Function ork_collect_cycles() -> Int32`
     - **說明**：同步觸發一輪循環孤島分析與試探性斷鏈回收。
-26. `ork_flush_deferred_deletions`
+31. `ork_flush_deferred_deletions`
     - **符號規格**：`Function ork_flush_deferred_deletions() -> Int32`
     - **說明**：阻塞等待延遲銷毀隊列目前積壓之所有物件釋放任務執行完成。
-27. `ork_set_deferred_delete_mode`
+32. `ork_set_deferred_delete_mode`
     - **符號規格**：`Function ork_set_deferred_delete_mode(mode: Int32) -> Int32`
     - **說明**：切換延遲銷毀模式（0: 非同步背景執行緒池處理，1: 即時同步主執行緒處理）。
-28. `ork_get_deferred_delete_pending_count`
+33. `ork_get_deferred_delete_pending_count`
     - **符號規格**：`Function ork_get_deferred_delete_pending_count() -> Int32`
     - **說明**：查詢延遲銷毀隊列目前待處理的物件數量。
-29. `ork_get_cycle_suspect_count`
+34. `ork_get_cycle_suspect_count`
     - **符號規格**：`Function ork_get_cycle_suspect_count() -> Int32`
     - **說明**：查詢循環回收器中待分析之嫌疑節點數量。
-30. `ork_stop_cycle_collector`
+35. `ork_stop_cycle_collector`
     - **符號規格**：`Function ork_stop_cycle_collector() -> Int32`
     - **說明**：安全停止循環回收器之後台工作線程。
-31. `ork_stop_deferred_deletions`
+36. `ork_stop_deferred_deletions`
     - **符號規格**：`Function ork_stop_deferred_deletions() -> Int32`
     - **說明**：安全停止延遲銷毀佇列之後台工作線程。
 
@@ -637,22 +649,22 @@ End Function
 
 ### 🛡️ 類別 C：宿主特權專用介面 (`host_api.h`)
 
-32. `ork_flush_storage`
+37. `ork_flush_storage`
     - **符號規格**：`Function ork_flush_storage() -> Int32`
     - **說明**：宿主特權：雙管線同步排空，等待非同步 I/O 落盤與延遲銷毀全部執行完畢。
-33. `ork_shutdown_runtime`
+38. `ork_shutdown_runtime`
     - **符號規格**：`Function ork_shutdown_runtime() -> Int32`
     - **說明**：宿主特權：終止核心執行緒池與執行時期背景服務。
-34. `ork_set_object_destroyed_callback`
+39. `ork_set_object_destroyed_callback`
     - **符號規格**：`Function ork_set_object_destroyed_callback(callback: FunctionPointer<UInt64 -> Void>) -> Int32`
     - **說明**：宿主特權：註冊進程級全域物件銷毀監聽回呼。
-35. `ork_trigger_dehydration_rescue`
+40. `ork_trigger_dehydration_rescue`
     - **符號規格**：`Function ork_trigger_dehydration_rescue(bytes_needed: UInt64, out_freed: MutablePointer<UInt64>, out_has_more: MutablePointer<Int32>) -> Int32`
     - **說明**：宿主特權：主動調度脫水器執行緊急記憶體救援換頁。
-36. `ork_set_storage_state_for_testing`
+41. `ork_set_storage_state_for_testing`
     - **符號規格**：`Function ork_set_storage_state_for_testing(id: UInt64, state: UInt8) -> Int32`
     - **說明**：白盒測試特權：手動強制覆寫目標物件之 StorageState。
-37. `ork_clear_object_payload_for_testing`
+42. `ork_clear_object_payload_for_testing`
     - **符號規格**：`Function ork_clear_object_payload_for_testing(id: UInt64) -> Int32`
     - **說明**：白盒測試特權：直接置空目標物件之實體記憶體 Payload 模擬冷脫水態。
 
@@ -855,6 +867,43 @@ End Procedure
      - 步驟三：無鎖依序 `delete cb` 釋放墓碑控制區塊。
      - 步驟四：無鎖清空持久化映射名冊。
    - 常規執行期重置（`ork::Registry::Clear()` / `ork_shutdown_runtime`）則維持獨佔寫入鎖保護（`acquire_lock=true`），達成靜態退出與動態排空的雙軌安全。
+
+---
+
+## 🔀 9. 雙世代在途釘住與藍綠置換防活鎖協議 (Dual-Generation In-Flight Pinning & Shadow Swap RFC)
+
+為實現極致的調用速度並兼顧藍綠熱載入（Hot Reload）時的記憶體安全性，核心實作了雙世代在途釘住與置換序列化協議：
+
+### 9.1 雙世代釘住計數器架構 (Dual-Generation Slot Architecture)
+每個 ControlBlock 維護雙世代計數器陣列與單調遞增世代號：
+- `m_pins[2]`：兩個獨立的 `std::atomic<uint32_t>` 槽位。
+- `m_generation`：64 位元世代號。
+
+```text
+調用端操作：
+SlotIndex = Read(m_generation) % 2
+AtomicIncrement(m_pins[SlotIndex])
+... 執行業務方法 ...
+AtomicDecrement(m_pins[SlotIndex])
+```
+
+### 9.2 全域置換互斥鎖序列化 (Swap Serialization & Anti-Aliasing Invariant)
+* **雙世代槽位別名（Slot Aliasing）問題**：若允許多個執行緒並發對同一個物件執行置換，世代號連續遞增兩次會造成兩個置換操作映射至同一個 Slot，引發槽位別名與活鎖飢餓。
+* **序列化防線**：`Registry::SwapObjectPayload` 內部引入全域置換互斥鎖 `m_swap_mutex`。所有置換操作必須強制序列化執行，徹底消滅槽位別名與活鎖飢餓（Live-Lock）。
+
+### 9.3 鎖內原子標記 Clean 防狀態競態 (Atomic Clean Inside Write Lock)
+* 在獲取物件寫鎖（`cb->m_rw_lock`）的臨界區內，直接完成 Payload 指標替換、遞增世代號，並就地原子設定 `cb->m_storage_state = StorageState::Clean`。
+* **防覆蓋鐵律**：嚴禁在釋放寫鎖後才由外部調用者覆蓋標記 Clean，杜絕抹除其他執行緒在解鎖間隙透過 `OuroWriteLock` 寫入的 `Dirty` 標記。
+
+### 9.4 解鎖順序與生命週期防線 (Unlock-Before-Release Pin Invariant)
+* 在多執行緒環境中，置換端暫時借用的 Pin 守衛若在持有 `swap_lock` 期間釋放，一旦該 Pin 恰好是最後一個持有者，`ReleasePin` 內部會執行 `delete cb`。若此時 `swap_lock` 仍未解鎖，析構結束後解鎖 `swap_lock` 會存取已釋放的記憶體引發 Use-After-Free 崩潰。
+* **鐵律防線**：置換端必須在顯式解鎖 `swap_lock.unlock()` 之後，才執行 Pin 守衛的釋放，徹底杜絕釋放後使用。
+
+### 9.5 舊實體析構生命週期完備 (Standard C++ Destructor Invariant)
+* 舊物件實體釋放完全由標準 `old_destroy_fn(old_raw)` 自然調用析構，解構子 `~T()` 執行時物件內部註冊的 Handles 完整可用，完全由 Handle 解構子依序自然斷開邊緣。
+
+### 9.6 孤島拆解態即刻早退 (Destructing State Fail-Fast)
+* 若目標物件已被標記為孤島拆解中（`m_is_destructing == true`），置換操作第一時間返回 `ORK_STATUS_ERROR_INVALID_STATE`，調用端釘住操作返回 `ORK_STATUS_ERROR_NOT_FOUND`，`OuroPtr::WithObject` 即刻清空原子快取並拋出異常，徹底阻斷在途存取。
 ''', encoding="utf-8")
 
     # =========================================================================

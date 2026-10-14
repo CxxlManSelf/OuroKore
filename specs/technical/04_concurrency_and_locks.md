@@ -156,3 +156,40 @@ End Procedure
      - 步驟三：無鎖依序 `delete cb` 釋放墓碑控制區塊。
      - 步驟四：無鎖清空持久化映射名冊。
    - 常規執行期重置（`ork::Registry::Clear()` / `ork_shutdown_runtime`）則維持獨佔寫入鎖保護（`acquire_lock=true`），達成靜態退出與動態排空的雙軌安全。
+
+---
+
+## 🔀 9. 雙世代在途釘住與藍綠置換防活鎖協議 (Dual-Generation In-Flight Pinning & Shadow Swap RFC)
+
+為實現極致的調用速度並兼顧藍綠熱載入（Hot Reload）時的記憶體安全性，核心實作了雙世代在途釘住與置換序列化協議：
+
+### 9.1 雙世代釘住計數器架構 (Dual-Generation Slot Architecture)
+每個 ControlBlock 維護雙世代計數器陣列與單調遞增世代號：
+- `m_pins[2]`：兩個獨立的 `std::atomic<uint32_t>` 槽位。
+- `m_generation`：64 位元世代號。
+
+```text
+調用端操作：
+SlotIndex = Read(m_generation) % 2
+AtomicIncrement(m_pins[SlotIndex])
+... 執行業務方法 ...
+AtomicDecrement(m_pins[SlotIndex])
+```
+
+### 9.2 全域置換互斥鎖序列化 (Swap Serialization & Anti-Aliasing Invariant)
+* **雙世代槽位別名（Slot Aliasing）問題**：若允許多個執行緒並發對同一個物件執行置換，世代號連續遞增兩次會造成兩個置換操作映射至同一個 Slot，引發槽位別名與活鎖飢餓。
+* **序列化防線**：`Registry::SwapObjectPayload` 內部引入全域置換互斥鎖 `m_swap_mutex`。所有置換操作必須強制序列化執行，徹底消滅槽位別名與活鎖飢餓（Live-Lock）。
+
+### 9.3 鎖內原子標記 Clean 防狀態競態 (Atomic Clean Inside Write Lock)
+* 在獲取物件寫鎖（`cb->m_rw_lock`）的臨界區內，直接完成 Payload 指標替換、遞增世代號，並就地原子設定 `cb->m_storage_state = StorageState::Clean`。
+* **防覆蓋鐵律**：嚴禁在釋放寫鎖後才由外部調用者覆蓋標記 Clean，杜絕抹除其他執行緒在解鎖間隙透過 `OuroWriteLock` 寫入的 `Dirty` 標記。
+
+### 9.4 解鎖順序與生命週期防線 (Unlock-Before-Release Pin Invariant)
+* 在多執行緒環境中，置換端暫時借用的 Pin 守衛若在持有 `swap_lock` 期間釋放，一旦該 Pin 恰好是最後一個持有者，`ReleasePin` 內部會執行 `delete cb`。若此時 `swap_lock` 仍未解鎖，析構結束後解鎖 `swap_lock` 會存取已釋放的記憶體引發 Use-After-Free 崩潰。
+* **鐵律防線**：置換端必須在顯式解鎖 `swap_lock.unlock()` 之後，才執行 Pin 守衛的釋放，徹底杜絕釋放後使用。
+
+### 9.5 舊實體析構生命週期完備 (Standard C++ Destructor Invariant)
+* 舊物件實體釋放完全由標準 `old_destroy_fn(old_raw)` 自然調用析構，解構子 `~T()` 執行時物件內部註冊的 Handles 完整可用，完全由 Handle 解構子依序自然斷開邊緣。
+
+### 9.6 孤島拆解態即刻早退 (Destructing State Fail-Fast)
+* 若目標物件已被標記為孤島拆解中（`m_is_destructing == true`），置換操作第一時間返回 `ORK_STATUS_ERROR_INVALID_STATE`，調用端釘住操作返回 `ORK_STATUS_ERROR_NOT_FOUND`，`OuroPtr::WithObject` 即刻清空原子快取並拋出異常，徹底阻斷在途存取。

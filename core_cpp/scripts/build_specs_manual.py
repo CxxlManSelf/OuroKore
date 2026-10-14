@@ -627,12 +627,24 @@ ai_instance.reset();
 
 ---
 
-## 4. `OuroPtr<T>`：棧上生命週期守衛
+## 4. `OuroPtr<T>`：棧上生命週期守衛與極致並發防禦
 
 `OuroPtr` 代表活躍的「根引用（Root Edge）」。只要有任何執行緒在棧上持有某物件的 `OuroPtr`：
 * 核心 100% 保證：**該物件絕不會被自動脫水或銷毀！**
 * **安全轉發執行 (Zero Raw Pointer Guarantee)**：徹底拔除 `get()`、`operator->` 與 `operator*`，透過 `operator()(Fn&&, Args&&...)` 或 `Invoke(...)` 調用成員函式、成員欄位或 Lambda 閉包，徹底杜絕裸指標逃逸與 UAF 漏洞。
 * **原生極速延遲快取**：首次呼叫時透明復水並快取記憶體指標，後續呼叫直接以 $O(1)$ 純暫存器/記憶體原生速度執行。
+
+### 4.1 在途調用釘住（In-Flight Pinning）與雙世代防護
+為了在多執行緒環境下兼顧原生極速與 100% 記憶體安全，`OuroPtr` 整合了現代化的**在途調用釘住（In-Flight Pinning）**機制：
+1. **進入即釘住**：呼叫 `operator()` 或 `WithObject` 時，內部自動建立 `InFlightPinGuard`，原子遞增當前世代槽位之釘住計數。
+2. **免鎖並發讀取**：調用期間即使其他執行緒並發呼叫 `ork::Load()` 進行藍綠置換，置換端在釋放舊實體前必定等待舊世代釘住計數歸零（Drain），保證當前正在執行的成員函式實體記憶體絕對不被提前釋放！
+3. **雙世代消除活鎖**：釘住計數器採用雙世代槽位（`m_pins[2]`），置換時遞增世代號，新調用自動路由至新世代槽位，徹底消滅高頻讀取下的活鎖飢餓（Live-Lock）。
+4. **原子快取指標與世代失效**：`m_cached_ptr` 與 `m_cached_generation` 全面採用 `std::atomic` 原語，多執行緒共享同一個 `const OuroPtr&` 並發存取 100% 資料競爭自由（Data-Race Free）。一旦偵測到世代切換，舊快取指標原子失效並自動重新獲取最新實體。
+
+### 4.2 孤島拆解態與死亡對象 Fail-Fast 防線
+若目標物件已被標記為孤島拆解中（`m_is_destructing == true`）或已無效死亡：
+* `InFlightPinGuard` 於建構時第一時間偵測到異常，判定釘住失敗（`IsPinned() == false`）。
+* `WithObject` 立刻原子清空快取指標並拋出 `std::runtime_error` 異常，**絕不盲目穿透至成員函式調用**，徹底杜絕釋放後使用（Use-After-Free）。
 ''', encoding="utf-8")
 
     # 05_dehydration_and_storage.md
@@ -754,6 +766,58 @@ ork::HostContext host = ork::Init(storage, lru);
 // 隨時可由 Host 調整或更換脫水策略
 host.SetAutoDehydrator(lru);
 ```
+
+---
+
+## 💾 7. 全域狀態保存與兩階段藍綠載入 (Save & Blue-Green Load)
+
+除了透明脫水與復水外，OuroKore 提供應用端顯式全域或物件級的保存（`ork::Save`）與全圖藍綠熱載入（`ork::Load`）。
+
+### 7.1 事務保存與髒物件落盤 (`ork::Save`)
+```cpp
+// 1. 保存單一物件（若狀態為 Dirty 或 UnsavedNew 則執行序列化落盤並原子標記為 Clean）
+ork::Save(boss_ptr);
+
+// 2. 依 HandleID 保存
+ork::Save(boss_id);
+
+// 3. 非同步背景保存
+std::future<ork::AsyncResult<void>> save_fut = ork::SaveAsync(boss_ptr);
+```
+
+### 7.2 兩階段藍綠陰影置換載入 (`ork::Load`)
+載入新存檔或藍圖時，若直接在現有物件上原地覆寫，一旦載入過程中遭遇檔案損毀或反序列化失敗，將使整張運行圖處於殘破不可用的災難狀態；且若有其他執行緒正在並發存取，更會引發資料競爭或野指標崩潰。
+
+為此，OuroKore 實現了**兩階段藍綠陰影置換（Two-Phase Blue-Green Shadow Swap）**架構：
+
+```
+[ 執行 ork::Load(archive) ]
+         │
+         ├── 【第一階段：陰影建構 (Phase 1)】
+         │    在完全獨立的沙盒空間中反序列化所有物件與邊緣拓撲。
+         │    🛡️ 強例外安全：若發生任何格式毀損或例外，全盤銷毀陰影物件，原運行中系統 100% 毫髮無傷！
+         │
+         └── 【第二階段：原子藍綠置換 (Phase 2)】
+              1. 獲取全域置換互斥鎖（m_swap_mutex），序列化所有置換作業，徹底杜絕多執行緒置換引發的「雙世代槽位別名（Slot Aliasing）」與「活鎖飢餓（Live-Lock）」。
+              2. 逐一獲取物件 ControlBlock 之獨佔寫鎖（m_rw_lock）。
+              3. 在持有寫鎖的臨界區內原子替換 Payload 指標與世代號（m_generation++），並立即原子標記 m_storage_state = StorageState::Clean。
+                 🛡️ 狀態防覆蓋保證：徹底消除解開寫鎖至標記 Clean 之間的狀態空隙，防範覆蓋其他執行緒並發寫入標記的 Dirty！
+              4. 釋放寫鎖，在鎖外自旋等待舊世代槽位（m_pins[old_gen % 2]）在途調用釘住計數排空歸零（Drain）。
+              5. 呼叫舊物件解構函式（old_destroy_fn）。
+                 🛡️ 標準 C++ 解構生命週期保障：解構子 ~T() 執行期間內部註冊的 Handles 完整可用，完全由 Handle 解構子依序自然斷開邊緣。
+              6. 顯式解開 swap_lock 之後再釋放置換 Pin 守衛，保證多執行緒下 ControlBlock 生命週期安全。
+```
+
+#### 🛡️ 核心安全性與並發保證：
+1. **雙世代在途調用釘住（Dual-Generation Pinning）**：
+   - 每次置換時將世代號遞增，使得所有新進調用自動流向新世代槽位（`m_pins[new_gen % 2]`）。
+   - 置換端僅需等待舊世代槽位（`m_pins[old_gen % 2]`）釘住計數排空歸零，即可安全銷毀舊實體，消滅活鎖飢餓。
+2. **`m_swap_mutex` 置換操作序列化**：
+   - 徹底消滅多執行緒並發呼叫 `SwapObjectPayload` 引發的槽位別名與並發碰撞。
+3. **舊實體析構生命週期完備**：
+   - 不提前強制清空 Handle，完全由 C++ 標準解構流程依序釋放，確保領域物件的解構子內部若有存取自身 Handles 或日誌輸出時不會遭遇空指針。
+4. **孤島拆解態即刻拒絕**：
+   - 若物件已被標記為孤島拆解中（`m_is_destructing == true`），置換操作第一時間安全退出，絕不污染即將銷毀的控制區塊。
 ''', encoding="utf-8")
 
     # 06_host_lifecycle.md
@@ -2020,6 +2084,8 @@ ork::PluginHeap::assert_clean("MyPlugin");
   * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
   * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
   * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator()(Fn&&, Args&&...)`, `Invoke(...)`, `operator bool()`, `IsAlive()`, `GetTargetID()`, `Release()`。
+    * **雙世代在途釘住與原生快取**：調用期間由 `InFlightPinGuard` 自動釘住實體，支援藍綠置換排空；原子快取指標 `m_cached_ptr` 與世代號 `m_cached_generation` 提供 100% Data-Race Free 極速調用。
+    * **孤島拆解態 Fail-Fast 防護**：若目標處於孤島拆解態（`m_is_destructing == true`）或已死亡，釘住失敗第一時間原子清空快取並拋出 `std::runtime_error`，杜絕 UAF。
     * `template <typename U> bool Is() const`：判定物件是否屬於或繼承自型別 `U`（純記憶體查詢，脫水狀態零 I/O 保證）。
     * `template <typename U> OuroPtr<U> As() const &`：向下/向上安全轉型（左值增持根引用）。
     * `template <typename U> OuroPtr<U> As() &&`：右值移動轉型（**零引用計數開銷**轉移所有權）。
@@ -2041,8 +2107,10 @@ ork::PluginHeap::assert_clean("MyPlugin");
 * **函式**：
   * `CreateObject<T>(args...)`：建立受管領域物件（自動通報脫水模組登記）。
   * `CreatePermanentObject<T>(args...)`：建立永久常駐物件（不參與脫水換頁）。
-  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新。
+  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新（兩階段藍綠陰影置換，出錯 100% 回滾，置換寫鎖內原子標記 Clean，排空舊世代釘住後由 C++ 標準解構流程自然釋放舊實體）。
   * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
+  * `GetObjectGeneration(HandleID id)`：查詢物件當前世代號（Load 藍綠置換或復水時遞增）。
+  * `SwapObjectPayload(...)`：核心層藍綠置換實體 Payload（由 `m_swap_mutex` 序列化，寫鎖內原子標記 Clean，杜絕活鎖飢餓與狀態競態）。
   * `Dehydrate(HandleID id)`：依 ID 脫水（若 root_count > 0 則安全略過傳回 false）。
   * `Dehydrate(OuroPtr<T> &&ptr)`：右值移動消耗脫水（清空原指標，防止懸空）。
   * `DehydrateAsync(HandleID id)` / `DehydrateAsync(OuroPtr<T> &&ptr)`：非同步背景脫水。

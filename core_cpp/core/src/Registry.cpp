@@ -654,6 +654,112 @@ OuroObject *Registry::AcquireObjectPointer(HandleID target_id)
   return nullptr;
 }
 
+bool Registry::PinInFlight(HandleID target_id, uint32_t slot)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end() || it->second->m_is_destructing.load(std::memory_order_acquire))
+  {
+    return false;
+  }
+  it->second->PinInFlight(slot);
+  return true;
+}
+
+bool Registry::UnpinInFlight(HandleID target_id, uint32_t slot)
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it == m_object_map.end())
+  {
+    return false;
+  }
+  it->second->UnpinInFlight(slot);
+  return true;
+}
+
+bool Registry::GetObjectGeneration(HandleID target_id, uint64_t &out_generation) const
+{
+  std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+  auto it = m_object_map.find(target_id);
+  if (it != m_object_map.end() && !it->second->m_is_destructing.load(std::memory_order_acquire))
+  {
+    out_generation = it->second->GetGeneration();
+    return true;
+  }
+  return false;
+}
+
+bool Registry::SwapObjectPayload(HandleID target_id,
+                                 OuroObject *new_payload,
+                                 DestroyFn new_destroy_fn,
+                                 OuroObject **out_old_payload,
+                                 DestroyFn *out_old_destroy_fn)
+{
+  ControlBlock *cb = nullptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(m_registry_mutex);
+    auto it = m_object_map.find(target_id);
+    if (it == m_object_map.end())
+    {
+      return false;
+    }
+    cb = it->second;
+    // 🛡️ 初次檢查：若物件已處於孤島拆解態，嚴禁置換，直接回傳失敗
+    if (cb->m_is_destructing.load(std::memory_order_acquire))
+    {
+      return false;
+    }
+    cb->m_weak_count.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  // 1. 序列化置換操作：同一時間嚴格保證只有一個置換流程在執行！
+  // 徹底杜絕多次並發置換使 generation 快速回繞引發「雙世代槽位別名（Aliasing）」與活鎖飢餓！
+  std::unique_lock<std::mutex> swap_lock(cb->m_swap_mutex);
+
+  // 2. 取得目標物件獨占寫鎖
+  cb->m_rw_lock.lock();
+
+  // 🛡️ 二次確認 (Double Check)：在鎖定期間若物件已被標記為孤島拆解態，立即解鎖、釋放釘住狀態並返回失敗，徹底防範 TOCTOU
+  if (cb->m_is_destructing.load(std::memory_order_acquire))
+  {
+    cb->m_rw_lock.unlock();
+    swap_lock.unlock();
+    ReleasePin(target_id, cb);
+    return false;
+  }
+
+  // 3. 獲取舊 destroy_fn 與舊世代 slot
+  DestroyFn old_destroy_fn = cb->m_destroy_fn.load(std::memory_order_acquire);
+  uint32_t old_slot = static_cast<uint32_t>(cb->GetGeneration() & 1);
+
+  // 4. 藍綠置換 Payload 並遞增 generation（從此所有新調用自動路由至新世代 slot）
+  OuroObject *old_payload = cb->SwapPayload(new_payload, new_destroy_fn);
+
+  // 5. 關鍵破鎖：立即釋放獨占寫鎖！允許被阻塞的讀取端執行完畢並退出舊 slot
+  cb->m_rw_lock.unlock();
+
+  // 6. 在持有 swap_lock 保護下排空舊世代 slot
+  // 因 swap_lock 序列化保護，任何其他並發置換均被阻塞，generation 保持鎖定，新調用絕不會別名回繞至 old_slot！
+  cb->DrainInFlightSlot(old_slot);
+
+  // 🛡️ 關鍵生命週期防線：必須在釋放 Pin（此呼叫可能觸發 ControlBlock 物理回收 delete cb）之前顯式解鎖！
+  // 徹底防止 swap_lock 在退出作用域解構時存取已被釋放的 cb->m_swap_mutex，消除致命的 UAF 崩潰！
+  swap_lock.unlock();
+
+  ReleasePin(target_id, cb);
+
+  if (out_old_payload)
+  {
+    *out_old_payload = old_payload;
+  }
+  if (out_old_destroy_fn)
+  {
+    *out_old_destroy_fn = old_destroy_fn;
+  }
+  return true;
+}
+
 uint8_t Registry::GetStorageState(HandleID target_id) const
 {
   std::shared_lock<std::shared_mutex> lock(m_registry_mutex);

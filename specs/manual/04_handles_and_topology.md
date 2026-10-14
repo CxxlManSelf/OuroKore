@@ -175,9 +175,21 @@ ai_instance.reset();
 
 ---
 
-## 4. `OuroPtr<T>`：棧上生命週期守衛
+## 4. `OuroPtr<T>`：棧上生命週期守衛與極致並發防禦
 
 `OuroPtr` 代表活躍的「根引用（Root Edge）」。只要有任何執行緒在棧上持有某物件的 `OuroPtr`：
 * 核心 100% 保證：**該物件絕不會被自動脫水或銷毀！**
 * **安全轉發執行 (Zero Raw Pointer Guarantee)**：徹底拔除 `get()`、`operator->` 與 `operator*`，透過 `operator()(Fn&&, Args&&...)` 或 `Invoke(...)` 調用成員函式、成員欄位或 Lambda 閉包，徹底杜絕裸指標逃逸與 UAF 漏洞。
 * **原生極速延遲快取**：首次呼叫時透明復水並快取記憶體指標，後續呼叫直接以 $O(1)$ 純暫存器/記憶體原生速度執行。
+
+### 4.1 在途調用釘住（In-Flight Pinning）與雙世代防護
+為了在多執行緒環境下兼顧原生極速與 100% 記憶體安全，`OuroPtr` 整合了現代化的**在途調用釘住（In-Flight Pinning）**機制：
+1. **進入即釘住**：呼叫 `operator()` 或 `WithObject` 時，內部自動建立 `InFlightPinGuard`，原子遞增當前世代槽位之釘住計數。
+2. **免鎖並發讀取**：調用期間即使其他執行緒並發呼叫 `ork::Load()` 進行藍綠置換，置換端在釋放舊實體前必定等待舊世代釘住計數歸零（Drain），保證當前正在執行的成員函式實體記憶體絕對不被提前釋放！
+3. **雙世代消除活鎖**：釘住計數器採用雙世代槽位（`m_pins[2]`），置換時遞增世代號，新調用自動路由至新世代槽位，徹底消滅高頻讀取下的活鎖飢餓（Live-Lock）。
+4. **原子快取指標與世代失效**：`m_cached_ptr` 與 `m_cached_generation` 全面採用 `std::atomic` 原語，多執行緒共享同一個 `const OuroPtr&` 並發存取 100% 資料競爭自由（Data-Race Free）。一旦偵測到世代切換，舊快取指標原子失效並自動重新獲取最新實體。
+
+### 4.2 孤島拆解態與死亡對象 Fail-Fast 防線
+若目標物件已被標記為孤島拆解中（`m_is_destructing == true`）或已無效死亡：
+* `InFlightPinGuard` 於建構時第一時間偵測到異常，判定釘住失敗（`IsPinned() == false`）。
+* `WithObject` 立刻原子清空快取指標並拋出 `std::runtime_error` 異常，**絕不盲目穿透至成員函式調用**，徹底杜絕釋放後使用（Use-After-Free）。

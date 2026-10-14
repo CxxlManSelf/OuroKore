@@ -65,6 +65,75 @@ public:
 private:
   size_t m_initial_depth = 0;
 };
+
+/**
+ * @brief 在途調用釘住守衛 (In-Flight Pin Guard)
+ * 進入成員函式前原子遞增對應世代 slot 之 in-flight pins，退出時原子遞減。
+ * 雙世代（Dual-Generation）槽位確保置換端僅需等待舊世代歸零，徹底消除活鎖 (Live-lock) 與飢餓。
+ * 保證在執行成員函式期間，底層實體記憶體絕對不會被 Load() 藍綠置換給釋放。
+ */
+struct InFlightPinGuard
+{
+  HandleID m_id{0};
+  uint32_t m_slot{0};
+  uint64_t m_generation{0};
+  bool m_pinned{false};
+
+  explicit InFlightPinGuard(HandleID id) noexcept
+      : m_id(id)
+  {
+    if (m_id != 0)
+    {
+      for (;;)
+      {
+        if (ork_get_object_generation(m_id, &m_generation) != ORK_STATUS_OK)
+        {
+          m_id = 0;
+          break;
+        }
+        m_slot = static_cast<uint32_t>(m_generation & 1);
+        if (ork_pin_in_flight(m_id, m_slot) != ORK_STATUS_OK)
+        {
+          m_id = 0;
+          break;
+        }
+        uint64_t verify_gen = 0;
+        if (ork_get_object_generation(m_id, &verify_gen) == ORK_STATUS_OK && verify_gen == m_generation)
+        {
+          m_pinned = true;
+          break;
+        }
+        // 世代變更（發生了極罕見的併發置換），釋放舊 slot 後重試
+        ork_unpin_in_flight(m_id, m_slot);
+      }
+    }
+  }
+
+  bool IsPinned() const noexcept
+  {
+    return m_pinned;
+  }
+
+  explicit operator bool() const noexcept
+  {
+    return m_pinned;
+  }
+
+  uint64_t GetGeneration() const noexcept
+  {
+    return m_generation;
+  }
+
+  ~InFlightPinGuard() noexcept
+  {
+    if (m_pinned && m_id != 0)
+    {
+      ork_unpin_in_flight(m_id, m_slot);
+    }
+  }
+  InFlightPinGuard(const InFlightPinGuard &) = delete;
+  InFlightPinGuard &operator=(const InFlightPinGuard &) = delete;
+};
 }  // namespace detail
 
 // Inline implementation of OuroObject constructor for ActiveObject tracking
@@ -157,10 +226,12 @@ public:
   // Enable moving
   OuroPtr(OuroPtr &&other) noexcept :
       m_target_id(other.m_target_id),
-      m_cached_ptr(other.m_cached_ptr)
+      m_cached_ptr(other.m_cached_ptr.load(std::memory_order_acquire)),
+      m_cached_generation(other.m_cached_generation.load(std::memory_order_acquire))
   {
     other.m_target_id = 0;
-    other.m_cached_ptr = nullptr;
+    other.m_cached_ptr.store(nullptr, std::memory_order_release);
+    other.m_cached_generation.store(0, std::memory_order_release);
   }
 
   OuroPtr &operator=(OuroPtr &&other) noexcept
@@ -169,9 +240,11 @@ public:
     {
       Release();
       m_target_id = other.m_target_id;
-      m_cached_ptr = other.m_cached_ptr;
+      m_cached_ptr.store(other.m_cached_ptr.load(std::memory_order_acquire), std::memory_order_release);
+      m_cached_generation.store(other.m_cached_generation.load(std::memory_order_acquire), std::memory_order_release);
       other.m_target_id = 0;
-      other.m_cached_ptr = nullptr;
+      other.m_cached_ptr.store(nullptr, std::memory_order_release);
+      other.m_cached_generation.store(0, std::memory_order_release);
     }
     return *this;
   }
@@ -180,10 +253,12 @@ public:
   template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
   OuroPtr(OuroPtr<U> &&other) noexcept :
       m_target_id(other.m_target_id),
-      m_cached_ptr(static_cast<T *>(other.m_cached_ptr))
+      m_cached_ptr(static_cast<T *>(other.m_cached_ptr.load(std::memory_order_acquire))),
+      m_cached_generation(other.m_cached_generation.load(std::memory_order_acquire))
   {
     other.m_target_id = 0;
-    other.m_cached_ptr = nullptr;
+    other.m_cached_ptr.store(nullptr, std::memory_order_release);
+    other.m_cached_generation.store(0, std::memory_order_release);
   }
 
   // Template converting move assignment
@@ -194,9 +269,11 @@ public:
     {
       Release();
       m_target_id = other.m_target_id;
-      m_cached_ptr = static_cast<T *>(other.m_cached_ptr);
+      m_cached_ptr.store(static_cast<T *>(other.m_cached_ptr.load(std::memory_order_acquire)), std::memory_order_release);
+      m_cached_generation.store(other.m_cached_generation.load(std::memory_order_acquire), std::memory_order_release);
       other.m_target_id = 0;
-      other.m_cached_ptr = nullptr;
+      other.m_cached_ptr.store(nullptr, std::memory_order_release);
+      other.m_cached_generation.store(0, std::memory_order_release);
     }
     return *this;
   }
@@ -208,7 +285,8 @@ public:
       ork_unregister_edge(ORK_ROOT_ID, m_target_id);
       m_target_id = 0;
     }
-    m_cached_ptr = nullptr;
+    m_cached_ptr.store(nullptr, std::memory_order_release);
+    m_cached_generation.store(0, std::memory_order_release);
   }
 
   /**
@@ -222,16 +300,43 @@ public:
     {
       throw std::runtime_error("Attempted to invoke on a null OuroPtr");
     }
-    if (!m_cached_ptr)
+
+    // 🛡️ 在途釘住保護 (In-Flight Pinning)：進入前獲取當前世代並釘住對應 slot，RAII 解構離開時釋放
+    // 保證即使其他執行緒並發呼叫 Load() 進行藍綠置換，當前執行的物件實體也絕不被提前釋放！
+    detail::InFlightPinGuard pin(m_target_id);
+    if (!pin.IsPinned())
+    {
+      // 釘住失敗：目標物件已被標記為孤島拆解中（m_is_destructing）或已無效死亡，立即清空快取並拋出例外，防範 UAF！
+      m_cached_ptr.store(nullptr, std::memory_order_release);
+      m_cached_generation.store(0, std::memory_order_release);
+      throw std::runtime_error("Attempted to invoke on a dead or destructing object via OuroPtr");
+    }
+
+    uint64_t current_gen = pin.GetGeneration();
+
+    T *ptr = m_cached_ptr.load(std::memory_order_acquire);
+    uint64_t cached_gen = m_cached_generation.load(std::memory_order_acquire);
+
+    if (ptr != nullptr && cached_gen != current_gen)
+    {
+      // 世代變更（物件已被 Load 藍綠置換），舊快取指標失效，重新獲取！
+      m_cached_ptr.store(nullptr, std::memory_order_release);
+      m_cached_generation.store(0, std::memory_order_release);
+      ptr = nullptr;
+    }
+
+    if (!ptr)
     {
       ::OuroObject *raw_obj = nullptr;
       if (ork_acquire_object_pointer(m_target_id, &raw_obj) != ORK_STATUS_OK || !raw_obj)
       {
         throw std::runtime_error("Attempted to invoke on a dead or invalid object via OuroPtr");
       }
-      m_cached_ptr = static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
+      ptr = static_cast<T *>(reinterpret_cast<OuroObject *>(raw_obj));
+      m_cached_ptr.store(ptr, std::memory_order_release);
+      m_cached_generation.store(current_gen, std::memory_order_release);
     }
-    return std::invoke(std::forward<Fn>(fn), *m_cached_ptr, std::forward<Args>(args)...);
+    return std::invoke(std::forward<Fn>(fn), *ptr, std::forward<Args>(args)...);
   }
 
   /**
@@ -313,7 +418,8 @@ public:
     {
       HandleID tid = m_target_id;
       m_target_id = 0;
-      m_cached_ptr = nullptr;
+      m_cached_ptr.store(nullptr, std::memory_order_release);
+      m_cached_generation.store(0, std::memory_order_release);
       return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
     }
     Release();
@@ -324,7 +430,8 @@ public:
   {
     HandleID tid = m_target_id;
     m_target_id = 0;
-    m_cached_ptr = nullptr;
+    m_cached_ptr.store(nullptr, std::memory_order_release);
+    m_cached_generation.store(0, std::memory_order_release);
     return tid;
   }
 
@@ -335,7 +442,8 @@ public:
 
 private:
   HandleID m_target_id = 0;
-  mutable T *m_cached_ptr = nullptr;
+  mutable std::atomic<T *> m_cached_ptr{nullptr};
+  mutable std::atomic<uint64_t> m_cached_generation{0};
 };
 
 template <typename TargetT, typename SourceT>

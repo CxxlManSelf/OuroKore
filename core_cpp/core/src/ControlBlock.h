@@ -3,6 +3,7 @@
 #include <atomic>
 #include <mutex>
 #include <shared_mutex>
+#include <thread>
 #include <vector>
 
 #include "ourokore/base/DynamicLibrary.hpp"
@@ -27,6 +28,9 @@ struct ControlBlock
   // Shared mutex supporting the two-stage locking contract
   // 支援兩階段鎖定協定的共享互斥鎖
   std::shared_mutex m_rw_lock;
+
+  // 序列化藍綠置換互斥鎖（防止多次並發置換導致 generation 快速回繞引發雙世代槽位別名與活鎖飢餓）
+  std::mutex m_swap_mutex;
 
   // Raw pointer to the physical object (the body) - atomic for thread-safe access
   std::atomic<OuroObject *> m_payload{nullptr};
@@ -59,11 +63,55 @@ struct ControlBlock
   // 全域唯一型別識別碼（脫水期間永久長存於 ControlBlock 墓碑中，查詢零 I/O 零復水）
   std::atomic<ork_type_id_t> m_type_id{0};
 
+  // 雙世代在途調用釘住計數器（Dual-Generation In-Flight Pins）
+  // 徹底消除高頻並發讀取下的計數無法歸零活鎖 (Live-lock) 與飢餓 (Starvation)
+  std::atomic<uint32_t> m_pins[2]{0, 0};
+
+  // 物件實體世代號（Generation：每次 Load 置換或脫水復水時遞增，使 OuroPtr 快取指標安全失效）
+  std::atomic<uint64_t> m_generation{0};
+
   explicit ControlBlock(OuroObject *payload = nullptr, DestroyFn destroy_fn = nullptr, ork_type_id_t type_id = 0) :
       m_payload(payload),
       m_destroy_fn(destroy_fn),
       m_type_id(type_id)
   {}
+
+  void PinInFlight(uint32_t slot) noexcept
+  {
+    m_pins[slot & 1].fetch_add(1, std::memory_order_acquire);
+  }
+
+  void UnpinInFlight(uint32_t slot) noexcept
+  {
+    m_pins[slot & 1].fetch_sub(1, std::memory_order_release);
+  }
+
+  uint64_t GetGeneration() const noexcept
+  {
+    return m_generation.load(std::memory_order_acquire);
+  }
+
+  void DrainInFlightSlot(uint32_t slot) noexcept
+  {
+    while (m_pins[slot & 1].load(std::memory_order_acquire) > 0)
+    {
+      std::this_thread::yield();
+    }
+  }
+
+  OuroObject *SwapPayload(OuroObject *new_payload, DestroyFn new_destroy_fn = nullptr) noexcept
+  {
+    m_generation.fetch_add(1, std::memory_order_acq_rel);
+    OuroObject *old_payload = m_payload.exchange(new_payload, std::memory_order_acq_rel);
+    if (new_destroy_fn)
+    {
+      m_destroy_fn.store(new_destroy_fn, std::memory_order_release);
+    }
+    // 🛡️ 置換新實體後，在寫鎖保護下立即原子標記為 Clean（1: 與持久化存檔一致）
+    // 徹底消除置換與釋放舊實體之間的空窗期，防範覆蓋後續並發寫入所標記之 Dirty 狀態
+    m_storage_state.store(1, std::memory_order_release);
+    return old_payload;
+  }
 
   /**
    * @brief 釋放動態模組載入器引用（解除對 DLL 之反向錨定）

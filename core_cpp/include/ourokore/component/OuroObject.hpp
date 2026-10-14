@@ -34,6 +34,9 @@ template <typename T>
 class Rehydrator;
 
 template <typename T>
+class Loader;
+
+template <typename T>
 constexpr std::string_view ExtractRawSignature() noexcept
 {
 #if defined(_MSC_VER)
@@ -257,6 +260,9 @@ private:
 
   template <typename T>
   friend class detail::Rehydrator;
+
+  template <typename T>
+  friend class detail::Loader;
 
   /**
    * @brief Sets the runtime instance identifier of this object.

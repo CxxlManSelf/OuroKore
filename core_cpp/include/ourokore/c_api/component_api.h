@@ -62,6 +62,45 @@ ORK_API int32_t ORK_CALL ork_unlock_object_shared(HandleID target_id);
 ORK_API int32_t ORK_CALL ork_acquire_object_pointer(HandleID target_id, OuroObject** out_obj);
 
 /**
+ * @brief 釘住在途調用 (In-Flight Pinning)
+ * @param target_id 目標物件 HandleID
+ * @param slot 世代槽位 (0 或 1)
+ * @return ORK_STATUS_OK 成功，或錯誤碼
+ */
+ORK_API int32_t ORK_CALL ork_pin_in_flight(HandleID target_id, uint32_t slot);
+
+/**
+ * @brief 解除在途調用釘住 (In-Flight Unpinning)
+ * @param target_id 目標物件 HandleID
+ * @param slot 世代槽位 (0 或 1)
+ * @return ORK_STATUS_OK 成功，或錯誤碼
+ */
+ORK_API int32_t ORK_CALL ork_unpin_in_flight(HandleID target_id, uint32_t slot);
+
+/**
+ * @brief 取得目標物件之世代版本號 (Object Generation)
+ * @param target_id 目標物件 HandleID
+ * @param out_generation 接收 64 位元世代號的指標
+ * @return ORK_STATUS_OK 成功，或錯誤碼
+ */
+ORK_API int32_t ORK_CALL ork_get_object_generation(HandleID target_id, uint64_t* out_generation);
+
+/**
+ * @brief 在獨占寫鎖下原子置換 ControlBlock 之 Payload 並排空在途調用
+ * @param target_id 目標物件 HandleID
+ * @param new_payload 新實體記憶體指標
+ * @param new_destroy_fn 新實體之自訂 Deleter 函式指標
+ * @param out_old_payload 接收被換下的舊實體記憶體指標
+ * @param out_old_destroy_fn 接收舊實體之 Deleter 函式指標
+ * @return ORK_STATUS_OK 成功，或錯誤碼
+ */
+ORK_API int32_t ORK_CALL ork_swap_object_payload(HandleID target_id,
+                                                OuroObject* new_payload,
+                                                ork_destroy_fn_t new_destroy_fn,
+                                                OuroObject** out_old_payload,
+                                                ork_destroy_fn_t* out_old_destroy_fn);
+
+/**
  * @brief Thread-Local Active Owner context operations.
  * Sets the current thread's active owner ID.
  * @param owner_id The owner HandleID to set.

@@ -327,6 +327,107 @@ extern "C"
     }
   }
 
+  int32_t ORK_CALL ork_pin_in_flight(HandleID target_id, uint32_t slot)
+  {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      if (ork::Registry::GetInstance().PinInFlight(target_id, slot))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_unpin_in_flight(HandleID target_id, uint32_t slot)
+  {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      if (ork::Registry::GetInstance().UnpinInFlight(target_id, slot))
+      {
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_get_object_generation(HandleID target_id, uint64_t *out_generation)
+  {
+    if (target_id == ORK_ROOT_ID || !out_generation)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      uint64_t gen = 0;
+      if (ork::Registry::GetInstance().GetObjectGeneration(target_id, gen))
+      {
+        *out_generation = gen;
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
+  int32_t ORK_CALL ork_swap_object_payload(HandleID target_id,
+                                          OuroObject *new_payload,
+                                          ork_destroy_fn_t new_destroy_fn,
+                                          OuroObject **out_old_payload,
+                                          ork_destroy_fn_t *out_old_destroy_fn)
+  {
+    if (target_id == ORK_ROOT_ID)
+    {
+      return ORK_STATUS_ERROR_INVALID_ARG;
+    }
+    try
+    {
+      ork::OuroObject *old_raw = nullptr;
+      ork::DestroyFn old_dest = nullptr;
+      if (ork::Registry::GetInstance().SwapObjectPayload(
+              target_id,
+              reinterpret_cast<ork::OuroObject *>(new_payload),
+              reinterpret_cast<ork::DestroyFn>(new_destroy_fn),
+              &old_raw,
+              &old_dest))
+      {
+        if (out_old_payload)
+        {
+          *out_old_payload = reinterpret_cast<::OuroObject *>(old_raw);
+        }
+        if (out_old_destroy_fn)
+        {
+          *out_old_destroy_fn = reinterpret_cast<ork_destroy_fn_t>(old_dest);
+        }
+        return ORK_STATUS_OK;
+      }
+      return ORK_STATUS_ERROR_NOT_FOUND;
+    }
+    catch (...)
+    {
+      return ORK_STATUS_ERROR_EXCEPTION;
+    }
+  }
+
   int32_t ORK_CALL ork_set_active_owner(HandleID owner_id)
   {
     try

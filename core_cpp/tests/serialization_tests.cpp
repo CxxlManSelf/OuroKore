@@ -1436,6 +1436,149 @@ static void Test14_Utf8_Properties_And_Handles_Serialization()
   }
 }
 
+void Test15_Load_TwoPhase_Strong_Exception_Safety(ork::HostContext &host)
+{
+  std::cout << "[Test 15] Load Two-Phase Strong Exception Safety (Rollback on Corrupted Stream)..." << std::endl;
+  std::cout.flush();
+
+  auto storage = std::dynamic_pointer_cast<ork::InMemoryStorage>(host.GetStorageDriver());
+  assert(storage != nullptr);
+
+  // 1. 驗證 Payload 損毀情境下的原生物件毫髮無傷
+  auto hero = ork::CreateObject<PlayerObject>();
+  hero(&PlayerObject::SetHp, 888);
+  hero(&PlayerObject::SetName, "ImmutableHero");
+  ork::HandleID hero_id = hero.GetTargetID();
+
+  // 正常 Save
+  assert(ork::Save(hero) == true);
+  assert(hero(&PlayerObject::GetStorageState) == ork::StorageState::Clean);
+
+  // 修改活體物件數值為 123
+  hero(&PlayerObject::SetHp, 123);
+  assert(hero(&PlayerObject::GetStorageState) == ork::StorageState::Dirty);
+
+  // 惡意覆寫儲存庫中的資料為毀損串流
+  std::vector<uint8_t> corrupted_stream = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE};
+  storage->SaveRawBuffer(hero_id, corrupted_stream);
+
+  // 呼叫 Load(hero)，必須拋出例外且原物件數值 100% 保持 123（毫髮無傷）
+  bool caught_load_ex = false;
+  try
+  {
+    ork::Load(hero);
+  }
+  catch (const ork::OuroCorruptedStreamException &ex)
+  {
+    caught_load_ex = true;
+    std::cout << "  Captured expected OuroCorruptedStreamException during Load: " << ex.what() << std::endl;
+  }
+  assert(caught_load_ex == true);
+
+  // 🛡️ 核心驗證：原生物件 Payload 與狀態完全未被污染！
+  assert(hero(&PlayerObject::GetHp) == 123);
+  assert(hero(&PlayerObject::GetName) == "ImmutableHero");
+  assert(hero(&PlayerObject::GetStorageState) == ork::StorageState::Dirty);
+
+  // 2. 驗證 Slot 拓撲在反序列化損毀時絕不被掏空
+  auto parent = ork::CreateObject<ParentCharacter>();
+  auto weapon = ork::CreateObject<WeaponObject>();
+  weapon(&WeaponObject::SetDamage, 300);
+  parent(&ParentCharacter::m_weapon) = weapon;
+  ork::HandleID parent_id = parent.GetTargetID();
+  ork::HandleID weapon_id = weapon.GetTargetID();
+
+  assert(ork::Save(parent) == true);
+  assert(ork::Save(weapon) == true);
+
+  // 破壞 parent 的儲存資料為截斷串流
+  std::vector<uint8_t> bad_parent = {0x01, 0x02};
+  storage->SaveRawBuffer(parent_id, bad_parent);
+
+  bool caught_topo_ex = false;
+  try
+  {
+    ork::Load(parent);
+  }
+  catch (const ork::OuroCorruptedStreamException &ex)
+  {
+    caught_topo_ex = true;
+    std::cout << "  Captured expected OuroCorruptedStreamException during parent Load: " << ex.what() << std::endl;
+  }
+  assert(caught_topo_ex == true);
+
+  // 🛡️ 核心驗證：原生物件的 Slot 連線依然完好如初，絕不被掏空！
+  assert(parent(&ParentCharacter::m_weapon).GetTargetID() == weapon_id);
+  auto held_weapon = parent(&ParentCharacter::m_weapon).LockAndAcquire();
+  assert((bool)held_weapon == true);
+  assert(held_weapon(&WeaponObject::GetDamage) == 300);
+
+  std::cout << "  Test 15 Passed!\n" << std::endl;
+  std::cout.flush();
+}
+
+void Test16_Concurrent_InFlight_Pinning_And_Load_Swap(ork::HostContext &host)
+{
+  std::cout << "[Test 16] Multi-Threaded Concurrent In-Flight Pinning & Load Swap Safety..." << std::endl;
+  std::cout.flush();
+
+  auto hero = ork::CreateObject<PlayerObject>();
+  hero(&PlayerObject::SetHp, 1000);
+  hero(&PlayerObject::SetName, "ImmortalWarrior");
+  assert(ork::Save(hero) == true);
+
+  std::atomic<bool> stop_flag{false};
+  std::atomic<uint64_t> read_ops{0};
+  constexpr size_t kReaderThreads = 4;
+  std::vector<std::thread> readers;
+
+  // 啟動 4 個持續透過 OuroPtr 高頻調用成員函式的 Reader 執行緒
+  for (size_t t = 0; t < kReaderThreads; ++t)
+  {
+    readers.emplace_back([&]() {
+      while (!stop_flag.load(std::memory_order_relaxed))
+      {
+        int32_t hp = hero(&PlayerObject::GetHp);
+        assert(hp >= 0);
+        std::string name = hero(&PlayerObject::GetName);
+        assert(!name.empty());
+        read_ops.fetch_add(1, std::memory_order_relaxed);
+      }
+    });
+  }
+
+  // 啟動 2 個同時並發進行 Save & Load 藍綠置換的 Swapper 執行緒
+  // 驗證 m_swap_mutex 完美序列化多次置換，徹底消滅雙世代槽位別名與活鎖飢餓！
+  constexpr size_t kSwapperThreads = 2;
+  std::vector<std::thread> swappers;
+  for (size_t s = 0; s < kSwapperThreads; ++s)
+  {
+    swappers.emplace_back([&, s]() {
+      for (int i = 0; i < 50; ++i)
+      {
+        hero(&PlayerObject::SetHp, 1000 + static_cast<int32_t>(s * 100) + i);
+        ork::Save(hero);
+        assert(ork::Load(hero) == true);
+      }
+    });
+  }
+
+  for (auto &th : swappers)
+  {
+    th.join();
+  }
+
+  stop_flag.store(true, std::memory_order_release);
+  for (auto &th : readers)
+  {
+    th.join();
+  }
+
+  std::cout << "  Completed " << read_ops.load() << " in-flight invocations during 100 Load swaps with ZERO UAF/Crash!" << std::endl;
+  std::cout << "  Test 16 Passed!\n" << std::endl;
+  std::cout.flush();
+}
+
 int main()
 {
   std::cout << "=== OuroKore Phase 3 Serialization & Dehydration/Rehydration Tests ===" << std::endl;
@@ -1463,6 +1606,8 @@ int main()
     Test12_WriteStream_Commit_Rollback_On_Exception(host);
     Test13_Object_Deletion_Notification_Under_Unbound_References(host, global_storage, mock_dehydrator);
     Test14_Utf8_Properties_And_Handles_Serialization();
+    Test15_Load_TwoPhase_Strong_Exception_Safety(host);
+    Test16_Concurrent_InFlight_Pinning_And_Load_Swap(host);
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();

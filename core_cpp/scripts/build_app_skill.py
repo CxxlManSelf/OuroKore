@@ -294,6 +294,20 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 2. **雙層關閉防禦體系**：
    - **標準 Host 應用端**：透過 `HostContext` RAII 作用域自然解構，在運行期安全呼叫 `ork_shutdown_runtime()`，主動排空磁碟與延遲銷毀隊列。
    - **外掛獨立退出 / 異常終止**：若未經 `HostContext`（如純外掛測試），靜態單例解構子 `~Registry()` 自動切換為無鎖兜底置換清理，徹底避免在 Windows Loader Lock 期間獲取讀寫互斥鎖而發生死鎖。
+
+---
+
+## 💾 9. 全域狀態保存與兩階段藍綠載入最佳實踐 (Save & Blue-Green Load Best Practices)
+
+1. **事務落盤 (`ork::Save`)**：
+   - 在物件完成修改後調用 `ork::Save(ptr)` 或 `ork::Save(id)`。
+   - 若狀態為 `Dirty` 或 `UnsavedNew`，自動落盤並原子標記為 `Clean`。
+2. **兩階段藍綠熱載入 (`ork::Load`)**：
+   - **第一階段（陰影建構）**：在乾淨獨立的沙盒中建構新實體與拓撲圖；若有任何格式損毀或拋出異常，100% 乾淨銷毀陰影物件，原運行中系統毫髮無傷（強例外安全）。
+   - **第二階段（原子置換）**：由 `m_swap_mutex` 全域序列化置換，鎖內原子替換 Payload 並標記 `Clean`（防覆蓋並發標髒）；在鎖外等待舊世代槽位在途釘住計數排空歸零（Drain），隨後由標準 C++ 解構流程（`old_destroy_fn`）自然析構舊實體，領域物件解構期間 Handles 依然完整可用。
+3. **`OuroPtr` 原生極速調用與在途釘住**：
+   - 透過 `operator()(Fn&&, Args&&...)` 調用成員函式，內部由 `InFlightPinGuard` 原子釘住實體槽位，保證調用期間記憶體不被置換提前釋放。
+   - 原子快取指標 `m_cached_ptr` 與世代號 `m_cached_generation` 提供 100% Data-Race Free 極速調用；若物件處於孤島拆解態（`m_is_destructing == true`），第一時間原子清空快取並拋出異常，徹底杜絕 UAF。
 '''
     skill_file.write_text(content, encoding="utf-8")
     print("✅ 應用端 AI 技能檔 ../skills/ourokore-app/SKILL.md 生成完畢！")

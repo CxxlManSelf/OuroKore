@@ -18,7 +18,10 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
    - 物件不由裸指標或標準 `std::shared_ptr` 直接持有，而是由全域唯一的 64 位元識別碼 `HandleID` 與底層控制區塊託管。
    - `OwningHandle<T>` / `OwningContainerHandle`：表示強引用與擁有權（邊緣拓撲），自動向所屬父物件註冊槽位（Slot）。內部業務拓撲（含雙向關聯）放膽使用，由 `CycleCollector` 背景非同步消化。
    - `UnboundHandle<T>`：純旁觀者句柄（只記住電話號碼，絕不干涉對方生死）。專為「外掛隨時卸載防卡死」、「UI 暫時瞄一眼」等情境設計。要使用時打電話確認（`LockAndAcquire()`），對方在就安心用，對方若已銷毀或卸載就自動傳回 null 並擦乾淨記錄，絕不強留對方。
-   - `OuroPtr<T>`：棧上 / 全域根引用守衛（Root Edge）。為杜絕指標逃逸與 UAF，徹底移除裸指標存取（無 `get()`/`operator->`），改以 `operator()(Fn&&, Args&&...)` 安全轉發執行；**C++20 編譯期嚴格限制只能傳入成員指標（成員函式或欄位），徹底杜絕在調用端以 Lambda 閉包偷渡外洩受管物件裸指標**；持有期間受 Root Edge 保護保證不脫水，內部自動延遲快取指標實現 $O(1)$ 極速原生調用。若有進階受信任需求，可顯式透過 `WithObject` 介面。
+   - `OuroPtr<T>`：棧上 / 全域根引用守衛（Root Edge）。為杜絕指標逃逸與 UAF，徹底移除裸指標存取（無 `get()`/`operator->`），改以 `operator()(Fn&&, Args&&...)` 安全轉發執行；**編譯期嚴格限制只能傳入成員指標（成員函式或欄位），徹底杜絕在調用端以 Lambda 閉包偷渡外洩受管物件裸指標**；持有期間受 Root Edge 保護保證不脫水，內部自動延遲快取指標實現 $O(1)$ 極速原生調用。
+     - **雙世代在途釘住（In-Flight Pinning）**：調用期間由 `InFlightPinGuard` 釘住槽位，支援置換時排空舊世代呼叫（Drain）；快取指標與世代號全面原子化（`std::atomic`），100% Data-Race Free。
+     - **孤島拆解態 Fail-Fast 防護**：若目標物件正處於孤島拆解態（`m_is_destructing == true`）或已死亡，釘住失敗第一時間原子清空快取並拋出 `std::runtime_error`，絕不存取即將銷毀之肉體。
+     - 若有進階受信任需求，可顯式透過 `WithObject` 介面。
    - ⚠️ **循環參照使用鐵律**：業務圖內部雙向互指（A <-> B）一律 100% 使用 `OwningHandle`，交由背景 `CycleCollector` 自動安全回收。**千萬不要為了「破環」而濫用 `UnboundHandle`**，只有在你「完全不想為對方的生命週期負責」時才使用它。
 
 2. **記憶體自動脫水與透明復水 (Dehydration & Transparent Rehydration)**：
@@ -26,11 +29,17 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
    - 當記憶體壓力觸發或由脫水器（如 `OuroLRUAutoDehydrator`）挑選物件時，核心執行 `ork_dehydrate_object`：將 Dirty 物件序列化落盤，安全銷毀 Payload 實體記憶體，保留控制區塊（ControlBlock）。
    - 當任何執行緒嘗試存取已脫水物件時，框架透過註冊的 `ork_rehydrate_fn_t` 回呼透明地自儲存驅動（`IStorageDriver`）復原記憶體實體，對使用者完全透明。
 
-3. **全域型別系統與 ControlBlock 墓碑長存 (Type System & Dehydration Invariant)**：
+3. **兩階段藍綠陰影置換 (Two-Phase Blue-Green Shadow Swap)**：
+   - `ork::Load` 載入新藍圖時採用兩階段機制：
+     - Phase 1 陰影建構：在隔離沙盒中解析，遇錯 100% 乾淨回滾，原運行圖零污染（強例外安全）。
+     - Phase 2 原子置換：由 `m_swap_mutex` 全域序列化置換（防槽位別名與活鎖飢餓）；在寫鎖內原子替換 Payload 並標記 `Clean`（防覆蓋並發標髒）；鎖外等待舊世代槽位釘住計數排空歸零；舊物件實體釋放完全由標準 C++ 解構流程（`old_destroy_fn`）自然完成，析構期間 Handles 依然完整可用。
+     - 解鎖順序生命週期鐵律：置換端借用的 Pin 守衛必須在顯式解鎖 `swap_lock.unlock()` 之後釋放，杜絕 ControlBlock 提前釋放之 UAF。
+
+4. **全域型別系統與 ControlBlock 墓碑長存 (Type System & Dehydration Invariant)**：
    - 每個受管物件在兩階段構造時分配並鎖定 64 位元唯一 `TypeID`，儲存於 ControlBlock 墓碑中。
    - 物件即使脫水進入磁碟，型別資訊永不丟失；呼叫 `ptr.Is<T>()`、`ork_is_instance_of` 或 `ptr.GetTypeID()` 為**零 I/O 純記憶體查詢**，絕對不會誘發穿透性復水。
 
-4. **三層權限隔離與 HostContext 獨佔特權**：
+5. **三層權限隔離與 HostContext 獨佔特權**：
    - 凡涉及全進程生命週期（`Shutdown`、`Reset`）、基礎設施注入（`IStorageDriver`、`IAutoDehydrator`）、全域排程與排空（`FlushStorage`、`FlushDeferredDeletions`、`CollectCycles`）等特權，**必須收斂至 HostContext**。
    - 第三方插件僅能使用受管物件、OuroPtr、Handle 拓撲與讀寫鎖，物理隔離所有特權 API。
 
@@ -38,10 +47,10 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 
 ## 🛠️ 2. 應用開發指南 (Application Developer Guide)
 
-### 2.0 語言標準規範 (C++20 Standard Invariant)
+### 2.0 語言標準規範 (C++23 Standard Invariant)
 > ⚠️ **編譯標準宣告與使用端規範**：
-> OuroKore 核心程式庫（`ourokore_base`、`ourokore_core`）全部嚴格採用 **ISO C++20 標準**（`CMAKE_CXX_STANDARD 20`，停用編譯器擴展）建立。
-> **程式庫的使用端（無論是 Host 主程式或第三方插件 Component）強烈建議一律採用 C++20 或更高標準（C++20+）進行開發與編譯**。這能確保 C++ 模板（如 `OwningHandle<T>`、`OuroPtr<T>`）、STL 物件佈局、同步原語與記憶體模型之 100% 相容，避免跨標準混合編譯導致的潛在未定義行為或語法問題。
+> OuroKore 核心程式庫（`ourokore_base`、`ourokore_core`）全部嚴格採用 **ISO C++23 標準**（`CMAKE_CXX_STANDARD 23`，停用編譯器擴展）建立。
+> **程式庫的使用端（無論是 Host 主程式或第三方插件 Component）強烈建議一律採用 C++23 或更高標準（C++23+）進行開發與編譯**。這能確保 C++ 模板（如 `OwningHandle<T>`、`OuroPtr<T>`）、STL 物件佈局、`std::expected` / `Result<T>`、同步原語與記憶體模型之 100% 相容，避免跨標準混合編譯導致的潛在未定義行為或語法問題。
 
 ### 2.0.1 全域文字訊息標準 (UTF-8 Standard Invariant)
 > ⚠️ **全域字串編碼鐵律**：

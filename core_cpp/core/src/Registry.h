@@ -172,6 +172,30 @@ public:
    */
   OuroObject *AcquireObjectPointer(HandleID target_id);
 
+  /**
+   * @brief 釘住在途調用 (In-Flight Pinning)
+   */
+  bool PinInFlight(HandleID target_id, uint32_t slot = 0);
+
+  /**
+   * @brief 解除在途調用釘住
+   */
+  bool UnpinInFlight(HandleID target_id, uint32_t slot = 0);
+
+  /**
+   * @brief 取得物件世代版本號（若物件不存在或處於拆解態則回傳 false）
+   */
+  bool GetObjectGeneration(HandleID target_id, uint64_t &out_generation) const;
+
+  /**
+   * @brief 在獨占寫鎖下原子替換 Payload 並排空在途調用
+   */
+  bool SwapObjectPayload(HandleID target_id,
+                         OuroObject *new_payload,
+                         DestroyFn new_destroy_fn,
+                         OuroObject **out_old_payload,
+                         DestroyFn *out_old_destroy_fn);
+
   // StorageState management
   uint8_t GetStorageState(HandleID target_id) const;
   bool IsPayloadLoaded(HandleID target_id) const;

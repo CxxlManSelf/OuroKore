@@ -116,3 +116,55 @@ ork::HostContext host = ork::Init(storage, lru);
 // 隨時可由 Host 調整或更換脫水策略
 host.SetAutoDehydrator(lru);
 ```
+
+---
+
+## 💾 7. 全域狀態保存與兩階段藍綠載入 (Save & Blue-Green Load)
+
+除了透明脫水與復水外，OuroKore 提供應用端顯式全域或物件級的保存（`ork::Save`）與全圖藍綠熱載入（`ork::Load`）。
+
+### 7.1 事務保存與髒物件落盤 (`ork::Save`)
+```cpp
+// 1. 保存單一物件（若狀態為 Dirty 或 UnsavedNew 則執行序列化落盤並原子標記為 Clean）
+ork::Save(boss_ptr);
+
+// 2. 依 HandleID 保存
+ork::Save(boss_id);
+
+// 3. 非同步背景保存
+std::future<ork::AsyncResult<void>> save_fut = ork::SaveAsync(boss_ptr);
+```
+
+### 7.2 兩階段藍綠陰影置換載入 (`ork::Load`)
+載入新存檔或藍圖時，若直接在現有物件上原地覆寫，一旦載入過程中遭遇檔案損毀或反序列化失敗，將使整張運行圖處於殘破不可用的災難狀態；且若有其他執行緒正在並發存取，更會引發資料競爭或野指標崩潰。
+
+為此，OuroKore 實現了**兩階段藍綠陰影置換（Two-Phase Blue-Green Shadow Swap）**架構：
+
+```
+[ 執行 ork::Load(archive) ]
+         │
+         ├── 【第一階段：陰影建構 (Phase 1)】
+         │    在完全獨立的沙盒空間中反序列化所有物件與邊緣拓撲。
+         │    🛡️ 強例外安全：若發生任何格式毀損或例外，全盤銷毀陰影物件，原運行中系統 100% 毫髮無傷！
+         │
+         └── 【第二階段：原子藍綠置換 (Phase 2)】
+              1. 獲取全域置換互斥鎖（m_swap_mutex），序列化所有置換作業，徹底杜絕多執行緒置換引發的「雙世代槽位別名（Slot Aliasing）」與「活鎖飢餓（Live-Lock）」。
+              2. 逐一獲取物件 ControlBlock 之獨佔寫鎖（m_rw_lock）。
+              3. 在持有寫鎖的臨界區內原子替換 Payload 指標與世代號（m_generation++），並立即原子標記 m_storage_state = StorageState::Clean。
+                 🛡️ 狀態防覆蓋保證：徹底消除解開寫鎖至標記 Clean 之間的狀態空隙，防範覆蓋其他執行緒並發寫入標記的 Dirty！
+              4. 釋放寫鎖，在鎖外自旋等待舊世代槽位（m_pins[old_gen % 2]）在途調用釘住計數排空歸零（Drain）。
+              5. 呼叫舊物件解構函式（old_destroy_fn）。
+                 🛡️ 標準 C++ 解構生命週期保障：解構子 ~T() 執行期間內部註冊的 Handles 完整可用，完全由 Handle 解構子依序自然斷開邊緣。
+              6. 顯式解開 swap_lock 之後再釋放置換 Pin 守衛，保證多執行緒下 ControlBlock 生命週期安全。
+```
+
+#### 🛡️ 核心安全性與並發保證：
+1. **雙世代在途調用釘住（Dual-Generation Pinning）**：
+   - 每次置換時將世代號遞增，使得所有新進調用自動流向新世代槽位（`m_pins[new_gen % 2]`）。
+   - 置換端僅需等待舊世代槽位（`m_pins[old_gen % 2]`）釘住計數排空歸零，即可安全銷毀舊實體，消滅活鎖飢餓。
+2. **`m_swap_mutex` 置換操作序列化**：
+   - 徹底消滅多執行緒並發呼叫 `SwapObjectPayload` 引發的槽位別名與並發碰撞。
+3. **舊實體析構生命週期完備**：
+   - 不提前強制清空 Handle，完全由 C++ 標準解構流程依序釋放，確保領域物件的解構子內部若有存取自身 Handles 或日誌輸出時不會遭遇空指針。
+4. **孤島拆解態即刻拒絕**：
+   - 若物件已被標記為孤島拆解中（`m_is_destructing == true`），置換操作第一時間安全退出，絕不污染即將銷毀的控制區塊。

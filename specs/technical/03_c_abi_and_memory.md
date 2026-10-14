@@ -22,9 +22,9 @@
 
 ---
 
-## 📋 2. 純 C ABI 導出符號規範 (共 37 個導出函式)
+## 📋 2. 純 C ABI 導出符號規範 (共 42 個導出函式)
 
-以下以**中性二進位介面符號規格（Neutral ABI Specification）**完整定義 37 個導出函式：
+以下以**中性二進位介面符號規格（Neutral ABI Specification）**完整定義 42 個導出函式：
 
 ### 📦 類別 A：組件生命週期、型別系統與弱引用 (`component_api.h`)
 
@@ -100,33 +100,45 @@
 24. `ork_try_lock_weak`
     - **符號規格**：`Function ork_try_lock_weak(target_id: UInt64) -> Int32`
     - **說明**：嘗試原子晉升弱引用為根強引用，消滅 TOCTOU 競態。
+25. `ork_pin_in_flight`
+    - **符號規格**：`Function ork_pin_in_flight(target_id: UInt64, slot: UInt32) -> Int32`
+    - **說明**：在途調用釘住（In-Flight Pinning）：原子遞增目標物件指定世代槽位（`slot & 1`）之釘住計數，保證調用期間實體不被置換釋放。
+26. `ork_unpin_in_flight`
+    - **符號規格**：`Function ork_unpin_in_flight(target_id: UInt64, slot: UInt32) -> Int32`
+    - **說明**：在途調用解釘（In-Flight Unpinning）：原子遞減目標物件指定世代槽位（`slot & 1`）之釘住計數。
+27. `ork_get_object_generation`
+    - **符號規格**：`Function ork_get_object_generation(target_id: UInt64, out_generation: MutablePointer<UInt64>) -> Int32`
+    - **說明**：查詢目標物件當前之實體世代號（Generation）。每次 Load 置換或脫水復水時遞增。
+28. `ork_swap_object_payload`
+    - **符號規格**：`Function ork_swap_object_payload(target_id: UInt64, new_payload: RawPointer, new_destroy_fn: FunctionPointer, out_old_payload: MutablePointer<RawPointer>, out_old_destroy_fn: MutablePointer<FunctionPointer>) -> Int32`
+    - **說明**：原子藍綠置換物件實體 Payload：於寫鎖內換入新實體並遞增 generation，立即釋放寫鎖後在鎖外排空舊世代 slot 之在途調用，並將舊實體傳回呼叫端銷毀。
 
 ---
 
 ### ⚙️ 類別 B：核心排程與延遲銷毀 (`core.h`)
 
-25. `ork_try_initialize_core`
+29. `ork_try_initialize_core`
     - **符號規格**：`Function ork_try_initialize_core() -> Int32`
     - **說明**：確保全域核心資料結構與背景服務初始化完成。
-25. `ork_collect_cycles`
+30. `ork_collect_cycles`
     - **符號規格**：`Function ork_collect_cycles() -> Int32`
     - **說明**：同步觸發一輪循環孤島分析與試探性斷鏈回收。
-26. `ork_flush_deferred_deletions`
+31. `ork_flush_deferred_deletions`
     - **符號規格**：`Function ork_flush_deferred_deletions() -> Int32`
     - **說明**：阻塞等待延遲銷毀隊列目前積壓之所有物件釋放任務執行完成。
-27. `ork_set_deferred_delete_mode`
+32. `ork_set_deferred_delete_mode`
     - **符號規格**：`Function ork_set_deferred_delete_mode(mode: Int32) -> Int32`
     - **說明**：切換延遲銷毀模式（0: 非同步背景執行緒池處理，1: 即時同步主執行緒處理）。
-28. `ork_get_deferred_delete_pending_count`
+33. `ork_get_deferred_delete_pending_count`
     - **符號規格**：`Function ork_get_deferred_delete_pending_count() -> Int32`
     - **說明**：查詢延遲銷毀隊列目前待處理的物件數量。
-29. `ork_get_cycle_suspect_count`
+34. `ork_get_cycle_suspect_count`
     - **符號規格**：`Function ork_get_cycle_suspect_count() -> Int32`
     - **說明**：查詢循環回收器中待分析之嫌疑節點數量。
-30. `ork_stop_cycle_collector`
+35. `ork_stop_cycle_collector`
     - **符號規格**：`Function ork_stop_cycle_collector() -> Int32`
     - **說明**：安全停止循環回收器之後台工作線程。
-31. `ork_stop_deferred_deletions`
+36. `ork_stop_deferred_deletions`
     - **符號規格**：`Function ork_stop_deferred_deletions() -> Int32`
     - **說明**：安全停止延遲銷毀佇列之後台工作線程。
 
@@ -134,22 +146,22 @@
 
 ### 🛡️ 類別 C：宿主特權專用介面 (`host_api.h`)
 
-32. `ork_flush_storage`
+37. `ork_flush_storage`
     - **符號規格**：`Function ork_flush_storage() -> Int32`
     - **說明**：宿主特權：雙管線同步排空，等待非同步 I/O 落盤與延遲銷毀全部執行完畢。
-33. `ork_shutdown_runtime`
+38. `ork_shutdown_runtime`
     - **符號規格**：`Function ork_shutdown_runtime() -> Int32`
     - **說明**：宿主特權：終止核心執行緒池與執行時期背景服務。
-34. `ork_set_object_destroyed_callback`
+39. `ork_set_object_destroyed_callback`
     - **符號規格**：`Function ork_set_object_destroyed_callback(callback: FunctionPointer<UInt64 -> Void>) -> Int32`
     - **說明**：宿主特權：註冊進程級全域物件銷毀監聽回呼。
-35. `ork_trigger_dehydration_rescue`
+40. `ork_trigger_dehydration_rescue`
     - **符號規格**：`Function ork_trigger_dehydration_rescue(bytes_needed: UInt64, out_freed: MutablePointer<UInt64>, out_has_more: MutablePointer<Int32>) -> Int32`
     - **說明**：宿主特權：主動調度脫水器執行緊急記憶體救援換頁。
-36. `ork_set_storage_state_for_testing`
+41. `ork_set_storage_state_for_testing`
     - **符號規格**：`Function ork_set_storage_state_for_testing(id: UInt64, state: UInt8) -> Int32`
     - **說明**：白盒測試特權：手動強制覆寫目標物件之 StorageState。
-37. `ork_clear_object_payload_for_testing`
+42. `ork_clear_object_payload_for_testing`
     - **符號規格**：`Function ork_clear_object_payload_for_testing(id: UInt64) -> Int32`
     - **說明**：白盒測試特權：直接置空目標物件之實體記憶體 Payload 模擬冷脫水態。
 
@@ -188,48 +200,3 @@
 47. `ork_heap_reset`
     - **符號規格**：`Function ork_heap_reset() -> Void`
     - **說明**：重設 HeapTracker 統計數據與記錄。
-
----
-
-### 🆔 類別 E：Base 模組 UUID / GUID 介面 (`uuid_api.h`)
-> 提供符合 RFC 4122 與 RFC 9562 規範之 128 位元 UUID 純 C ABI 介面，支援跨語言 FFI（C# P/Invoke、Rust extern "C"、Python ctypes/cffi），保證零例外逃逸。
-
-48. `ork_uuid_nil`
-    - **符號規格**：`Function ork_uuid_nil() -> ork_uuid_t`
-    - **說明**：產生全 0 的 Nil UUID。
-49. `ork_uuid_max`
-    - **符號規格**：`Function ork_uuid_max() -> ork_uuid_t`
-    - **說明**：產生全 0xFF 的 Max UUID。
-50. `ork_uuid_generate_v4`
-    - **符號規格**：`Function ork_uuid_generate_v4() -> ork_uuid_t`
-    - **說明**：產生密碼學安全隨機型 UUIDv4。
-51. `ork_uuid_generate_v7`
-    - **符號規格**：`Function ork_uuid_generate_v7() -> ork_uuid_t`
-    - **說明**：產生時間排序型 UUIDv7（Unix 毫秒時間戳記 + 嚴格單調計數器 + 隨機熵）。
-52. `ork_uuid_generate_v7_with_time`
-    - **符號規格**：`Function ork_uuid_generate_v7_with_time(timestamp_ms: UInt64) -> ork_uuid_t`
-    - **說明**：指定 Unix 紀元毫秒時間戳記產生 UUIDv7。
-53. `ork_uuid_is_nil`
-    - **符號規格**：`Function ork_uuid_is_nil(uuid: Pointer<ork_uuid_t>) -> Int32`
-    - **說明**：判定是否為 Nil UUID（1 代表是，0 代表否，-1 代表無效指標）。
-54. `ork_uuid_is_max`
-    - **符號規格**：`Function ork_uuid_is_max(uuid: Pointer<ork_uuid_t>) -> Int32`
-    - **說明**：判定是否為 Max UUID（1 代表是，0 代表否，-1 代表無效指標）。
-55. `ork_uuid_get_version`
-    - **符號規格**：`Function ork_uuid_get_version(uuid: Pointer<ork_uuid_t>) -> Int32`
-    - **說明**：取得 UUID 版本號（如 4 或 7，指標無效傳回 -1）。
-56. `ork_uuid_get_variant`
-    - **符號規格**：`Function ork_uuid_get_variant(uuid: Pointer<ork_uuid_t>) -> Int32`
-    - **說明**：取得 UUID 變體代碼（RFC 4122/9562 為 1，指標無效傳回 -1）。
-57. `ork_uuid_get_timestamp_ms`
-    - **符號規格**：`Function ork_uuid_get_timestamp_ms(uuid: Pointer<ork_uuid_t>, out_ms: MutablePointer<UInt64>) -> Int32`
-    - **說明**：提取 UUIDv7 之 Unix 毫秒時間戳記（成功傳回 0，非 v7 或指標無效傳回負數錯誤碼）。
-58. `ork_uuid_to_string`
-    - **符號規格**：`Function ork_uuid_to_string(uuid: Pointer<ork_uuid_t>, out_buf: MutablePointer<Char>, buf_size: UInt64, uppercase: Int32) -> Int32`
-    - **說明**：將 UUID 轉為標準 36 字元橫線字串（成功傳回 36，緩衝區不足或失敗傳回負數錯誤碼）。
-59. `ork_uuid_from_string`
-    - **符號規格**：`Function ork_uuid_from_string(str: CString, out_uuid: MutablePointer<ork_uuid_t>) -> Int32`
-    - **說明**：從字串解析 UUID（支援 36 字元標準、32 字元緊湊、38 字元大括號格式，成功傳回 0，格式錯誤傳回負數）。
-60. `ork_uuid_compare`
-    - **符號規格**：`Function ork_uuid_compare(a: Pointer<ork_uuid_t>, b: Pointer<ork_uuid_t>) -> Int32`
-    - **說明**：比較兩個 UUID 的 16 位元組字典序（傳回 <0, 0, >0）。
