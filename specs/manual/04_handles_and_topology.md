@@ -103,6 +103,21 @@ public:
 
 ---
 
+## 4. 句柄晉升與脫水排隊同步防線 (LockAndAcquire Anti-TOCTOU & Dehydration Sync)
+
+為了在多執行緒併發、物件頻繁脫水/復水以及藍綠熱載入（Load）環境下徹底杜絕交付「半死物件（Zombie Object）」，`OwningHandle`、`OwningContainerHandle` 與 `UnboundHandle` 的 `.LockAndAcquire()` 具備完全對稱的雙重防禦機制：
+
+1. **原子活體判定與邊緣登記（Anti-Zombie Invariant）**：
+   - 內部呼叫 `ork_try_lock_weak(tid)` 進行原子檢驗。若目標物件已被推入延遲刪除隊列（`StrongCount == 0`）或已被標記為孤島拆解中（`m_is_destructing == true`），**嚴禁死者甦醒，立即返回空指標 `OuroPtr()`**，絕不交付半死物件給調用端。
+2. **脫水排隊同步防線（Dehydration Synchronization）**：
+   - 若目標物件此時正處於脫水獨佔寫鎖（`m_rw_lock`）臨界區中正在釋放肉體記憶體，`LockAndAcquire` 會透過短暫獲取共享讀鎖**自動排隊等待脫水完成**；
+   - 確保返回之 `OuroPtr` 物件處於穩定的存活態或脫水態，後續調用順暢觸發透明復水，絕不與脫水流程搶跑碰撞。
+3. **Anti-TOCTOU 嚴格回傳檢查與邊緣回滾**：
+   - 若在排隊等鎖期間物件剛好被 `CycleCollector` 判定為孤島並標記拆解，核心讀鎖內部自動二次確認解鎖並回傳失敗；
+   - 調用端立即**回滾剛登記的 ROOT 邊緣**（`UnboundHandle` 同步觸發怠速修剪 CAS tid -> 0），**絕不重複解鎖**，安全返回空指標。
+
+---
+
 ### 🧩 外掛模組載入、生命週期綁定與自動卸載（`DynamicLibrary`）
 
 在外掛管理端，載入與卸載動態庫（DLL）時請遵循以下黃金準則：

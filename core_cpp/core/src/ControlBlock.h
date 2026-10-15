@@ -133,6 +133,7 @@ struct ControlBlock
     OuroObject *to_delete = m_payload.exchange(nullptr, std::memory_order_acq_rel);
     if (to_delete)
     {
+      m_generation.fetch_add(1, std::memory_order_acq_rel);
       DestroyFn destroy_fn = m_destroy_fn.exchange(nullptr, std::memory_order_acq_rel);
       if (destroy_fn)
       {

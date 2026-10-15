@@ -275,6 +275,10 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 2. **多執行緒併發復水安全 (Concurrent Rehydration Safety)**：
    - 當多個工作執行緒同時對同一個已脫水 HandleID 調用 `ork::Rehydrate<T>(id)` 時，核心底層由 ControlBlock 獨佔寫鎖與雙重檢查鎖（`StorageState != Dehydrated` 且 `ork_is_payload_loaded == true`）雙重防護。
    - 第一個取得鎖的執行緒負責反序列化建構實體，後續排隊執行緒安全早退，絕不重複反序列化亦不覆寫實體指標。
+3. **零半死物件保證與句柄晉升同步 (Zero-Zombie Guarantee & LockAndAcquire Sync)**：
+   - **實體世代號遞增（Generation Bump）**：脫水釋放記憶體與復水就位時，`m_generation` 均原子遞增，強制使舊 `OuroPtr` 快取裸指標失效重綁，杜絕 UAF。
+   - **句柄晉升對稱同步防線**：`OwningHandle` 與 `UnboundHandle` 的 `.LockAndAcquire()` 具備完全對稱的原子活體檢驗（`ork_try_lock_weak`）與讀鎖排隊同步等待，若物件在等鎖期間析構則自動回滾並回傳空 `OuroPtr()`，絕不交付半死物件。
+   - **Save 零 I/O 零復水早退防線**：`ork::Save(ptr)` 在外層透過純 C API `ork_get_storage_state` 判定，若為 `Clean` 或未修改之 `Dehydrated` 直接成功早退，杜絕多餘強制復水與 I/O 競爭；狀態異常時絕不早退，防止無效 ID 誤判。
 
 ---
 

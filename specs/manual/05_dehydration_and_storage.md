@@ -24,6 +24,15 @@ OuroKore 具備針對超大型世界物件圖的記憶體自動分頁技術，�
 
 ---
 
+## 🛡️ 2.1 零半死物件保證 (Zero-Zombie Dehydration Guarantee)
+
+在高併發多執行緒混合測試與巨量置換場景中，OuroKore 提供以下三大防線，徹底消滅半死物件（Zombie Object）：
+1. **實體世代號遞增（Generation Bump）**：脫水銷毀舊實體記憶體與復水綁定新實體時，ControlBlock 之 `m_generation` 均原子遞增，所有持舊快取指標之 `OuroPtr` 強制失效並重新安全綁定，徹底杜絕釋放後使用（UAF）。
+2. **Handle 原子活體與脫水排隊同步（Anti-Zombie & Sync）**：`OwningHandle::LockAndAcquire()` 採用 `ork_try_lock_weak` 原子檢驗，若物件已死亡或處於孤島拆解態（`m_is_destructing`），直接返回空 `OuroPtr()` 絕不交付半死物件；若物件正處於脫水寫鎖中，自動排隊等待脫水完成，確保返回之句柄處於穩定狀態。
+3. **Save 零 I/O 零復水早退防線**：`ork::Save(ptr)` 在最外層透過純記憶體 `GetStorageState(id)` 進行判定，若目標已為 `Clean` 或未變更之 `Dehydrated`，直接 Fast Skip 成功早退，絕不產生多餘復水與 I/O 爭搶。
+
+---
+
 ## 📦 3. 手動脫水與右值消耗語意 (Manual Dehydration & Move Consume)
 
 除了由背景脫水器自動換頁外，應用端亦可依業務邏輯主動發起脫水：

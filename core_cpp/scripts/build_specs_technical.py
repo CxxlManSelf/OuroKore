@@ -904,6 +904,15 @@ AtomicDecrement(m_pins[SlotIndex])
 
 ### 9.6 孤島拆解態即刻早退 (Destructing State Fail-Fast)
 * 若目標物件已被標記為孤島拆解中（`m_is_destructing == true`），置換操作第一時間返回 `ORK_STATUS_ERROR_INVALID_STATE`，調用端釘住操作返回 `ORK_STATUS_ERROR_NOT_FOUND`，`OuroPtr::WithObject` 即刻清空原子快取並拋出異常，徹底阻斷在途存取。
+
+### 9.7 脫水與復水之世代號單調遞增與排隊同步協議 (Generation Bump & Sync RFC)
+為確保脫水換頁不產生懸空快取裸指標（Dangling Pointer）與 Use-After-Free，系統定義世代號單調遞增與排隊同步鐵律：
+1. **脫水釋放肉體記憶體（DeletePayload）**：在將 `m_payload` 置換為 `nullptr` 且釋放前，原子執行 `m_generation.fetch_add(1)`，宣告舊肉體世代作廢。所有先前快取了舊裸指標之 `OuroPtr` 在下一次調用比對時強制失效（`cached_gen != current_gen`）。
+2. **復水重裝實體（BindPayload）**：在完成反序列化新空殼並重綁回 ControlBlock 時，原子執行 `m_generation.fetch_add(1)`，宣告新肉體世代就位。
+3. **句柄晉升與脫水排隊同步協議（LockAndAcquire Dehydration Synchronization）**：
+   `OwningHandle` 與 `UnboundHandle` 在調用 `LockAndAcquire()` 晉升為根參照時，底層在完成 `ork_try_lock_weak` 後必須透過短暫獲取 `ork_lock_object_shared(tid)` 確保目標物件脫離脫水寫鎖臨界區；若在等鎖期間目標物件被標記為孤島拆解態（`m_is_destructing == true`），系統內部觸發 DCL 二次確認並回傳失敗，調用端必須立即回滾邊緣、UnboundHandle 執行怠速修剪，絕不交付半死物件。
+4. **Save 零 I/O 零復水純 C API 早退協議**：
+   `ork::Save(ptr)` 在進入 `WithObject` 閉包前直接透過純 C API `ork_get_storage_state(id, &state)` 讀取狀態，若為 `Clean` 或未修改之 `Dehydrated` 直接返回 `true`，杜絕無意義強制復水與多餘 I/O 競爭；若狀態碼非 OK 則強制進入標準流程觸發具體異常，防止無效 ID 誤判早退。
 ''', encoding="utf-8")
 
     # =========================================================================

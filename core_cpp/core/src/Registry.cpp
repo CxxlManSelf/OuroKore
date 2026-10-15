@@ -100,6 +100,10 @@ bool Registry::BindPayload(HandleID id, OuroObject *obj, DestroyFn destroy_fn, o
       cb->m_type_id.store(type_id, std::memory_order_release);
     }
     cb->m_payload.store(obj, std::memory_order_release);
+    if (obj)
+    {
+      cb->m_generation.fetch_add(1, std::memory_order_acq_rel);
+    }
     cb->m_is_reserved.store(false, std::memory_order_release);
     return true;
   }

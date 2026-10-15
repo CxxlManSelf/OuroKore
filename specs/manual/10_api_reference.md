@@ -44,9 +44,9 @@
 ## 🔗 3. 智慧 Handle 系統
 * **標頭檔**：`ourokore/component/Handles.hpp`
 * **類別**：
-  * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
-  * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
-  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
+  * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`, `LockAndAcquire()`（具備原子存活驗證與脫水排隊同步防線，若物件已死亡或析構直接回傳空 `OuroPtr()`，若正處於脫水寫鎖自動排隊等待，杜絕半死物件）。
+  * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`, `LockAndAcquireAll()`。
+  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`（具備對稱之脫水排隊同步防線與 Anti-TOCTOU 失敗回滾修剪，防範殭屍復活與半死物件競態）, `GetTargetID()`, `IsAlive()`, `Release()`。
   * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator()(Fn&&, Args&&...)`, `Invoke(...)`, `operator bool()`, `IsAlive()`, `GetTargetID()`, `Release()`。
     * **雙世代在途釘住與原生快取**：調用期間由 `InFlightPinGuard` 自動釘住實體，支援藍綠置換排空；原子快取指標 `m_cached_ptr` 與世代號 `m_cached_generation` 提供 100% Data-Race Free 極速調用。
     * **孤島拆解態 Fail-Fast 防護**：若目標處於孤島拆解態（`m_is_destructing == true`）或已死亡，釘住失敗第一時間原子清空快取並拋出 `std::runtime_error`，杜絕 UAF。
@@ -71,9 +71,9 @@
 * **函式**：
   * `CreateObject<T>(args...)`：建立受管領域物件（自動通報脫水模組登記）。
   * `CreatePermanentObject<T>(args...)`：建立永久常駐物件（不參與脫水換頁）。
-  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新（兩階段藍綠陰影置換，出錯 100% 回滾，置換寫鎖內原子標記 Clean，排空舊世代釘住後由 C++ 標準解構流程自然釋放舊實體）。
+  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新（Save 具備外層純 C API 零 I/O 零復水快速早退防線，若狀態為 Clean 或 Dehydrated 直接跳過；Load 採兩階段藍綠陰影置換，出錯 100% 回滾，置換寫鎖內原子標記 Clean，排空舊世代釘住後由 C++ 標準解構流程自然釋放舊實體）。
   * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
-  * `GetObjectGeneration(HandleID id)`：查詢物件當前世代號（Load 藍綠置換或復水時遞增）。
+  * `GetObjectGeneration(HandleID id)`：查詢物件當前世代號（Load 藍綠置換、脫水釋放肉體或復水裝載新實體時均單調遞增）。
   * `SwapObjectPayload(...)`：核心層藍綠置換實體 Payload（由 `m_swap_mutex` 序列化，寫鎖內原子標記 Clean，杜絕活鎖飢餓與狀態競態）。
   * `Dehydrate(HandleID id)`：依 ID 脫水（若 root_count > 0 則安全略過傳回 false）。
   * `Dehydrate(OuroPtr<T> &&ptr)`：右值移動消耗脫水（清空原指標，防止懸空）。

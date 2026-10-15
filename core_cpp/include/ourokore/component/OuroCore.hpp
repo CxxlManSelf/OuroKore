@@ -52,6 +52,21 @@ bool Save(const OuroPtr<T> &ptr)
   }
 
   HandleID id = ptr.GetTargetID();
+
+  // 🛡️ 零 I/O 零復水早退防線 (Zero-I/O Fast Skip)：
+  // 直接透過底層純 C API 讀取物件儲存狀態：
+  // 1. 若成功讀取且狀態明確為 Clean 或 Dehydrated，直接安全早退；
+  // 2. 若物件不存在或狀態碼非 OK，絕不盲目早退（防範無效 ID 誤判 Clean），確保由後續流程正確拋出具體異常。
+  uint8_t state_val = 0;
+  if (ork_get_storage_state(id, &state_val) == ORK_STATUS_OK)
+  {
+    auto state = static_cast<StorageState>(state_val);
+    if (state == StorageState::Clean || state == StorageState::Dehydrated)
+    {
+      return true;  // Fast skip!
+    }
+  }
+
   return ptr.WithObject([id](T &obj) {
     StorageState state = obj.GetStorageState();
     if (state == StorageState::Clean || state == StorageState::Dehydrated)

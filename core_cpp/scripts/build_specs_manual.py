@@ -555,6 +555,21 @@ public:
 
 ---
 
+## 4. 句柄晉升與脫水排隊同步防線 (LockAndAcquire Anti-TOCTOU & Dehydration Sync)
+
+為了在多執行緒併發、物件頻繁脫水/復水以及藍綠熱載入（Load）環境下徹底杜絕交付「半死物件（Zombie Object）」，`OwningHandle`、`OwningContainerHandle` 與 `UnboundHandle` 的 `.LockAndAcquire()` 具備完全對稱的雙重防禦機制：
+
+1. **原子活體判定與邊緣登記（Anti-Zombie Invariant）**：
+   - 內部呼叫 `ork_try_lock_weak(tid)` 進行原子檢驗。若目標物件已被推入延遲刪除隊列（`StrongCount == 0`）或已被標記為孤島拆解中（`m_is_destructing == true`），**嚴禁死者甦醒，立即返回空指標 `OuroPtr()`**，絕不交付半死物件給調用端。
+2. **脫水排隊同步防線（Dehydration Synchronization）**：
+   - 若目標物件此時正處於脫水獨佔寫鎖（`m_rw_lock`）臨界區中正在釋放肉體記憶體，`LockAndAcquire` 會透過短暫獲取共享讀鎖**自動排隊等待脫水完成**；
+   - 確保返回之 `OuroPtr` 物件處於穩定的存活態或脫水態，後續調用順暢觸發透明復水，絕不與脫水流程搶跑碰撞。
+3. **Anti-TOCTOU 嚴格回傳檢查與邊緣回滾**：
+   - 若在排隊等鎖期間物件剛好被 `CycleCollector` 判定為孤島並標記拆解，核心讀鎖內部自動二次確認解鎖並回傳失敗；
+   - 調用端立即**回滾剛登記的 ROOT 邊緣**（`UnboundHandle` 同步觸發怠速修剪 CAS tid -> 0），**絕不重複解鎖**，安全返回空指標。
+
+---
+
 ### 🧩 外掛模組載入、生命週期綁定與自動卸載（`DynamicLibrary`）
 
 在外掛管理端，載入與卸載動態庫（DLL）時請遵循以下黃金準則：
@@ -671,6 +686,15 @@ OuroKore 具備針對超大型世界物件圖的記憶體自動分頁技術，�
 * 觸發預先註冊的復水回呼，自儲存驅動讀取藍圖串流。
 * 在模組 CRT 中重新 `new T()` 配置記憶體，反序列化狀態並重新綁定至原控制區塊。
 * **呼叫端代碼對這一切完全無感！**
+
+---
+
+## 🛡️ 2.1 零半死物件保證 (Zero-Zombie Dehydration Guarantee)
+
+在高併發多執行緒混合測試與巨量置換場景中，OuroKore 提供以下三大防線，徹底消滅半死物件（Zombie Object）：
+1. **實體世代號遞增（Generation Bump）**：脫水銷毀舊實體記憶體與復水綁定新實體時，ControlBlock 之 `m_generation` 均原子遞增，所有持舊快取指標之 `OuroPtr` 強制失效並重新安全綁定，徹底杜絕釋放後使用（UAF）。
+2. **Handle 原子活體與脫水排隊同步（Anti-Zombie & Sync）**：`OwningHandle::LockAndAcquire()` 採用 `ork_try_lock_weak` 原子檢驗，若物件已死亡或處於孤島拆解態（`m_is_destructing`），直接返回空 `OuroPtr()` 絕不交付半死物件；若物件正處於脫水寫鎖中，自動排隊等待脫水完成，確保返回之句柄處於穩定狀態。
+3. **Save 零 I/O 零復水早退防線**：`ork::Save(ptr)` 在最外層透過純記憶體 `GetStorageState(id)` 進行判定，若目標已為 `Clean` 或未變更之 `Dehydrated`，直接 Fast Skip 成功早退，絕不產生多餘復水與 I/O 爭搶。
 
 ---
 
@@ -2080,9 +2104,9 @@ ork::PluginHeap::assert_clean("MyPlugin");
 ## 🔗 3. 智慧 Handle 系統
 * **標頭檔**：`ourokore/component/Handles.hpp`
 * **類別**：
-  * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`。
-  * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`。
-  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`, `GetTargetID()`, `IsAlive()`, `Release()`。
+  * `OwningHandle<T>`：強持有槽位，宣告為物件成員。方法：`Set()`, `Get()`, `Release()`, `GetTargetID()`, `LockAndAcquire()`（具備原子存活驗證與脫水排隊同步防線，若物件已死亡或析構直接回傳空 `OuroPtr()`，若正處於脫水寫鎖自動排隊等待，杜絕半死物件）。
+  * `OwningContainerHandle`：動態強持有容器，方法：`AddTarget()`, `RemoveTarget()`, `GetTargetIDs()`, `LockAndAcquireAll()`。
+  * `UnboundHandle<T>`：無繫結非擁有型引用，方法：`LockAndAcquire()`（具備對稱之脫水排隊同步防線與 Anti-TOCTOU 失敗回滾修剪，防範殭屍復活與半死物件競態）, `GetTargetID()`, `IsAlive()`, `Release()`。
   * `OuroPtr<T>`：棧上活躍根指標守衛，支援 `operator()(Fn&&, Args&&...)`, `Invoke(...)`, `operator bool()`, `IsAlive()`, `GetTargetID()`, `Release()`。
     * **雙世代在途釘住與原生快取**：調用期間由 `InFlightPinGuard` 自動釘住實體，支援藍綠置換排空；原子快取指標 `m_cached_ptr` 與世代號 `m_cached_generation` 提供 100% Data-Race Free 極速調用。
     * **孤島拆解態 Fail-Fast 防護**：若目標處於孤島拆解態（`m_is_destructing == true`）或已死亡，釘住失敗第一時間原子清空快取並拋出 `std::runtime_error`，杜絕 UAF。
@@ -2107,9 +2131,9 @@ ork::PluginHeap::assert_clean("MyPlugin");
 * **函式**：
   * `CreateObject<T>(args...)`：建立受管領域物件（自動通報脫水模組登記）。
   * `CreatePermanentObject<T>(args...)`：建立永久常駐物件（不參與脫水換頁）。
-  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新（兩階段藍綠陰影置換，出錯 100% 回滾，置換寫鎖內原子標記 Clean，排空舊世代釘住後由 C++ 標準解構流程自然釋放舊實體）。
+  * `Save(OuroPtr<T>)` / `Load(OuroPtr<T>)`：同步存檔與自磁碟載入刷新（Save 具備外層純 C API 零 I/O 零復水快速早退防線，若狀態為 Clean 或 Dehydrated 直接跳過；Load 採兩階段藍綠陰影置換，出錯 100% 回滾，置換寫鎖內原子標記 Clean，排空舊世代釘住後由 C++ 標準解構流程自然釋放舊實體）。
   * `SaveAsync(OuroPtr<T>)` / `LoadAsync(OuroPtr<T>)`：非同步背景存檔與載入。
-  * `GetObjectGeneration(HandleID id)`：查詢物件當前世代號（Load 藍綠置換或復水時遞增）。
+  * `GetObjectGeneration(HandleID id)`：查詢物件當前世代號（Load 藍綠置換、脫水釋放肉體或復水裝載新實體時均單調遞增）。
   * `SwapObjectPayload(...)`：核心層藍綠置換實體 Payload（由 `m_swap_mutex` 序列化，寫鎖內原子標記 Clean，杜絕活鎖飢餓與狀態競態）。
   * `Dehydrate(HandleID id)`：依 ID 脫水（若 root_count > 0 則安全略過傳回 false）。
   * `Dehydrate(OuroPtr<T> &&ptr)`：右值移動消耗脫水（清空原指標，防止懸空）。

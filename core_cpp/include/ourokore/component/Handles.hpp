@@ -642,7 +642,28 @@ public:
     {
       if (tid != 0)
       {
-        result.emplace_back(tid);
+        if (ork_try_lock_weak(tid) == ORK_STATUS_OK)
+        {
+          if constexpr (!std::is_same_v<T, OuroObject>)
+          {
+            int32_t is_inst = 0;
+            ork_type_id_t target_type = detail::TypeTraits<T>::GetTypeID();
+            if (ork_is_instance_of(tid, target_type, &is_inst) != ORK_STATUS_OK || !is_inst)
+            {
+              ork_unregister_edge(ORK_ROOT_ID, tid);
+              continue;
+            }
+          }
+          // 🛡️ 脫水排隊同步防線：若目標物件此時正處於脫水寫鎖中，自動等待脫水完成
+          // 必須嚴格檢查回傳值！若等鎖期間物件被標記為拆解中（m_is_destructing），回滾邊緣並略過
+          if (ork_lock_object_shared(tid) != ORK_STATUS_OK)
+          {
+            ork_unregister_edge(ORK_ROOT_ID, tid);
+            continue;
+          }
+          ork_unlock_object_shared(tid);
+          result.emplace_back(tid, typename OuroPtr<T>::PreLockedTag{});
+        }
       }
     }
     return result;
@@ -923,16 +944,40 @@ public:
     {
       return OuroPtr<TargetT>();
     }
+
+    // 🛡️ 原子存活驗證與 Root 邊緣鎖定（Anti-Zombie & Fail-Fast 防線）：
+    // 若目標物件已被推入 DeferredDeleteQueue（StrongCount 歸零）或處於孤島拆解態（m_is_destructing），
+    // 嚴禁晉升復活已拆解之物件，直接返回空 OuroPtr，絕不交付半死物件！
+    if (ork_try_lock_weak(tid) != ORK_STATUS_OK)
+    {
+      return OuroPtr<TargetT>();
+    }
+
+    // 🛡️ 多型型別相容性驗證
     if constexpr (!std::is_same_v<TargetT, T> && !std::is_same_v<TargetT, OuroObject>)
     {
       int32_t is_inst = 0;
       ork_type_id_t target_type = detail::TypeTraits<TargetT>::GetTypeID();
       if (ork_is_instance_of(tid, target_type, &is_inst) != ORK_STATUS_OK || !is_inst)
       {
+        ork_unregister_edge(ORK_ROOT_ID, tid);
         return OuroPtr<TargetT>();
       }
     }
-    return OuroPtr<TargetT>(tid);
+
+    // 🛡️ 脫水排隊同步防線（Dehydration Synchronization & Anti-TOCTOU）：
+    // 若目標物件此時正處於脫水寫鎖（m_rw_lock）臨界區中，透過短暫獲取共享讀鎖自動等待脫水完成。
+    // 必須嚴格檢查回傳值！若在等鎖期間物件剛好被 CycleCollector 或 DeferredDeleteQueue 標記為拆解中（m_is_destructing），
+    // ork_lock_object_shared 內部會觸發 DCL 二次確認並自動解讀鎖並回傳失敗。
+    // 此時必須：1. 撤銷先前的 ROOT 邊緣；2. 絕不重複解鎖；3. 安全返回空 OuroPtr，杜絕半死物件！
+    if (ork_lock_object_shared(tid) != ORK_STATUS_OK)
+    {
+      ork_unregister_edge(ORK_ROOT_ID, tid);
+      return OuroPtr<TargetT>();
+    }
+    ork_unlock_object_shared(tid);
+
+    return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
   }
 
 private:
@@ -1213,6 +1258,23 @@ public:
           return OuroPtr<TargetT>();
         }
       }
+      // 🛡️ 脫水排隊同步防線（Dehydration Synchronization & Anti-TOCTOU）：
+      // 若目標物件此時正處於脫水寫鎖（m_rw_lock）臨界區中，透過短暫獲取共享讀鎖自動等待脫水完成。
+      // 必須嚴格檢查回傳值！若在等鎖期間物件剛好被 CycleCollector 或 DeferredDeleteQueue 標記為拆解中（m_is_destructing），
+      // ork_lock_object_shared 內部會觸發 DCL 二次確認並自動解讀鎖並回傳失敗。
+      // 此時必須：1. 撤銷先前的 ROOT 邊緣；2. 執行怠速修剪；3. 安全返回空 OuroPtr，杜絕半死物件！
+      if (ork_lock_object_shared(tid) != ORK_STATUS_OK)
+      {
+        ork_unregister_edge(ORK_ROOT_ID, tid);
+        if (m_target_id.compare_exchange_strong(tid, 0, std::memory_order_relaxed))
+        {
+          int32_t alive = 0;
+          ork_check_alive(tid, &alive, 1);
+        }
+        return OuroPtr<TargetT>();
+      }
+      ork_unlock_object_shared(tid);
+
       return OuroPtr<TargetT>(tid, typename OuroPtr<TargetT>::PreLockedTag{});
     }
 
