@@ -260,3 +260,21 @@ End Procedure
 
 ### 6.4 離棧延遲卸載防自毀保護 (Deferred Unload Defense)
 若模組內部的某個回呼自身釋放了該模組的最後一個引用計數，核心強制將 `FreeLibrary` 操作延遲至非同步背景離棧執行緒執行，防止模組在呼叫棧仍在該動態庫內部時物理卸載自身的代碼段導致致命崩潰。
+
+---
+
+## 🆔 7. 次世代身分標識與維度解耦架構 (Next-Gen Identity & Dimensional Decoupling RFC)
+
+### 7.1 圖論自由與無環 Merkle DAG 的維度解耦公理
+在次世代分散式與內容定址（CAS）標準中，純粹的 CID 資料流在數學上必然是有向無環圖（Merkle DAG）；然而，在真實業務執行期，物件間的雙向擁有與循環參照（Cyclic References）是不可剝奪的自由。
+
+OuroKore 透過**「維度解耦（Dimensional Decoupling）」**完美調和此範式衝突：
+* **儲存與規格層（次世代維度）**：資料不可變，以 SHA-256 Multihash (**CIDv1**) 定址，保證防竄改、去重與 P2P 傳播。
+* **執行期記憶體層（OuroKore 核心維度）**：放開拘束，賦予物件在記憶體中自由組網、雙向參照的絕對自由；由核心原生的原子讀寫鎖、CycleCollector 與 DeferredDeleteQueue 在背後安全兜底。
+
+### 7.2 雙軌身分識別體系
+1. **執行期記憶體身分證**：**100% 唯一只認 64 位元整數 HandleID**。
+   - 拒絕在核心登錄表或 ControlBlock 中維護字串或 128 位元 UUID，以維持最高 CPU 快取效率與原子操作。
+2. **規格與持久化標籤**：**100% 唯一只認 CID**。
+   - 徹底廢除全域 UUID 映射機制與相關系統庫依賴。
+3. **網關隔離**：次世代零件能力由外掛驅動 **OrkGatewayDriver** 實現，核心引擎保持零更動。

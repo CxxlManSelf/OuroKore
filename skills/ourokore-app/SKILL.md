@@ -304,3 +304,22 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 3. **`OuroPtr` 原生極速調用與在途釘住**：
    - 透過 `operator()(Fn&&, Args&&...)` 調用成員函式，內部由 `InFlightPinGuard` 原子釘住實體槽位，保證調用期間記憶體不被置換提前釋放。
    - 原子快取指標 `m_cached_ptr` 與世代號 `m_cached_generation` 提供 100% Data-Race Free 極速調用；若物件處於孤島拆解態（`m_is_destructing == true`），第一時間原子清空快取並拋出異常，徹底杜絕 UAF。
+
+---
+
+## 🆔 10. 次世代身分標識體系與識別碼唯一性公理 (Next-Gen Identity & Zero-UUID Invariant)
+
+1. **雙軌身分識別體系公理（Dual-Track Identity Axiom）**：
+   - **執行期記憶體唯一身分證：64 位元 HandleID**：
+     - 在本機進程記憶體中，所有活體物件一律由 64 位元整數 HandleID 定址。
+     - 禁止在記憶體查詢或 ControlBlock 內引入字串或 128 位元 UUID 比較，以捍衛快取命中率、原子讀寫鎖與圖論走訪效能。
+   - **規格藍圖與外部內容定址唯一標識：CID (Content Identifier)**：
+     - 規格模具、不可變藍圖（.orkt）與零件外掛（DLL）在磁碟落盤、網路流通與 CAS 儲存時，一律採用基於密碼學 SHA-256 之標準 **CIDv1 (Multihash)** 作為唯一識別碼。
+     - 天生具備跨節點去重、防竄改、自帶內容驗證特質。
+2. **UUID 徹底揚棄定理 (Zero-UUID Invariant)**：
+   - OuroKore 體系**全面廢除、剔除且不實裝全域 UUID 映射機制**。
+   - ourokore_base 基礎庫零依賴系統密碼庫（無 crypt.lib 鏈結依賴）。
+   - 應用端開發時，切勿向核心索求或傳遞 UUID；若特定業務個體需要實體錨點（Instance Anchor），應採用**創世雜湊（Genesis CID）**或**語意階層字串（如 player/hero_01）**。
+3. **階層式零件尋址與網關防護 (OrkGatewayDriver)**：
+   - **能力契約宣告**：使用端在創世建立零件時，僅需持抽象介面（如 IWeapon）與三段式工廠提示（Vendor/Plugin/Version），透過 OrkGatewayDriver 取得物件。
+   - **核心零變更**：網關產出之物件在核心眼中與標準 ork::CreateObject 完全相同，生命週期完整受 ControlBlock 與 CycleCollector 守護。

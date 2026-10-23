@@ -126,6 +126,10 @@ End Interface
 
 * **Key-Value 格式**：儲存驅動以 `HandleID (UInt64)` 為唯一 Key，以本規範定義的兩段式二進位串流為 Value。
 * **跨語言相容性**：無論底層介質採用本機檔案（File Storage）、記憶體（InMemoryStorage）、SQLite 或分散式 KV 資料庫，其儲存的資料二進位 Payload 均完全相同，可直接被不同語言之 OuroKore 核心交換讀取。
+* **次世代內容定址協議 (CAS & CID Wire Format 展望)**：
+  - 在次世代網關外掛（OrkGatewayDriver）中，落盤與傳輸格式升級為標準內容定址（CAS）。
+  - 物件規格與狀態藍圖之雜湊採用標準 CIDv1 (Multihash)：前綴包含 0x12 (SHA-256) 與 0x20 (32 Bytes 長度)，後接 32 位元組之 SHA-256 摘要。
+  - **Zero-UUID 保證**：二進位資料串流與藍圖名冊中，徹底揚棄隨機 UUID 格式，僅允許 64 位元 HandleID（進程內）與標準 CID（外部符號）兩種定址形式。
 
 
 ---

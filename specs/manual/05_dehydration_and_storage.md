@@ -177,3 +177,32 @@ std::future<ork::AsyncResult<void>> save_fut = ork::SaveAsync(boss_ptr);
    - 不提前強制清空 Handle，完全由 C++ 標準解構流程依序釋放，確保領域物件的解構子內部若有存取自身 Handles 或日誌輸出時不會遭遇空指針。
 4. **孤島拆解態即刻拒絕**：
    - 若物件已被標記為孤島拆解中（`m_is_destructing == true`），置換操作第一時間安全退出，絕不污染即將銷毀的控制區塊。
+
+---
+
+## 🚀 8. 次世代零件化再生與 OrkGatewayDriver 演進展望
+
+在 OuroKore 的長遠演進中，「脫水與復水」與「零件化再生」屬於兩個不同維度的能力：
+
+`
+[ 物件生命週期維度 ]
+       │
+       ├── 【維度一：進程內換頁（脫水與復水 Dehydration / Rehydration）】
+       │    本質：同一記憶體實體在資源受限時的進程內休眠與喚醒（墓碑快取）。
+       │    特點：ControlBlock 長存記憶體，HandleID 始終不變，零 I/O 狀態查詢。
+       │
+       └── 【維度二：次世代零件化再生（Component Materialization & Assembly）】
+            本質：跨空間、跨來源的泛在實體化與動態裝配（工業標準零件）。
+            特點：去儲存化、規格大於來源、組裝即拓撲、隨插即用。
+`
+
+### 8.1 核心零更動定理與 OrkGatewayDriver 網關定位
+1. **核心零更動**：
+   - 核心引擎庫（ourokore_core）保持 100% 穩健，不將 CID、IPFS 或動態外掛載入邏輯硬塞進核心。
+2. **網關驅動定位**：
+   - 次世代零件能力以獨立外掛驅動 **OrkGatewayDriver** 的形式落地，實作標準的 [IStorageDriver](../../include/ourokore/component/IStorageDriver.hpp) 介面。
+   - 主程式透過 HostContext::SetStorageDriver(gateway_driver) 注入，核心透過標準多型調用，充當核心與次世代的「防火牆與轉換器」。
+3. **身分標識體系與 UUID 揚棄**：
+   - **記憶體內部**：透過 Gateway 取得的物件，對核心而言與 ork::CreateObject 完全等同，記憶體中**唯一只認 64 位元 HandleID**。
+   - **儲存與傳輸**：只有在物件呼叫 Save() 或脫水落盤時，Gateway 才將其二進位快照計算為 **CID (SHA-256 Multihash)** 進行內容定址儲存。
+   - 徹底揚棄全域 UUID 映射機制，解除對系統密碼庫（如 crypt.lib）的依賴。

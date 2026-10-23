@@ -1,127 +1,112 @@
-# OuroKore Base 基礎工具庫規劃與實作完成度報告
+# OuroKore Base 基礎工具庫規劃與實作完成度報告 (次世代架構修訂版)
 
-本文件詳細記錄 OuroKore 基礎模組（`ourokore_base`）自 2026 年 9 月規劃以來的原始設計目標、六大子系統之工具清單、當前實作完成狀況，以及尚未實作之項目表列。
-
----
-
-## 🧭 一、 背景與原計畫起源
-
-在 2026 年 9 月 2 日的專案架構規劃中，確立了為 OuroKore 建立通用基礎依賴層（`ourokore_base`）的方針：
-* **核心定位**：作為獨立於 OuroKore 核心業務之外的底層基礎設施庫，**零依賴 `ourokore_core`**，不僅供核心內部調度，亦可直接給外部使用端（Host 與 Plugin）使用。
-* **使用者最初指定之三大核心需求**：
-  1. **執行緒管理**：自動管理可開啟的執行緒數量，提供「固定數量」與「隨負載自動增減」兩種執行緒池。
-  2. **Semaphore**：計數訊號量與跨平台事件原語。
-  3. **DLL Loader**：跨平台動態模組載入器。
-* **架構劃分**：依據功能領域，於目錄與程式碼中劃分為 6 大子系統模組：
-  * `async/`：並發與非同步排程
-  * `sync/`：同步原語
-  * `plugin/`：外掛與動態庫載入
-  * `memory/`：記憶體管理與安全防禦
-  * `io/`：系統與 I/O 抽象
-  * `utils/`：通用診斷與基礎工具
+本文件依據 **2026 年 10 月最新架構定調**（「次世代零件化、CID 內容定址與 `OrkGatewayDriver` 網關驅動」），全面重新審查並修訂 OuroKore 基礎模組（`ourokore_base`）之工具需求清單，果斷剔除過度設計與衝突項目，並明確列出即將實作之核心工具。
 
 ---
 
-## 📊 二、 總覽統計與進度摘要
+## 🧭 一、 架構演進方針與「軟體減法」原則
 
-* **使用者最初指定之 3 大需求**：**100% 已全數完成**（`FixedThreadPool`、`DynamicThreadPool`、`Semaphore`/`Event`、`DynamicLibrary`）。
-* **語言標準全面升級**：專案已升級至 **ISO C++23**（`CMAKE_CXX_STANDARD 23`）。
-* **現代值語意錯誤處理原語全面落地**：實作 [`Result.hpp`](include/ourokore/base/Result.hpp)，直接基於原生 C++23 `std::expected` 與 `Status`，支援 Monadic 鏈式調用，並已無縫整合至 `ThreadSafeQueue` 與 `DynamicLibrary`。
-* **後續演進超額完成之重大基礎設施**：
-  * **現代樹狀物件節點與文字 DSL 串流**（[`Tree.hpp`](include/ourokore/base/Tree.hpp) 與 [`TreeIO.hpp`](include/ourokore/base/TreeIO.hpp)，支援異質物件、CRTP、RFC-ORKT-1.0 規範、防爆棧迭代）。
-  * **外掛 Heap 追蹤與清空檢驗系統**（[`HeapTracker.hpp`](include/ourokore/base/HeapTracker.hpp)、[`PluginHeap.hpp`](include/ourokore/base/PluginHeap.hpp) 與 [`heap_api.h`](include/ourokore/base/heap_api.h)，支援編譯期雙策略 A/B 切換）。
-  * **C++20/C++23 現代編譯期雜湊模組**（[`Hash.hpp`](include/ourokore/base/Hash.hpp)，全面支援 `constexpr`、FNV-1a、CRC32、MurmurHash3 等）。
-  * **全域 UTF-8 零拷貝轉換工具**（[`utf8.hpp`](include/ourokore/base/utf8.hpp)）。
-* **尚未實作之項目**：主要集中於進階記憶體池（ObjectPool / Arena）、系統 I/O（MmapFile / 定時器輪 Scheduler）以及輔助工具（非同步 Logger、UUID、Channel）。
-* 📌 **架構排程決策**：
-  * **「外掛註冊中心（Plugin Registry）、語意化版本管理（SemVer）與依賴解析」**：經確認留待下一個階段的 OuroKore 實作再來處理。
-  * **「記憶體映射檔案（MmapFile）」**：因涉及下一個階段物件再生與儲存驅動二進位協議，先行擱下。
+### 1. 核心定位
+`ourokore_base` 嚴格維持作為獨立於核心業務之外的底層通用基礎設施庫，**100% 零依賴 `ourokore_core`**，不僅供核心調度，亦供外部宿主（Host）與外掛插件（Plugin）共用。
+
+### 2. 次世代架構升維後的「軟體減法」
+在引入次世代零件化（Component Materialization）、不可變規格藍圖、內容定址（CIDv1）與階層語意尋址後，我們遵循**「避免第二系統症候群（Second-System Syndrome）」與「防範過度工程（Over-Engineering）」**原則，對過去原計畫中未動工的項目進行了嚴格的篩選與剔除：
+* **凡是破壞跨 DLL Heap 隔離者，剔除！**
+* **凡是與不可變 CAS 原理相左者，剔除！**
+* **凡是徒增並發除錯負擔而無實質效能增益者，剔除！**
 
 ---
 
-## 📋 三、 六大子系統工具清單與完成狀態表列
+## ❌ 二、 架構降維與確定剔除之項目清單 (Pruned & Deprecated)
+
+以下 6 大項為 2026 年 9 月原計畫中提出、但在最新次世代架構審查中**確認不再需要、正式否決並予以剔除**的工具：
+
+| 否決剔除之項目 | 原所屬模組 | 原計畫設想 | 最新架構審查否決理由（為什麼不需要） |
+| :--- | :---: | :--- | :--- |
+| **記憶體映射檔案 (`MmapFile`)** | `io/` | 封裝 `mmap` / `CreateFileMapping` 用於大檔案隨機讀寫 | ❌ **違反 CAS 原子性原則**：次世代零件藍圖屬於數 KB 至數百 KB 的不可變二進位快照。內容定址（CAS）最核心的要求是**「寫入原子防損毀（WriteAllBytesAtomic，防斷電寫半殘）」**與**「一次性讀入（ReadAllBytes）」**。`mmap` 跨平台行為分裂嚴重且無法提供原子替換保障，純屬多餘且危險。 |
+| **全域物件池與區域分配器 (`ObjectPool`, `Arena`)** | `memory/` | 自刻池化分配器以減少 `malloc`/`free` 次數 | ❌ **破壞外掛 Heap 隔離鐵律**：零件實體由各外掛 DLL 工廠獨立配置，受 `HeapTracker` 稽核。若在 Base 硬塞全域物件池，會讓多個動態庫共享底層記憶體，**打破「跨 DLL Heap 邊界隔離」，引發跨 CRT 釋放崩潰**。現代 OS Heap（如 Segment Heap）效能已極佳，Base 絕不硬造分配器。 |
+| **無鎖佇列與環形緩衝區 (`LockFreeQueue`, `RingBuffer`)** | `async/` | 追求極限並發吞吐量的無鎖資料結構 | ❌ **無實質增益且引發除錯災難**：現有 `ThreadSafeQueue` 微秒級延遲已極為充裕。次世代背景瓶頸在 SHA-256 計算與磁碟 I/O，微秒級鎖開銷微不足道；無鎖佇列的 ABA 問題、記憶體屏障與析構順序保證，在複雜生命週期系統中弊遠大於利。 |
+| **Go-style 通道 (`Channel`)** | `async/` | 提供帶緩衝/無緩衝之線程通訊管道 | ❌ **語意多餘**：Base 現有之 `ThreadPool`、`ThreadSafeQueue`、`Semaphore`、`Event` 與 C++23 `Result<T>` 已完美涵蓋非同步排程需求；C++ 缺乏原生 `select` 語法支援，硬做 Channel 只會淪為語法玩具。 |
+| **巨型外掛註冊中心與版本管理 (`Plugin Registry & SemVer`)** | `plugin/` | 仿 npm/Cargo 之複雜套件相依解析與 SemVer 區間比對 | ❌ **被次世代 CID 與階層標籤降維取代**：次世代架構明確定調採**「三段式階層標籤（`Vendor/Plugin/Version`）」**進行目錄尋址；精確版本與相依性未來直接由不可變「CID 內容雜湊」釘死，不再需要 Base 層去實現龐大的依賴求解器（Dependency Resolver）。 |
+| **全域事件匯流排 (`EventBus`)** | `utils/` | 模組間解耦的字串廣播機制 | ❌ **破壞圖論顯式依賴**：OuroKore 強調「組裝即拓撲（組裝是顯式的有向邊）」。全域隱式 EventBus 會引入幽靈依賴，破壞 `CycleCollector` 的圖論可追蹤性，極易在外掛卸載時留下懸空回呼指標引發 Crash。 |
+| **128 位元 UUID 工具 (`Uuid.hpp`, `uuid_api.h`)** | `utils/` | 原為 Phase 4 冷啟動真復活預備之隨機/時序 ID 生成器 | ❌ **【已徹底刪除】**：次世代架構規格唯一只認 **CID**，記憶體唯一只認 **HandleID**。UUID 在本體系內已無生態位，保留只會引發身分證認同混淆。現已徹底刪除相關源碼與測試，並成功解除 Windows `bcrypt.lib` 之系統鏈結依賴。 |
+
+---
+
+## 📊 三、 六大子系統最新完成狀態與需求重劃
 
 ### 1. `async/` 並發與非同步排程
-
-| 工具項目 | 原計畫規格描述 | 當前狀態 | 實作檔案 / 現況說明 |
-| :--- | :--- | :---: | :--- |
-| **固定數量執行緒池** | `FixedThreadPool`，任務排程，回傳 `std::future` 與 Fire-and-Forget | ✅ **已完成** | [ThreadPool.hpp](include/ourokore/base/ThreadPool.hpp) |
-| **彈性動態伸縮執行緒池** | `DynamicThreadPool`，依負載擴容，閒置逾時自動縮容，防 Worker 自死鎖 | ✅ **已完成** | [ThreadPool.hpp](include/ourokore/base/ThreadPool.hpp) |
-| **執行緒安全阻塞佇列** | `ThreadSafeQueue<T>`，MPMC 多生產者多消費者佇列，逾時取出，鎖外析構保證 | ✅ **已完成** | [ThreadSafeQueue.hpp](include/ourokore/base/ThreadSafeQueue.hpp) (已擴充 `pop_expected` 等 C++23 介面) |
-| **Channel 通道** | Go-style CSP 通道，帶緩衝/無緩衝之線程資料管道 | ❌ **未完成** | 原計畫建議，尚未實作 |
-| **無鎖佇列 / 環形緩衝區** | SPSC / MPMC Lock-free Queue & RingBuffer | ❌ **未完成** | 目前以互斥鎖保護之阻塞式 `ThreadSafeQueue` 滿足需求 |
-| **工作竊取 / 優先級佇列** | Work-Stealing 或 Priority Queue 任務調度 | ❌ **未完成** | 目前為先進先出（FIFO）佇列 |
+* ✅ **固定數量執行緒池 (`FixedThreadPool`)**：支援 `submit_detached`、`wait_idle`，[ThreadPool.hpp](include/ourokore/base/ThreadPool.hpp)。
+* ✅ **彈性動態伸縮執行緒池 (`DynamicThreadPool`)**：依負載擴容、閒置自動縮容，防 Worker 自死鎖。
+* ✅ **執行緒安全阻塞佇列 (`ThreadSafeQueue<T>`)**：MPMC 佇列，逾時取出，支援 C++23 `pop_expected`，鎖外析構保證，[ThreadSafeQueue.hpp](include/ourokore/base/ThreadSafeQueue.hpp)。
+* ❌ **Channel 通道 / 無鎖佇列**：**【已剔除】**（確認不再需要）。
 
 ---
 
 ### 2. `sync/` 同步原語
-
-| 工具項目 | 原計畫規格描述 | 當前狀態 | 實作檔案 / 現況說明 |
-| :--- | :--- | :---: | :--- |
-| **計數信號量** | `Semaphore`，資源配額控制，逾時獲取與釋放 | ✅ **已完成** | [Semaphore.hpp](include/ourokore/base/Semaphore.hpp) |
-| **事件通知原語** | `Event`，跨平台條件通知，支援 `AutoReset` 與 `ManualReset`（廣播） | ✅ **已完成** | [Semaphore.hpp](include/ourokore/base/Semaphore.hpp) |
-| **跨進程具名訊號量** | Named Semaphore，用於多進程 IPC 共享資源配額 | ❌ **未完成** | 原計畫建議，尚未實作 |
-| **自旋鎖** | 輕量級用戶態 `SpinLock` | ❌ **未完成** | 專案現行以 `std::mutex` 與 `std::shared_mutex` 為主 |
+* ✅ **計數信號量 (`Semaphore`)**：資源配額控制，支援逾時獲取與釋放，[Semaphore.hpp](include/ourokore/base/Semaphore.hpp)。
+* ✅ **事件通知原語 (`Event`)**：跨平台通知，支援 `AutoReset` 與廣播 `ManualReset`，[Semaphore.hpp](include/ourokore/base/Semaphore.hpp)。
+* ❌ **跨進程具名訊號量 / 自旋鎖**：**【已剔除】**（專案以進程內標準同步原語為主）。
 
 ---
 
 ### 3. `plugin/` 外掛與動態載入
-
-| 工具項目 | 原計畫規格描述 | 當前狀態 | 實作檔案 / 現況說明 |
-| :--- | :--- | :---: | :--- |
-| **動態庫載入器** | `DynamicLibrary`，跨平台動態加載、型別安全符號獲取、生命週期反向錨定、非同步善後握手、離棧延遲卸載防護、常駐模式（Resident Mode） | ✅ **已完成** | [DynamicLibrary.hpp](include/ourokore/base/DynamicLibrary.hpp) (已擴充 `try_load` / `try_get_symbol` 等 C++23 介面) |
-| **弱引用動態庫** | `WeakDynamicLibrary`，無所有權觀察與原子安全晉升重獲（`lock()`） | ✅ **已完成** | [DynamicLibrary.hpp](include/ourokore/base/DynamicLibrary.hpp) |
-| **純生命週期權杖** | `create_lifetime_token`，支援樹節點群與非同步任務共享存活保證 | ✅ **已完成** | [DynamicLibrary.hpp](include/ourokore/base/DynamicLibrary.hpp) |
-| **跨平台符號匯出巨集** | `export.h`，提供 `ORK_BASE_API`、`ORK_CALL` 等呼叫慣例 | ✅ **已完成** | [export.h](include/ourokore/base/export.h) |
-| **外掛註冊中心與版本管理** | Plugin Registry，集中管理外掛實例、版本比對與依賴驗證 | ⏸️ **階段排程** | **排定於下階段 OuroKore 實作**。<br>現行 `DynamicLibrary` 具備路徑弱引用快取共享、首度載入識別（`is_first_loaded`）與單次初始化（`initialize_once`），已完全滿足當前載入需求。 |
+* ✅ **跨平台動態庫載入器 (`DynamicLibrary`)**：跨平台（Windows `LoadLibraryW` / POSIX `dlopen`）、型別安全符號獲取、生命週期反向錨定、延遲卸載防護、常駐模式（Resident Mode），[DynamicLibrary.hpp](include/ourokore/base/DynamicLibrary.hpp)。
+* ✅ **弱引用動態庫 (`WeakDynamicLibrary`)**：無所有權觀察與原子安全晉升（`lock()`）。
+* ✅ **生命週期權杖 (`create_lifetime_token`)**：支援樹節點群與非同步任務共享存活保證。
+* ✅ **跨平台符號匯出巨集 (`export.h`)**：提供 `ORK_BASE_API`、`ORK_CALL` 等呼叫慣例。
+* ❌ **龐大套件註冊中心與 SemVer 解析器**：**【已剔除】**（由階層式語意標籤與 CID 取代）。
 
 ---
 
 ### 4. `memory/` 記憶體管理與安全防禦
-
-| 工具項目 | 原計畫規格描述 | 當前狀態 | 實作檔案 / 現況說明 |
-| :--- | :--- | :---: | :--- |
-| **外掛 Heap 追蹤與清空檢驗** | `HeapTracker` / `PluginHeap`，支援編譯期方案 A/B 切換，外掛卸載前零洩漏清空驗證 | 🌟 **超額完成** | [HeapTracker.hpp](include/ourokore/base/HeapTracker.hpp)、[PluginHeap.hpp](include/ourokore/base/PluginHeap.hpp) |
-| **顯式與全域記憶體運算子** | `TrackedNewDelete`，`ORK_NEW`、`ORK_DELETE`、`TrackedAllocator` 與全域 `operator new` 透明重載 | 🌟 **超額完成** | [TrackedNewDelete.hpp](include/ourokore/base/TrackedNewDelete.hpp) |
-| **跨語言 Heap C ABI** | `heap_api.h`，導出 `ork_heap_allocate`、`ork_heap_is_clean`、`ork_heap_assert_clean` 等純 C 介面 | 🌟 **超額完成** | [heap_api.h](include/ourokore/base/heap_api.h) |
-| **物件池 (Object Pool)** | 高頻物件（Handle、Task 等）避免頻繁 `malloc`/`free` 的池化分配器 | ❌ **未完成** | 原計畫建議，尚未實作 |
-| **區域/線性記憶體分配器** | Arena / Slab Allocator，批次快速配置與整體釋放 | ❌ **未完成** | 原計畫建議，尚未實作 |
-| **共享引用位元組切片** | `ByteSpan` / `SharedBuffer`，帶引用計數的零拷貝二進位緩衝區 | ❌ **未完成** | 原計畫建議，尚未實作 |
+* 🌟 **外掛專屬 Heap 追蹤與清空檢驗 (`HeapTracker`, `PluginHeap`)**：支援編譯期雙策略 A/B 切換，外掛卸載前零洩漏清空驗證，[HeapTracker.hpp](include/ourokore/base/HeapTracker.hpp)、[PluginHeap.hpp](include/ourokore/base/PluginHeap.hpp)。
+* 🌟 **顯式與全域追蹤記憶體運算子 (`TrackedNewDelete`)**：提供 `ORK_NEW`、`ORK_DELETE` 與透明重載，[TrackedNewDelete.hpp](include/ourokore/base/TrackedNewDelete.hpp)。
+* 🌟 **跨語言 Heap C ABI (`heap_api.h`)**：導出純 C 堆疊監控介面，[heap_api.h](include/ourokore/base/heap_api.h)。
+* ❌ **通用 ObjectPool / Arena 分配器**：**【已剔除】**（防止破壞外掛 Heap 隔離防線）。
 
 ---
 
 ### 5. `io/` 系統、檔案與 I/O 抽象
-
-| 工具項目 | 原計畫規格描述 | 當前狀態 | 實作檔案 / 現況說明 |
-| :--- | :--- | :---: | :--- |
-| **現代樹狀物件節點與階層拓撲** | `TreeNodeBase<D>`、`StringTreeNode`，連續向量保序與雜湊雙模態，C++20/C++23 `std::derived_from` 異質物件直出，防爆棧迭代析構 | 🌟 **超額完成** | [Tree.hpp](include/ourokore/base/Tree.hpp) |
-| **文字 DSL 狀態機串流** | `TreeIO`，正交界定符、Pretty/Compact 雙模式、寬容狀態機反序列化、RFC-ORKT-1.0 規範、外部工廠優先架構 | 🌟 **超額完成** | [TreeIO.hpp](include/ourokore/base/TreeIO.hpp) |
-| **記憶體映射檔案 (MmapFile)** | 跨平台封裝 Windows `CreateFileMapping` / POSIX `mmap` | ⏸️ **階段擱置** | 涉及下階段物件再生與儲存驅動二進位格式，先行擱置 |
-| **高精度計時器與排程器** | TimerScheduler，時間輪（Time-wheel）或最小堆，支援延遲單次或週期性心跳 | ❌ **未完成** | 原計畫建議，尚未實作 |
+* 🌟 **現代樹狀物件節點與階層拓撲 (`Tree.hpp`)**：連續向量保序與雜湊雙模態，C++23 `std::derived_from` 異質物件直出，防爆棧迭代析構，[Tree.hpp](include/ourokore/base/Tree.hpp)。
+* 🌟 **文字 DSL 狀態機串流 (`TreeIO.hpp`)**：RFC-ORKT-1.0 規範、正交界定符、寬容狀態機反序列化，[TreeIO.hpp](include/ourokore/base/TreeIO.hpp)。
+* 🚀 **[新增需求] 二進位檔案工具與原子防損毀寫入 (`FileUtils.hpp`)**：
+  * **快速讀寫**：`ReadAllBytes`、`WriteAllBytes`。
+  * **原子寫入防毀損**：`WriteAllBytesAtomic`（先寫入同目錄 `.tmp` 暫存檔，再呼叫 OS 原生 API `MoveFileExW` / `rename` 執行原子替換，確保斷電或崩潰時零殘檔）。
+  * **目錄遞迴建立**：`EnsureDirectory`（當 CAS 雜湊子目錄不存在時自動安全建立）。
+* ❌ **記憶體映射檔案 (`MmapFile`)**：**【已剔除】**（確認不再需要）。
 
 ---
 
 ### 6. `utils/` 通用診斷與基礎工具
-
-| 工具項目 | 原計畫規格描述 | 當前狀態 | 實作檔案 / 現況說明 |
-| :--- | :--- | :---: | :--- |
-| **現代值語意錯誤處理原語** | `Result<T, E>` / `StatusOr<T>`，基於 ISO C++23 `std::expected` 與 `Status`，支援 Monadic 鏈式調用 | 🌟 **全面加入 (已完成)** | [Result.hpp](include/ourokore/base/Result.hpp) |
-| **全域 UTF-8 文字輔助工具** | `utf8.hpp`，提供 `as_view`、`to_string`、`to_u8string`、`is_string_like_v`，Windows W 版 API 邊界轉換隔離 | ✅ **已完成** | [utf8.hpp](include/ourokore/base/utf8.hpp) |
-| **現代編譯期雜湊模組** | `Hash.hpp`，`constexpr` FNV-1a (32/64)、CRC32、MurmurHash3、`HashCombine`、字面量 `_fnv64` / `_crc32` | ✅ **已完成** | [Hash.hpp](include/ourokore/base/Hash.hpp) |
-| **輕量非同步結構化日誌** | Async Logger，基於佇列與背景執行緒的非阻塞日誌器 | ❌ **未完成** | 原計畫建議，尚未實作 |
-| **UUID / GUID 生成與解析** | `Uuid`，符合 RFC 4122 / RFC 9562 規範，跨平台密碼學安全隨機 UUIDv4、時間排序單調 UUIDv7，C++23 constexpr 解析、`_uuid` 字面量、`Result<Uuid>`、三路比較 `<=>`、`std::format` 特化與純 C ABI `uuid_api.h` | 🌟 **超額完成** | [Uuid.hpp](include/ourokore/base/Uuid.hpp)、[uuid_api.h](include/ourokore/base/uuid_api.h) |
-| **事件匯流排 / 委派** | EventBus / Signal-Slot，模組解耦廣播機制 | ❌ **未完成** | 原計畫建議，尚未實作 |
+* 🌟 **現代值語意錯誤處理原語 (`Result.hpp`)**：基於 ISO C++23 `std::expected` 與 `Status`，支援 Monadic 鏈式調用，[Result.hpp](include/ourokore/base/Result.hpp)。
+* ✅ **全域 UTF-8 文字輔助工具 (`utf8.hpp`)**：字串檢視、零拷貝轉換、Windows W 版 API 邊界隔離，[utf8.hpp](include/ourokore/base/utf8.hpp)。
+* ✅ **現代編譯期雜湊模組 (`Hash.hpp`)**：`constexpr` FNV-1a (32/64)、CRC32、MurmurHash3，用於 TypeID 計算與 HashMap，[Hash.hpp](include/ourokore/base/Hash.hpp)。
+* ❌ **128 位元 UUID 工具 (`Uuid.hpp`, `uuid_api.h`)**：**【已徹底刪除】**（移除相關原始碼、純 C ABI 與測試，並解除 `bcrypt.lib` 依賴）。
+* 🚀 **[新增需求] 密碼學雜湊與標準 CID 編碼 (`SHA256.hpp`, `CID.hpp`)**：
+  * **純 CPU SHA-256**：零外部依賴、純記憶體安全計算，提供 `Update` 與 `Final`。
+  * **標準 Multihash (CIDv1)**：按照標準加上前綴（`0x12` 代表 SHA-256、`0x20` 代表 32 位元組長度），並提供標準 Base32 / Hex 字串編碼與解碼。
+* 🚀 **[新增需求] 確定性跨平台端序轉換 (`Endian.hpp`)**：
+  * 利用 C++20 `<bit>`（`std::endian`），強制在跨架構（x86_64 與 ARM64）打包二進位串流時統一為**小端序（Little-Endian）**，保證 CID 雜湊絕對確定性。
+* 🚀 **[新增需求] 階層標籤解析與路徑正規化 (`PathUtils.hpp`)**：
+  * **三段式拆解**：解析 `"Vendor/Plugin/Version"` 標籤。
+  * **安全防路徑穿越**：阻絕包含 `..` 或非法字元的惡意路徑，防範目錄遍歷攻擊。
+  * **路徑正規化**：統一正反斜線，安全映射為本機檔案系統路徑。
+* ❌ **全域事件匯流排 (`EventBus`)**：**【已剔除】**（確認不再需要）。
 
 ---
 
-## 🎯 四、 總結與後續推進建議
+## 🎯 四、 新版 Base 基礎庫待辦實裝路線圖 (Next Steps)
 
-當前 `ourokore_base` 模組中**直接支撐 OuroKore 核心運作、執行緒排程、外掛熱卸載、安全防護與錯誤處理**的關鍵基礎設施已高度成熟且具備完整技術規格與單元測試。
+根據本次需求修訂，現有程式庫中已完成之核心基礎代碼（`ThreadPool`、`DynamicLibrary`、`HeapTracker`、`Tree`、`Hash`、`utf8`、`Result` 等）**皆屬極高質量之現役資產，100% 保留**；原先列為待辦但已否決的 7 大項目全數移出開發計畫。
 
-依據目前的架構分期規劃：
-1. **外掛生態與版本管理（Plugin Registry & Version Management）**：留待下階段 OuroKore 核心層開發時一併統籌處理。
-2. **記憶體映射檔案（MmapFile）**：留待下階段儲存驅動與物件再生協議敲定後實作。
-3. **其餘 Base 待實作工具之建議優先順序**：
-   - **非同步日誌**：`AsyncLogger`（提供非阻塞式系統診斷日誌）。
-   - **高精度定時器**：`TimerScheduler`（通用定時排程引擎）。
-   - **進階池化按需擴充**：`ObjectPool` / `ArenaAllocator` 與 `Channel`（UUID 生成器已完成）。
+當前 `ourokore_base` 邁向完全就緒，僅剩下以下**唯一的 4 項輕量通用工具建置工作**：
+
+| 步驟 | 預計產出標頭檔 | 核心工作內容 | 預估複雜度 |
+| :---: | :--- | :--- | :---: |
+| **Step 1** | `base/include/ourokore/base/SHA256.hpp`<br>`base/include/ourokore/base/CID.hpp` | 純 C++ 零依賴 SHA-256 實裝與 Multihash (CIDv1) 格式化工具 | 🟢 輕量純演算法 |
+| **Step 2** | `base/include/ourokore/base/FileUtils.hpp` | 二進位檔案全檔讀寫、原子防損毀替換（`WriteAllBytesAtomic`）、目錄遞迴建立 | 🟢 輕量 OS API 封裝 |
+| **Step 3** | `base/include/ourokore/base/Endian.hpp` | 基於 `<bit>` 的強制小端序編解碼工具（確定性雜湊保證） | 🟢 極輕量 Header-only |
+| **Step 4** | `base/include/ourokore/base/PathUtils.hpp` | 三段式標籤解析（`Vendor/Plugin/ver`）、防路徑穿越（Path Traversal 防禦）與路徑正規化 | 🟢 輕量字串/路徑工具 |
+
+完成上述 4 項通用工具後，`ourokore_base` 即可宣告以最精煉、最純粹的姿態完全成熟，並無縫供未來的次世代零件網關外掛 `OrkGatewayDriver` 呼叫使用！

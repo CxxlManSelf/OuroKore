@@ -524,3 +524,33 @@ if (result) {
 適用於階層實體、異質領域物件階層、設定檔、屬性樹、文字 DSL 串流存取與遊戲腳本配置。
 詳細深入指南請參閱專章：
 👉 **[07. 樹狀物件節點與文字 DSL 指南 (Tree & TreeIO)](07_tree_and_dsl.md)**
+
+---
+
+## 🚀 7. 次世代身分體系與工具庫邊界哲學 (Next-Gen Identity & Pruning Policy)
+
+隨著 OuroKore 邁向「次世代零件化（Component Materialization）、不可變規格藍圖與內容定址（CID）」架構，ourokore_base 基礎工具庫進行了徹底的**「軟體減法」**與身分標識體系收斂：
+
+### 7.1 身分標識雙軌收斂公理
+本系統嚴格將識別碼收斂為兩種，彼此職責明確劃分：
+1. **執行期記憶體（Runtime Living Instance）** ➔ **唯一只認 HandleID (UInt64)**
+   - 原位讀寫鎖、原子計數、CycleCollector 圖論走訪，快取完全命中。
+2. **規格、藍圖、模具與 CAS 落盤（Part Specification）** ➔ **唯一只認 CID (Content Identifier)**
+   - 採用純 CPU SHA-256 密碼學雜湊與標準 Multihash (CIDv1)。自帶跨節點去重、防竄改與內容驗證能力。
+3. **UUID 徹底揚棄**：
+   - 系統內部不實裝、不維護任何 UUID 映射機制。原 Base 庫中之 UUID 工具與 Windows crypt.lib 依賴已全數徹底移除。
+
+### 7.2 過度工程裁撤清單 (Pruning & Deprecation)
+Base 基礎層秉持「零依賴、純通用、防範破壞外掛 Heap 隔離」原則，正式否決並剔除以下過度設計項目：
+* ❌ **記憶體映射檔案 (MmapFile)**：CAS 首重原子防損毀替換（WriteAllBytesAtomic），mmap 無法保證原子替換防損毀，已剔除。
+* ❌ **通用物件池與區域分配器 (ObjectPool, Arena)**：避免打破各外掛 DLL 的「跨動態庫 Heap 邊界隔離」引發跨 CRT 釋放崩潰，已剔除。
+* ❌ **無鎖佇列 (LockFreeQueue) 與 Channel**：現有 ThreadSafeQueue 微秒級延遲已極充沛，次世代瓶頸在 SHA-256 與磁碟 I/O，無鎖佇列徒增 ABA 與記憶體屏障除錯災難，已剔除。
+* ❌ **巨型外掛註冊中心與 SemVer 解析器**：外掛版本相依直接由不可變 CID 釘死，目錄尋址採階層標籤（Vendor/Plugin/Version），已剔除。
+* ❌ **全域事件匯流排 (EventBus)**：堅決捍衛「組裝即拓撲」的圖論顯式依賴，防範隱式廣播產生懸空回呼與野指標，已剔除。
+
+### 7.3 即將落地之 4 大通用基礎工具
+為無縫支援外部次世代零件網關外掛 OrkGatewayDriver，Base 庫聚焦於補齊以下 4 項純通用基礎工具：
+1. **SHA256.hpp / CID.hpp**：純 C++ 零外部依賴之 SHA-256 運算與標準 Multihash (CIDv1) 格式化編碼。
+2. **FileUtils.hpp**：二進位全檔讀寫、**原子防損毀寫入（WriteAllBytesAtomic，先寫同目錄 .tmp 後以 OS 原生 API 原子替換）**與目錄遞迴建立。
+3. **Endian.hpp**：基於 C++20 <bit> 強制小端序讀寫，保證跨 CPU 架構 CID 雜湊 100% 一致。
+4. **PathUtils.hpp**：三段式標籤拆解（Vendor/Plugin/ver）、**防路徑穿越（Path Traversal 防禦）**與跨平台路徑正規化。
