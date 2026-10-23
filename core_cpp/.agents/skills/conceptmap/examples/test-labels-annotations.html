@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="zh-TW"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>測試概念圖 - 節點標籤與註解功能 - Concept Map Viewer</title>
+    <link rel="icon" type="image/png" href="./concept-crafter_icon.png">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft JhengHei', sans-serif;
+            overflow: hidden;
+            background: #f0f0f0;
+        }
+
+        #map-title {
+            position: fixed;
+            top: 15px;
+            left: 15px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+            touch-action: none;
+        }
+
+        #container.grabbing {
+            cursor: grabbing;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+            transform-origin: 0 0;
+            position: relative;
+        }
+
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 50;
+            overflow: visible;
+        }
+
+        .node {
+            position: absolute;
+            background: #3498db;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        .node-compact {
+            padding: 3px 6px;
+            min-width: unset;
+            min-height: unset;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .node.node-label-mode {
+            padding: 4px !important;
+            width: auto !important;
+            height: auto !important;
+            min-width: unset !important;
+            min-height: unset !important;
+            white-space: nowrap;  /* 強制文字橫向排列，不換行 */
+        }
+
+        .frame {
+            position: absolute;
+            border: 2px dashed #95a5a6;
+            background: rgba(149, 165, 166, 0.1);
+            border-radius: 4px;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        .frame-label {
+            position: absolute;
+            top: 5px;
+            left: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #7f8c8d;
+        }
+
+        .status-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .status-completed {
+            background: #27ae60;
+            color: white;
+        }
+
+        .status-abandoned {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .connection-label {
+            fill: #2c3e50;
+            font-weight: 500;
+        }
+    </style>
+    <script id="map-data" type="application/json">{
+    "title": "測試概念圖 - 節點標籤與註解功能",
+    "data": {
+        "nodes": [
+            {
+                "id": "node-main-1",
+                "x": 300,
+                "y": 100,
+                "width": 220,
+                "height": 90,
+                "text": "<b>核心概念 A</b><br>這是主要節點",
+                "color": "#3498db",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-main-2",
+                "x": 650,
+                "y": 100,
+                "width": 220,
+                "height": 90,
+                "text": "<b>核心概念 B</b><br>另一個主要節點",
+                "color": "#2ecc71",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-label-1",
+                "x": 540,
+                "y": 125,
+                "width": 50,
+                "height": 26,
+                "text": "導致",
+                "color": "#e74c3c",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            },
+            {
+                "id": "node-annotation-1",
+                "x": 540,
+                "y": 30,
+                "width": 150,
+                "height": 50,
+                "text": "<font color=\"#000000\">這是標籤節點的<br>註解說明</font>",
+                "color": "#faffff",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-sub-1",
+                "x": 200,
+                "y": 300,
+                "width": 180,
+                "height": 80,
+                "text": "<b>子概念 1</b><br>詳細說明",
+                "color": "#9b59b6",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-sub-2",
+                "x": 483,
+                "y": 296,
+                "width": 180,
+                "height": 80,
+                "text": "<b>子概念 2</b><br>另一個說明",
+                "color": "#f39c12",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-sub-3",
+                "x": 700,
+                "y": 300,
+                "width": 180,
+                "height": 80,
+                "text": "<b>子概念 3</b><br>已放棄的項目",
+                "color": "#e74c3c",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": true,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-tip-1",
+                "x": 99,
+                "y": 464,
+                "width": 160,
+                "height": 60,
+                "text": "<font color=\"#000000\">提示：這是已完成<br>項目的註解</font>",
+                "color": "#f7f7f7",
+                "textAlign": "left",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-label-2",
+                "x": 359,
+                "y": 232,
+                "width": 50,
+                "height": 26,
+                "text": "包含",
+                "color": "#3498db",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            },
+            {
+                "id": "node-external",
+                "x": 948,
+                "y": 202,
+                "width": 150,
+                "height": 70,
+                "text": "<b>外部元素</b><br>連接到框架",
+                "color": "#1abc9c",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            }
+        ],
+        "frames": [
+            {
+                "id": "frame-main",
+                "x": 180,
+                "y": 270,
+                "width": 730,
+                "height": 140,
+                "label": "子概念區塊",
+                "borderColor": "#34495e",
+                "bgColor": "rgba(52, 73, 94, 0.08)",
+                "zIndex": 0,
+                "completed": false,
+                "abandoned": false
+            },
+            {
+                "id": "frame-annotation",
+                "x": 78,
+                "y": 442,
+                "width": 200,
+                "height": 100,
+                "label": "註解區塊",
+                "borderColor": "#95a5a6",
+                "bgColor": "rgba(149, 165, 166, 0.1)",
+                "zIndex": 0,
+                "completed": false,
+                "abandoned": false
+            }
+        ],
+        "connections": [
+            {
+                "id": "conn-1",
+                "from": "node-main-1",
+                "to": "node-label-1",
+                "arrowType": "none",
+                "label": "",
+                "color": "#2c3e50"
+            },
+            {
+                "id": "conn-2",
+                "from": "node-label-1",
+                "to": "node-main-2",
+                "arrowType": "single",
+                "label": "",
+                "color": "#2c3e50"
+            },
+            {
+                "id": "conn-3",
+                "from": "node-label-1",
+                "to": "node-annotation-1",
+                "arrowType": "dashed",
+                "label": "",
+                "color": "#95a5a6"
+            },
+            {
+                "id": "conn-4",
+                "from": "node-main-1",
+                "to": "node-label-2",
+                "arrowType": "none",
+                "label": "",
+                "color": "#3498db"
+            },
+            {
+                "id": "conn-5",
+                "from": "node-label-2",
+                "to": "node-sub-1",
+                "arrowType": "single",
+                "label": "",
+                "color": "#3498db"
+            },
+            {
+                "id": "conn-6",
+                "from": "node-label-2",
+                "to": "node-sub-2",
+                "arrowType": "single",
+                "label": "",
+                "color": "#3498db"
+            },
+            {
+                "id": "conn-7",
+                "from": "node-main-2",
+                "to": "node-sub-3",
+                "arrowType": "single",
+                "label": "直接連接",
+                "color": "#2ecc71"
+            },
+            {
+                "id": "conn-8",
+                "from": "node-sub-1",
+                "to": "node-sub-2",
+                "arrowType": "double",
+                "label": "雙向關係",
+                "color": "#9b59b6"
+            },
+            {
+                "id": "conn-9",
+                "from": "node-sub-1",
+                "to": "node-tip-1",
+                "arrowType": "dashed",
+                "label": "",
+                "color": "#95a5a6"
+            },
+            {
+                "id": "conn-10",
+                "from": "node-external",
+                "to": "frame-main",
+                "arrowType": "single",
+                "label": "連接框架",
+                "color": "#1abc9c"
+            }
+        ]
+    }
+}</script>
+</head>
+<body>
+    <div id="map-title">測試概念圖 - 節點標籤與註解功能</div>
+    <div id="container">
+        <svg id="svg-layer"></svg>
+        <div id="canvas"></div>
+    </div>
+
+    <script>
+        class MapViewer {
+            constructor() {
+                this.container = document.getElementById('container');
+                this.canvas = document.getElementById('canvas');
+                this.svgLayer = document.getElementById('svg-layer');
+
+                this.data = JSON.parse(document.getElementById('map-data').textContent);
+                this.nodes = this.data.data.nodes || [];
+                this.frames = this.data.data.frames || [];
+                this.connections = this.data.data.connections || [];
+
+                this.scale = 1;
+                this.offsetX = 50;
+                this.offsetY = 50;
+                this.isPanning = false;
+                this.panStart = { x: 0, y: 0 };
+
+                this.lastTouchDistance = 0;
+                this.lastTouchCenter = null;
+
+                // v4.8: 全域 Hit Test 狀態
+                this.isMoved = false;
+
+                this.init();
+            }
+
+            init() {
+                this.updateSVGSize();
+                this.setupEventListeners();
+                this.render();
+                window.addEventListener('resize', () => {
+                    this.updateSVGSize();
+                    this.render();
+                });
+            }
+
+            setupEventListeners() {
+                this.container.addEventListener('mousedown', (e) => {
+                    if (e.button === 0) {
+                        this.isPanning = true;
+                        this.isMoved = false;  // v4.8: 重置移動標記
+                        this.panStart = { x: e.clientX, y: e.clientY };
+                        this.container.classList.add('grabbing');
+                    }
+                });
+
+                window.addEventListener('mousemove', (e) => {
+                    if (this.isPanning) {
+                        this.isMoved = true;  // v4.8: 標記已移動
+                        this.offsetX += e.clientX - this.panStart.x;
+                        this.offsetY += e.clientY - this.panStart.y;
+                        this.panStart = { x: e.clientX, y: e.clientY };
+                        this.render();
+                    }
+                    this.updateCursor(e);  // v4.8: 動態更新游標
+                });
+
+                window.addEventListener('mouseup', () => {
+                    this.isPanning = false;
+                    this.container.classList.remove('grabbing');
+                });
+
+                // v4.8: 全域點擊事件 - 使用 Hit Test 檢測節點
+                this.container.addEventListener('click', (e) => {
+                    if (!this.isMoved) {
+                        this.handleNodeClick(e);
+                    }
+                });
+
+                this.container.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                    const rect = this.container.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+
+                    this.offsetX = mouseX - (mouseX - this.offsetX) * delta;
+                    this.offsetY = mouseY - (mouseY - this.offsetY) * delta;
+                    this.scale *= delta;
+                    this.scale = Math.max(0.1, Math.min(5, this.scale));
+                    this.render();
+                }, { passive: false });
+
+                this.container.addEventListener('touchstart', (e) => {
+                    if (e.touches.length === 1) {
+                        this.isPanning = true;
+                        this.isMoved = false;  // v4.8: 重置移動標記
+                        this.panStart = {
+                            x: e.touches[0].clientX,
+                            y: e.touches[0].clientY
+                        };
+                        this.container.classList.add('grabbing');
+                    } else if (e.touches.length === 2) {
+                        this.isPanning = false;
+                        this.lastTouchDistance = this.getTouchDistance(e.touches);
+                        this.lastTouchCenter = this.getTouchCenter(e.touches);
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+
+                    if (e.touches.length === 1 && this.isPanning) {
+                        this.isMoved = true;  // v4.8: 標記已移動
+                        const touch = e.touches[0];
+                        this.offsetX += touch.clientX - this.panStart.x;
+                        this.offsetY += touch.clientY - this.panStart.y;
+                        this.panStart = { x: touch.clientX, y: touch.clientY };
+                        this.render();
+                    } else if (e.touches.length === 2) {
+                        const currentDistance = this.getTouchDistance(e.touches);
+                        const currentCenter = this.getTouchCenter(e.touches);
+
+                        if (this.lastTouchDistance > 0) {
+                            const scaleFactor = currentDistance / this.lastTouchDistance;
+                            const rect = this.container.getBoundingClientRect();
+                            const centerX = currentCenter.x - rect.left;
+                            const centerY = currentCenter.y - rect.top;
+
+                            this.offsetX = centerX - (centerX - this.offsetX) * scaleFactor;
+                            this.offsetY = centerY - (centerY - this.offsetY) * scaleFactor;
+                            this.scale *= scaleFactor;
+                            this.scale = Math.max(0.1, Math.min(5, this.scale));
+                            this.render();
+                        }
+
+                        this.lastTouchDistance = currentDistance;
+                        this.lastTouchCenter = currentCenter;
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchend', (e) => {
+                    if (e.touches.length === 0) {
+                        this.isPanning = false;
+                        this.container.classList.remove('grabbing');
+                        this.lastTouchDistance = 0;
+                        this.lastTouchCenter = null;
+                    } else if (e.touches.length === 1) {
+                        this.isPanning = true;
+                        this.panStart = {
+                            x: e.touches[0].clientX,
+                            y: e.touches[0].clientY
+                        };
+                        this.lastTouchDistance = 0;
+                    }
+                });
+            }
+
+            getTouchDistance(touches) {
+                const dx = touches[0].clientX - touches[1].clientX;
+                const dy = touches[0].clientY - touches[1].clientY;
+                return Math.sqrt(dx * dx + dy * dy);
+            }
+
+            getTouchCenter(touches) {
+                return {
+                    x: (touches[0].clientX + touches[1].clientX) / 2,
+                    y: (touches[0].clientY + touches[1].clientY) / 2
+                };
+            }
+
+            render() {
+                this.canvas.innerHTML = '';
+                this.svgLayer.innerHTML = '';
+
+                const sortedFrames = [...this.frames].sort((a, b) =>
+                    (a.zIndex || 0) - (b.zIndex || 0)
+                );
+                sortedFrames.forEach(frame => this.renderFrame(frame));
+
+                this.nodes.forEach(node => this.renderNode(node));
+
+                this.updateConnections();
+
+                this.canvas.style.transform =
+                    `translate(${this.offsetX}px, ${this.offsetY}px) scale(${this.scale})`;
+            }
+
+            renderNode(node) {
+                const nodeEl = document.createElement('div');
+                nodeEl.className = 'node';
+                nodeEl.setAttribute('data-id', node.id);
+
+                if (node.isLabel) {
+                    nodeEl.classList.add('node-label-mode');
+                }
+
+                if (node.height < 40 || node.width < 60) {
+                    nodeEl.classList.add('node-compact');
+                }
+
+                nodeEl.style.left = node.x + 'px';
+                nodeEl.style.top = node.y + 'px';
+                nodeEl.style.width = node.width + 'px';
+                nodeEl.style.height = node.height + 'px';
+                nodeEl.style.background = node.color || '#3498db';
+                nodeEl.style.textAlign = node.textAlign || 'center';
+                nodeEl.innerHTML = node.text || '';
+
+                if (node.completed || node.abandoned) {
+                    const badge = document.createElement('div');
+                    badge.className = `status-badge ${node.completed ? 'status-completed' : 'status-abandoned'}`;
+                    badge.textContent = node.completed ? '✓' : '✗';
+                    nodeEl.appendChild(badge);
+                }
+
+                if (node.link) {
+                    nodeEl.style.cursor = 'pointer';
+                    nodeEl.addEventListener('click', () => {
+                        window.location.href = node.link;
+                    });
+                }
+
+                this.canvas.appendChild(nodeEl);
+            }
+
+            renderFrame(frame) {
+                const frameEl = document.createElement('div');
+                frameEl.className = 'frame';
+                frameEl.setAttribute('data-id', frame.id);
+                frameEl.style.left = frame.x + 'px';
+                frameEl.style.top = frame.y + 'px';
+                frameEl.style.width = frame.width + 'px';
+                frameEl.style.height = frame.height + 'px';
+                frameEl.style.borderColor = frame.borderColor || '#95a5a6';
+                frameEl.style.background = frame.bgColor || 'rgba(149, 165, 166, 0.1)';
+                frameEl.style.zIndex = frame.zIndex || 0;
+
+                if (frame.label) {
+                    const label = document.createElement('div');
+                    label.className = 'frame-label';
+                    label.textContent = frame.label;
+                    frameEl.appendChild(label);
+                }
+
+                if (frame.completed || frame.abandoned) {
+                    const badge = document.createElement('div');
+                    badge.className = `status-badge ${frame.completed ? 'status-completed' : 'status-abandoned'}`;
+                    badge.textContent = frame.completed ? '✓' : '✗';
+                    frameEl.appendChild(badge);
+                }
+
+                this.canvas.appendChild(frameEl);
+            }
+
+            updateConnections() {
+                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+
+                const colors = new Set();
+                this.connections.forEach(conn => {
+                    colors.add(conn.color || '#2c3e50');
+                });
+
+                // ⚠️ 必須搭配 viewBox 才能讓 markerWidth 動態縮放生效
+                // 視覺大小 = markerHeight × strokeWidth = 6 × 2 = 12px（scale=1 時）
+                const markerW = (9 * this.scale).toString();
+                const markerH = (6 * this.scale).toString();
+
+                colors.forEach(color => {
+                    const colorId = color.replace('#', '');
+
+                    const markerSingle = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerSingle.setAttribute('id', `arrowhead-single-${colorId}`);
+                    markerSingle.setAttribute('viewBox', '0 0 9 6');
+                    markerSingle.setAttribute('markerWidth', markerW);
+                    markerSingle.setAttribute('markerHeight', markerH);
+                    markerSingle.setAttribute('refX', '9');
+                    markerSingle.setAttribute('refY', '3');
+                    markerSingle.setAttribute('orient', 'auto');
+                    const pathSingle = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathSingle.setAttribute('d', 'M0,0 L0,6 L9,3 z');
+                    pathSingle.setAttribute('fill', color);
+                    markerSingle.appendChild(pathSingle);
+                    defs.appendChild(markerSingle);
+
+                    const markerDouble = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerDouble.setAttribute('id', `arrowhead-double-${colorId}`);
+                    markerDouble.setAttribute('viewBox', '0 0 9 6');
+                    markerDouble.setAttribute('markerWidth', markerW);
+                    markerDouble.setAttribute('markerHeight', markerH);
+                    markerDouble.setAttribute('refX', '0');
+                    markerDouble.setAttribute('refY', '3');
+                    markerDouble.setAttribute('orient', 'auto');
+                    const pathDouble = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathDouble.setAttribute('d', 'M9,0 L9,6 L0,3 z');
+                    pathDouble.setAttribute('fill', color);
+                    markerDouble.appendChild(pathDouble);
+                    defs.appendChild(markerDouble);
+                });
+
+                this.svgLayer.appendChild(defs);
+
+                this.connections.forEach(conn => {
+                    const fromNode = this.nodes.find(n => n.id === conn.from) ||
+                                     this.frames.find(f => f.id === conn.from);
+                    const toNode = this.nodes.find(n => n.id === conn.to) ||
+                                   this.frames.find(f => f.id === conn.to);
+                    if (!fromNode || !toNode) return;
+
+                    const fromEl = this.canvas.querySelector(`[data-id="${fromNode.id}"]`);
+                    const toEl = this.canvas.querySelector(`[data-id="${toNode.id}"]`);
+
+                    const fromWidth = fromEl ? fromEl.offsetWidth : fromNode.width;
+                    const fromHeight = fromEl ? fromEl.offsetHeight : fromNode.height;
+                    const toWidth = toEl ? toEl.offsetWidth : toNode.width;
+                    const toHeight = toEl ? toEl.offsetHeight : toNode.height;
+
+                    const fromCenter = {
+                        x: fromNode.x + fromWidth / 2,
+                        y: fromNode.y + fromHeight / 2
+                    };
+                    const toCenter = {
+                        x: toNode.x + toWidth / 2,
+                        y: toNode.y + toHeight / 2
+                    };
+
+                    const fromRect = { x: fromNode.x, y: fromNode.y, width: fromWidth, height: fromHeight };
+                    const toRect = { x: toNode.x, y: toNode.y, width: toWidth, height: toHeight };
+
+                    const fromEdge = this.getEdgePoint(fromRect, fromCenter, toCenter);
+                    const toEdge = this.getEdgePoint(toRect, toCenter, fromCenter);
+
+                    const x1 = fromEdge.x * this.scale + this.offsetX;
+                    const y1 = fromEdge.y * this.scale + this.offsetY;
+                    const x2 = toEdge.x * this.scale + this.offsetX;
+                    const y2 = toEdge.y * this.scale + this.offsetY;
+
+                    const lineColor = conn.color || '#2c3e50';
+                    const colorId = lineColor.replace('#', '');
+
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', x1);
+                    line.setAttribute('y1', y1);
+                    line.setAttribute('x2', x2);
+                    line.setAttribute('y2', y2);
+                    line.setAttribute('stroke', lineColor);
+                    line.setAttribute('stroke-width', '2');
+
+                    if (conn.arrowType === 'single') {
+                        line.setAttribute('marker-end', `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'double') {
+                        line.setAttribute('marker-start', `url(#arrowhead-double-${colorId})`);
+                        line.setAttribute('marker-end', `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'dashed') {
+                        line.setAttribute('stroke-dasharray', '8,4');
+                    }
+
+                    this.svgLayer.appendChild(line);
+
+                    if (conn.label) {
+                        const midX = (x1 + x2) / 2;
+                        const midY = (y1 + y2) / 2;
+
+                        const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+                        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        text.setAttribute('x', midX);
+                        text.setAttribute('y', midY + 4);
+                        text.setAttribute('text-anchor', 'middle');
+                        text.setAttribute('font-size', 12 * this.scale);
+                        text.setAttribute('class', 'connection-label');
+                        text.textContent = conn.label;
+
+                        this.svgLayer.appendChild(text);
+
+                        const bbox = text.getBBox();
+                        bgRect.setAttribute('x', bbox.x - 4);
+                        bgRect.setAttribute('y', bbox.y - 2);
+                        bgRect.setAttribute('width', bbox.width + 8);
+                        bgRect.setAttribute('height', bbox.height + 4);
+                        bgRect.setAttribute('fill', 'rgba(255, 255, 255, 0.9)');
+                        bgRect.setAttribute('rx', '3');
+
+                        this.svgLayer.insertBefore(bgRect, text);
+                    }
+                });
+            }
+
+            getEdgePoint(rect, center, target) {
+                const dx = target.x - center.x;
+                const dy = target.y - center.y;
+
+                if (dx === 0 && dy === 0) {
+                    return { x: center.x, y: center.y };
+                }
+
+                const halfWidth = rect.width / 2;
+                const halfHeight = rect.height / 2;
+
+                let t;
+                if (Math.abs(dx) * halfHeight > Math.abs(dy) * halfWidth) {
+                    t = halfWidth / Math.abs(dx);
+                } else {
+                    t = halfHeight / Math.abs(dy);
+                }
+
+                return {
+                    x: center.x + dx * t,
+                    y: center.y + dy * t
+                };
+            }
+
+            updateSVGSize() {
+                const rect = this.container.getBoundingClientRect();
+                this.svgLayer.setAttribute('width', rect.width);
+                this.svgLayer.setAttribute('height', rect.height);
+            }
+
+            // v4.8: 全域 Hit Test 方法 - 檢測點擊位置是否在節點上
+            handleNodeClick(e) {
+                const rect = this.container.getBoundingClientRect();
+                const clickX = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const clickY = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                // 檢測是否點擊到節點
+                for (const node of this.nodes) {
+                    if (clickX >= node.x && clickX <= node.x + node.width &&
+                        clickY >= node.y && clickY <= node.y + node.height) {
+                        // 找到被點擊的節點
+                        if (node.link) {
+                            const href = node.link;
+                            const isProjectHtml = !href.match(/^[a-zA-Z]+:\/\//) &&
+                                                  !href.match(/^\//) &&
+                                                  !href.match(/^[a-zA-Z]:[\/\\]/) &&
+                                                  href.match(/\.html?$/i);
+                            if (isProjectHtml) {
+                                window.location.href = node.link;
+                            } else {
+                                window.open(node.link, '_blank', 'noopener,noreferrer');
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // v4.8: 動態更新游標
+            updateCursor(e) {
+                if (this.isPanning) return;
+
+                const rect = this.container.getBoundingClientRect();
+                const mouseX = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const mouseY = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                let isOverClickable = false;
+                for (const node of this.nodes) {
+                    if (node.link &&
+                        mouseX >= node.x && mouseX <= node.x + node.width &&
+                        mouseY >= node.y && mouseY <= node.y + node.height) {
+                        isOverClickable = true;
+                        break;
+                    }
+                }
+
+                this.container.style.cursor = isOverClickable ? 'pointer' : 'grab';
+            }
+        }
+
+        new MapViewer();
+    </script>
+
+
+</body></html>

@@ -113,10 +113,29 @@
 
 ---
 
-## 應用端文件與 Skill 存放路徑規範 (Application Docs & Skill Path Invariant)
+## 應用端文件、Skill 與視覺化概念圖建立與修訂規範 (Docs & ConceptMap Evolution Rule)
 
 > **⚠️ 核心重要記憶：給應用端看的使用文件與 skill 位於上一層目錄（`../`）！**
 
+### 1. 文件建立與修訂之核心哲學：現實導向與局部漸進增強
+1. **現實導向（Reality-Driven Invariant）**：
+   - 所有的文件修訂與範例程式碼，**必須 100% 立足於當前 C++ 程式庫已實作且通過單元測試之物理現實**。嚴禁超前虛構未經驗證的假設或虛幻 API。
+2. **局部精準修改，禁絕全盤翻新（Targeted Incremental Evolution）**：
+   - 文件維護採取「按需增修、局部精準擊中痛點」之方針，**嚴禁發動牽連全盤的大拜拜式推翻重寫（No Big-Bang Rewrites）**。
+   - 既有章節若無規格或語意更動，嚴格保持其精確性與技術權威，避免無謂重寫引入新的漏洞與認知負擔。
+
+### 2. ConceptMap 互動概念圖引入與存放規範
+1. **圖文互補公理（Visual TL;DR Complementarity）**：
+   - **文字手冊**：負責提供精確的 API 簽名、並發鎖順序、邊界防禦與異常保證，具備最高法律規範效力。
+   - **概念圖（ConceptMap）**：負責提供高維度的**「宏觀心智模型（Mental Model）」**與拓撲全景，幫助讀者在 30 秒內建立全域理解。
+2. **按需繪製，專注刀口（Focus on Topological Pains）**：
+   - 嚴禁濫發概念圖！概念圖**僅針對「真正一言難盡、具備複雜幾何拓撲或多維狀態機」的核心章節**按需引入（如系統邊界全景、三大句柄拓撲、脫水與次世代網關再生流）。
+   - 純字典查閱（`*_api_reference.md`）與通用代碼範本（如 `08_base_utilities.md`）保持純文字，以利快速檢索與複製。
+3. **存放路徑與關聯規範**：
+   - 生成的 HTML 互動概念圖統一存放於：`../specs/manual/conceptmaps/`（如 `overview_map.html`）。
+   - 對應的 Markdown 章節開頭應以顯著的「🗺️ 互動概念圖導覽」區塊提供點擊連結。
+
+### 3. 目錄連動與終端附錄鐵律
 未來凡是涉及到對外 API 介面、公開調用語意、範本程式碼或應用端開發避坑指南之變更，**必須強制連動更新上一層目錄之應用端文件**：
 1. **應用端專用 AI 維護與範本 Skill**：`../skills/ourokore-app/SKILL.md`
 2. **應用端使用手冊 (Specs Manual)**：`../specs/manual/`

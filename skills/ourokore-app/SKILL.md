@@ -323,3 +323,14 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
 3. **階層式零件尋址與網關防護 (OrkGatewayDriver)**：
    - **能力契約宣告**：使用端在創世建立零件時，僅需持抽象介面（如 IWeapon）與三段式工廠提示（Vendor/Plugin/Version），透過 OrkGatewayDriver 取得物件。
    - **核心零變更**：網關產出之物件在核心眼中與標準 ork::CreateObject 完全相同，生命週期完整受 ControlBlock 與 CycleCollector 守護。
+---
+
+## 🗺️ 11. 文件建立與 ConceptMap 視覺化維護原則 (Documentation & Visual Evolution)
+
+1. **現實導向與局部漸進增強（Reality-Driven & Incremental）**：
+   - 所有的手冊與範例必須 100% 立足於當前 C++ 程式庫已通過測試之現實，嚴禁超前虛構。
+   - 文件更新採取「局部精準修改，專注打擊痛點」方針，嚴禁發動牽連全盤的推翻重寫（No Big-Bang Rewrites）。
+2. **圖文互補與 ConceptMap 漸進引入規則**：
+   - **文字負責精準性與法規效力**：各章節 Markdown 依然是核心規範與 API 字典。
+   - **概念圖負責宏觀心智模型**：針對「真正一言難盡、具備幾何拓撲」的核心章節按需繪製，統整存放於 specs/manual/conceptmaps/。
+   - 字典速查型章節（如 10_api_reference.md）保持純文字，不強加概念圖。

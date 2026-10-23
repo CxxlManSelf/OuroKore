@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="zh-TW"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>標籤節點拐點技巧範例 - Concept Map Viewer</title>
+
+    <link rel="icon" type="image/png" href="./concept-crafter_icon.png">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            background: #f0f0f0;
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+            touch-action: none;
+        }
+
+        #container.grabbing {
+            cursor: grabbing;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+            transform-origin: 0 0;
+            position: relative;
+        }
+
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 50;
+            overflow: visible;
+        }
+
+        #map-title {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            font-size: 24px;
+            font-weight: bold;
+            color: #2c3e50;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            pointer-events: none;
+        }
+
+        .node {
+            position: absolute;
+            background: #3498db;
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            min-width: 100px;
+            min-height: 60px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            user-select: none;
+            transition: box-shadow 0.2s;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        /* 緊湊型標籤節點 - 用於連接線拐點 */
+        .node-compact {
+            padding: 3px 6px;
+            min-width: unset;
+            min-height: unset;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .node:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        /* 標籤樣式節點 - 基於 isLabel 屬性套用 */
+        .node.node-label-mode {
+            padding: 4px !important;
+            width: auto !important;
+            height: auto !important;
+            min-width: unset !important;
+            min-height: unset !important;
+            white-space: nowrap;  /* 強制文字橫向排列，不換行 */
+        }
+
+        .node-content {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            pointer-events: none;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+        }
+
+        .node-content * {
+            margin: 0;
+            pointer-events: none;
+        }
+
+        .frame {
+            position: absolute;
+            border: 2px dashed #95a5a6;
+            background: rgba(149, 165, 166, 0.1);
+            min-width: 200px;
+            min-height: 150px;
+            border-radius: 4px;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        .frame-label {
+            position: absolute;
+            top: 8px;
+            left: 10px;
+            background: #95a5a6;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .connection {
+            fill: none;
+            stroke: #2c3e50;
+            stroke-width: 2;
+        }
+    </style>
+
+    <script id="map-data" type="application/json">
+{
+  "title": "標籤節點拐點技巧範例",
+  "data": {
+    "nodes": [
+      {
+        "id": "node-title",
+        "x": 400,
+        "y": 30,
+        "width": 300,
+        "height": 50,
+        "text": "<b>四種標籤節點組合樣式</b>",
+        "color": "#34495e",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-A1",
+        "x": 104,
+        "y": 192,
+        "width": 120,
+        "height": 60,
+        "text": "<b>學習</b>",
+        "color": "#3498db",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-label1",
+        "x": 294,
+        "y": 202,
+        "width": 36,
+        "height": 22,
+        "text": "<font color=\"#e34545\">互惠</font>",
+        "color": "#ffffff",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": true
+      },
+      {
+        "id": "node-B1",
+        "x": 424,
+        "y": 192,
+        "width": 120,
+        "height": 60,
+        "text": "<b>教學</b>",
+        "color": "#e74c3c",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-desc1",
+        "x": 584,
+        "y": 192,
+        "width": 180,
+        "height": 60,
+        "text": "<font color=\"#000000\">雙向箭頭<br>[A] &lt;- [標籤] -&gt; [B]</font>",
+        "color": "#ffffff",
+        "textAlign": "left",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-A2",
+        "x": 104,
+        "y": 291,
+        "width": 120,
+        "height": 60,
+        "text": "<b>原因</b>",
+        "color": "#3498db",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-label2",
+        "x": 293,
+        "y": 302,
+        "width": 36,
+        "height": 22,
+        "text": "<font color=\"#e34545\">導致</font>",
+        "color": "#ffffff",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": true
+      },
+      {
+        "id": "node-B2",
+        "x": 424,
+        "y": 291,
+        "width": 120,
+        "height": 60,
+        "text": "<b>結果</b>",
+        "color": "#e74c3c",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-desc2",
+        "x": 584,
+        "y": 291,
+        "width": 180,
+        "height": 60,
+        "text": "<font color=\"#000000\">單向 A-&gt;B<br>[A] - [標籤] -&gt; [B]</font>",
+        "color": "#ffffff",
+        "textAlign": "left",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-A3",
+        "x": 104,
+        "y": 391,
+        "width": 120,
+        "height": 60,
+        "text": "<b>結果</b>",
+        "color": "#3498db",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-label3",
+        "x": 294,
+        "y": 401,
+        "width": 36,
+        "height": 22,
+        "text": "<font color=\"#e34545\">來自</font>",
+        "color": "#ffffff",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": true
+      },
+      {
+        "id": "node-B3",
+        "x": 424,
+        "y": 391,
+        "width": 120,
+        "height": 60,
+        "text": "<b>原因</b>",
+        "color": "#e74c3c",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-desc3",
+        "x": 584,
+        "y": 391,
+        "width": 180,
+        "height": 60,
+        "text": "<font color=\"#000000\">單向 B-&gt;A<br>[A] &lt;- [標籤] - [B]</font>",
+        "color": "#ffffff",
+        "textAlign": "left",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-A4",
+        "x": 104,
+        "y": 491,
+        "width": 120,
+        "height": 60,
+        "text": "<b>概念 A</b>",
+        "color": "#3498db",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-label4",
+        "x": 294,
+        "y": 501,
+        "width": 36,
+        "height": 22,
+        "text": "<font color=\"#e34545\">關聯</font>",
+        "color": "#ffffff",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": true
+      },
+      {
+        "id": "node-B4",
+        "x": 424,
+        "y": 491,
+        "width": 120,
+        "height": 60,
+        "text": "<b>概念 B</b>",
+        "color": "#e74c3c",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-desc4",
+        "x": 584,
+        "y": 491,
+        "width": 180,
+        "height": 60,
+        "text": "<font color=\"#000000\">無箭頭<br>[A] - [標籤] - [B]</font>",
+        "color": "#ffffff",
+        "textAlign": "left",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-waypoint-title",
+        "x": 850,
+        "y": 30,
+        "width": 200,
+        "height": 50,
+        "text": "<b>拐點實際應用</b>",
+        "color": "#34495e",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-start",
+        "x": 841,
+        "y": 191,
+        "width": 150,
+        "height": 80,
+        "text": "<b>使用者需求</b><br>功能規格",
+        "color": "#3498db",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-waypoint1",
+        "x": 1075,
+        "y": 243,
+        "width": 36,
+        "height": 22,
+        "text": "分析",
+        "color": "#e74c3c",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": true
+      },
+      {
+        "id": "node-middle",
+        "x": 1145,
+        "y": 343,
+        "width": 150,
+        "height": 80,
+        "text": "<b>系統設計</b><br>架構規劃",
+        "color": "#9b59b6",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-waypoint2",
+        "x": 1035,
+        "y": 461,
+        "width": 36,
+        "height": 22,
+        "text": "實作",
+        "color": "#e74c3c",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": true
+      },
+      {
+        "id": "node-end",
+        "x": 845,
+        "y": 463,
+        "width": 150,
+        "height": 80,
+        "text": "<b>產品交付</b><br>上線部署",
+        "color": "#27ae60",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-note",
+        "x": 1172,
+        "y": 168,
+        "width": 140,
+        "height": 50,
+        "text": "<font color=\"#000000\">💡可點擊查看詳情</font>",
+        "color": "#ffffff",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-1768629960412",
+        "x": -39.141975308641975,
+        "y": -28.148148148148184,
+        "width": 200,
+        "height": 100,
+        "text": "節點2",
+        "color": "#3498db",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      },
+      {
+        "id": "node-1768629967672",
+        "x": -102.10493827160488,
+        "y": 585.432098765432,
+        "width": 200,
+        "height": 100,
+        "text": "節點1",
+        "color": "#3498db",
+        "textAlign": "center",
+        "completed": false,
+        "abandoned": false,
+        "link": "",
+        "isLabel": false
+      }
+    ],
+    "frames": [
+      {
+        "id": "frame-styles",
+        "x": 72,
+        "y": 134,
+        "width": 732,
+        "height": 436,
+        "label": "四種標準組合樣式",
+        "borderColor": "#3498db",
+        "bgColor": "rgba(52, 152, 219, 0.05)",
+        "zIndex": 0,
+        "completed": false,
+        "abandoned": false
+      },
+      {
+        "id": "frame-waypoint",
+        "x": 825,
+        "y": 144,
+        "width": 520,
+        "height": 420,
+        "label": "拐點應用：讓連線轉彎",
+        "borderColor": "#9b59b6",
+        "bgColor": "rgba(155, 89, 182, 0.05)",
+        "zIndex": 0,
+        "completed": false,
+        "abandoned": false
+      }
+    ],
+    "connections": [
+      {
+        "id": "conn-1b",
+        "from": "node-label1",
+        "to": "node-B1",
+        "arrowType": "single",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-2a",
+        "from": "node-A2",
+        "to": "node-label2",
+        "arrowType": "none",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-2b",
+        "from": "node-label2",
+        "to": "node-B2",
+        "arrowType": "single",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-3b",
+        "from": "node-label3",
+        "to": "node-B3",
+        "arrowType": "none",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-4a",
+        "from": "node-A4",
+        "to": "node-label4",
+        "arrowType": "none",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-4b",
+        "from": "node-label4",
+        "to": "node-B4",
+        "arrowType": "none",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-desc1",
+        "from": "node-B1",
+        "to": "node-desc1",
+        "arrowType": "dashed",
+        "label": "",
+        "color": "#95a5a6"
+      },
+      {
+        "id": "conn-desc2",
+        "from": "node-B2",
+        "to": "node-desc2",
+        "arrowType": "dashed",
+        "label": "",
+        "color": "#95a5a6"
+      },
+      {
+        "id": "conn-desc3",
+        "from": "node-B3",
+        "to": "node-desc3",
+        "arrowType": "dashed",
+        "label": "",
+        "color": "#95a5a6"
+      },
+      {
+        "id": "conn-desc4",
+        "from": "node-B4",
+        "to": "node-desc4",
+        "arrowType": "dashed",
+        "label": "",
+        "color": "#95a5a6"
+      },
+      {
+        "id": "conn-wp1a",
+        "from": "node-start",
+        "to": "node-waypoint1",
+        "arrowType": "none",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-wp1b",
+        "from": "node-waypoint1",
+        "to": "node-middle",
+        "arrowType": "single",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-wp2a",
+        "from": "node-middle",
+        "to": "node-waypoint2",
+        "arrowType": "none",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-wp2b",
+        "from": "node-waypoint2",
+        "to": "node-end",
+        "arrowType": "single",
+        "label": "",
+        "color": "#2c3e50"
+      },
+      {
+        "id": "conn-note",
+        "from": "node-waypoint1",
+        "to": "node-note",
+        "arrowType": "dashed",
+        "label": "",
+        "color": "#95a5a6"
+      },
+      {
+        "id": "conn-1768628773730",
+        "from": "node-label1",
+        "to": "node-A1",
+        "arrowType": "single",
+        "label": "",
+        "color": "#000000"
+      },
+      {
+        "id": "conn-1768628890848",
+        "from": "node-label3",
+        "to": "node-A3",
+        "arrowType": "single",
+        "label": "",
+        "color": "#000000"
+      },
+      {
+        "id": "conn-1768630010407",
+        "from": "node-1768629960412",
+        "to": "node-1768629967672",
+        "arrowType": "single",
+        "label": "這是標籤",
+        "color": "#7f8c8d"
+      }
+    ]
+  }
+}
+</script>
+</head>
+<body>
+    <div id="map-title">標籤節點拐點技巧範例</div>
+    <div id="container">
+        <svg id="svg-layer"></svg>
+        <div id="canvas"></div>
+    </div>
+
+    <script>
+        class MapViewer {
+            constructor() {
+                this.container = document.getElementById('container');
+                this.canvas = document.getElementById('canvas');
+                this.svgLayer = document.getElementById('svg-layer');
+
+                this.data = JSON.parse(document.getElementById('map-data').textContent);
+                this.nodes = this.data.data.nodes || [];
+                this.frames = this.data.data.frames || [];
+                this.connections = this.data.data.connections || [];
+
+                this.scale = 1;
+                this.offsetX = 0;
+                this.offsetY = 0;
+                this.isPanning = false;
+                this.panStart = { x: 0, y: 0 };
+
+                // 觸控相關狀態
+                this.lastTouchDistance = 0;
+                this.lastTouchCenter = null;
+
+                // v4.8: 全域 Hit Test 狀態
+                this.isMoved = false;
+
+                this.init();
+            }
+
+            init() {
+                this.updateSVGSize();
+                this.setupEventListeners();
+                this.render();
+                window.addEventListener('resize', () => this.updateSVGSize());
+            }
+
+            setupEventListeners() {
+                this.container.addEventListener('mousedown', (e) => {
+                    this.isPanning = true;
+                    this.isMoved = false;  // v4.8: 重置移動標記
+                    this.panStart = { x: e.clientX, y: e.clientY };
+                    this.container.classList.add('grabbing');
+                });
+
+                window.addEventListener('mousemove', (e) => {
+                    if (this.isPanning) {
+                        this.isMoved = true;  // v4.8: 標記已移動
+                        this.offsetX += e.clientX - this.panStart.x;
+                        this.offsetY += e.clientY - this.panStart.y;
+                        this.panStart = { x: e.clientX, y: e.clientY };
+                        this.render();
+                    }
+                    this.updateCursor(e);  // v4.8: 動態更新游標
+                });
+
+                window.addEventListener('mouseup', () => {
+                    this.isPanning = false;
+                    this.container.classList.remove('grabbing');
+                });
+
+                // v4.8: 全域點擊事件 - 使用 Hit Test 檢測節點
+                this.container.addEventListener('click', (e) => {
+                    if (!this.isMoved) {
+                        this.handleNodeClick(e);
+                    }
+                });
+
+                this.container.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                    const rect = this.container.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+
+                    this.offsetX = mouseX - (mouseX - this.offsetX) * delta;
+                    this.offsetY = mouseY - (mouseY - this.offsetY) * delta;
+                    this.scale *= delta;
+                    this.scale = Math.max(0.1, Math.min(5, this.scale));
+                    this.render();
+                }, { passive: false });
+
+                // 觸控事件
+                this.container.addEventListener('touchstart', (e) => {
+                    if (e.touches.length === 1) {
+                        this.isPanning = true;
+                        this.isMoved = false;  // v4.8: 重置移動標記
+                        this.panStart = {
+                            x: e.touches[0].clientX,
+                            y: e.touches[0].clientY
+                        };
+                        this.container.classList.add('grabbing');
+                    } else if (e.touches.length === 2) {
+                        this.isPanning = false;
+                        this.lastTouchDistance = this.getTouchDistance(e.touches);
+                        this.lastTouchCenter = this.getTouchCenter(e.touches);
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchmove', (e) => {
+                    e.preventDefault();
+
+                    if (e.touches.length === 1 && this.isPanning) {
+                        this.isMoved = true;  // v4.8: 標記已移動
+                        const touch = e.touches[0];
+                        this.offsetX += touch.clientX - this.panStart.x;
+                        this.offsetY += touch.clientY - this.panStart.y;
+                        this.panStart = { x: touch.clientX, y: touch.clientY };
+                        this.render();
+                    } else if (e.touches.length === 2) {
+                        const currentDistance = this.getTouchDistance(e.touches);
+                        const currentCenter = this.getTouchCenter(e.touches);
+
+                        if (this.lastTouchDistance > 0) {
+                            const scaleFactor = currentDistance / this.lastTouchDistance;
+                            const rect = this.container.getBoundingClientRect();
+                            const centerX = currentCenter.x - rect.left;
+                            const centerY = currentCenter.y - rect.top;
+
+                            this.offsetX = centerX - (centerX - this.offsetX) * scaleFactor;
+                            this.offsetY = centerY - (centerY - this.offsetY) * scaleFactor;
+                            this.scale *= scaleFactor;
+                            this.scale = Math.max(0.1, Math.min(5, this.scale));
+                            this.render();
+                        }
+
+                        this.lastTouchDistance = currentDistance;
+                        this.lastTouchCenter = currentCenter;
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchend', (e) => {
+                    if (e.touches.length === 0) {
+                        this.isPanning = false;
+                        this.container.classList.remove('grabbing');
+                        this.lastTouchDistance = 0;
+                        this.lastTouchCenter = null;
+                    } else if (e.touches.length === 1) {
+                        this.isPanning = true;
+                        this.panStart = {
+                            x: e.touches[0].clientX,
+                            y: e.touches[0].clientY
+                        };
+                        this.lastTouchDistance = 0;
+                    }
+                });
+            }
+
+            render() {
+                this.canvas.innerHTML = '';
+                this.svgLayer.innerHTML = '';
+
+                const sortedFrames = [...this.frames].sort((a, b) =>
+                    (a.zIndex || 0) - (b.zIndex || 0)
+                );
+                sortedFrames.forEach(frame => this.renderFrame(frame));
+                this.nodes.forEach(node => this.renderNode(node));
+                this.updateConnections();
+
+                this.canvas.style.transform =
+                    `translate(${this.offsetX}px, ${this.offsetY}px) scale(${this.scale})`;
+            }
+
+            renderNode(node) {
+                const nodeEl = document.createElement('div');
+                nodeEl.className = 'node';
+                nodeEl.setAttribute('data-id', node.id);  // 用於連接線查詢 DOM 元素
+
+                // 標籤樣式（基於 isLabel 屬性）
+                if (node.isLabel) {
+                    nodeEl.classList.add('node-label-mode');
+                }
+
+                // 小節點自動套用緊湊樣式（標籤節點）- 與 isLabel 獨立
+                if (node.height < 40 || node.width < 60) {
+                    nodeEl.classList.add('node-compact');
+                }
+
+                nodeEl.style.left = node.x + 'px';
+                nodeEl.style.top = node.y + 'px';
+                nodeEl.style.width = node.width + 'px';
+                nodeEl.style.height = node.height + 'px';
+                nodeEl.style.background = node.color || '#3498db';
+                nodeEl.style.textAlign = node.textAlign || 'center';
+
+                const content = document.createElement('div');
+                content.className = 'node-content';
+                content.innerHTML = node.text || '';
+                nodeEl.appendChild(content);
+
+                if (node.link) {
+                    nodeEl.style.cursor = 'pointer';
+                    nodeEl.addEventListener('click', () => {
+                        window.open(node.link, '_blank');
+                    });
+                }
+
+                this.canvas.appendChild(nodeEl);
+            }
+
+            renderFrame(frame) {
+                const frameEl = document.createElement('div');
+                frameEl.className = 'frame';
+                frameEl.style.left = frame.x + 'px';
+                frameEl.style.top = frame.y + 'px';
+                frameEl.style.width = frame.width + 'px';
+                frameEl.style.height = frame.height + 'px';
+                frameEl.style.borderColor = frame.borderColor || '#95a5a6';
+                frameEl.style.background = frame.bgColor || 'rgba(149, 165, 166, 0.1)';
+                frameEl.style.zIndex = frame.zIndex || 0;
+
+                if (frame.label) {
+                    const label = document.createElement('div');
+                    label.className = 'frame-label';
+                    label.style.background = frame.borderColor || '#95a5a6';
+                    label.textContent = frame.label;
+                    frameEl.appendChild(label);
+                }
+
+                this.canvas.appendChild(frameEl);
+            }
+
+            updateConnections() {
+                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+
+                const colors = new Set();
+                this.connections.forEach(conn => {
+                    colors.add(conn.color || '#2c3e50');
+                });
+
+                // ⚠️ 必須搭配 viewBox 才能讓 markerWidth 動態縮放生效
+                // 視覺大小 = markerHeight × strokeWidth = 6 × 2 = 12px（scale=1 時）
+                const markerW = (9 * this.scale).toString();
+                const markerH = (6 * this.scale).toString();
+
+                colors.forEach(color => {
+                    const colorId = color.replace('#', '');
+
+                    const markerSingle = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerSingle.setAttribute('id', `arrowhead-single-${colorId}`);
+                    markerSingle.setAttribute('viewBox', '0 0 9 6');
+                    markerSingle.setAttribute('markerWidth', markerW);
+                    markerSingle.setAttribute('markerHeight', markerH);
+                    markerSingle.setAttribute('refX', '9');
+                    markerSingle.setAttribute('refY', '3');
+                    markerSingle.setAttribute('orient', 'auto');
+                    const pathSingle = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathSingle.setAttribute('d', 'M0,0 L0,6 L9,3 z');
+                    pathSingle.setAttribute('fill', color);
+                    markerSingle.appendChild(pathSingle);
+                    defs.appendChild(markerSingle);
+
+                    const markerDouble = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerDouble.setAttribute('id', `arrowhead-double-${colorId}`);
+                    markerDouble.setAttribute('viewBox', '0 0 9 6');
+                    markerDouble.setAttribute('markerWidth', markerW);
+                    markerDouble.setAttribute('markerHeight', markerH);
+                    markerDouble.setAttribute('refX', '0');
+                    markerDouble.setAttribute('refY', '3');
+                    markerDouble.setAttribute('orient', 'auto');
+                    const pathDouble = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathDouble.setAttribute('d', 'M9,0 L9,6 L0,3 z');
+                    pathDouble.setAttribute('fill', color);
+                    markerDouble.appendChild(pathDouble);
+                    defs.appendChild(markerDouble);
+                });
+
+                this.svgLayer.appendChild(defs);
+
+                this.connections.forEach(conn => {
+                    const fromNode = this.nodes.find(n => n.id === conn.from) ||
+                                     this.frames.find(f => f.id === conn.from);
+                    const toNode = this.nodes.find(n => n.id === conn.to) ||
+                                   this.frames.find(f => f.id === conn.to);
+                    if (!fromNode || !toNode) return;
+
+                    // 查詢 DOM 元素以獲取實際渲染尺寸
+                    const fromEl = this.canvas.querySelector(`[data-id="${fromNode.id}"]`);
+                    const toEl = this.canvas.querySelector(`[data-id="${toNode.id}"]`);
+
+                    // 使用 DOM 的實際尺寸（處理 CSS padding、min-width/height 等影響）
+                    const fromWidth = fromEl ? fromEl.offsetWidth : fromNode.width;
+                    const fromHeight = fromEl ? fromEl.offsetHeight : fromNode.height;
+                    const toWidth = toEl ? toEl.offsetWidth : toNode.width;
+                    const toHeight = toEl ? toEl.offsetHeight : toNode.height;
+
+                    const fromCenter = {
+                        x: fromNode.x + fromWidth / 2,
+                        y: fromNode.y + fromHeight / 2
+                    };
+                    const toCenter = {
+                        x: toNode.x + toWidth / 2,
+                        y: toNode.y + toHeight / 2
+                    };
+
+                    // 建立包含實際尺寸的 rect 物件
+                    const fromRect = { x: fromNode.x, y: fromNode.y, width: fromWidth, height: fromHeight };
+                    const toRect = { x: toNode.x, y: toNode.y, width: toWidth, height: toHeight };
+
+                    const fromEdge = this.getEdgePoint(fromRect, fromCenter, toCenter);
+                    const toEdge = this.getEdgePoint(toRect, toCenter, fromCenter);
+
+                    const x1 = fromEdge.x * this.scale + this.offsetX;
+                    const y1 = fromEdge.y * this.scale + this.offsetY;
+                    const x2 = toEdge.x * this.scale + this.offsetX;
+                    const y2 = toEdge.y * this.scale + this.offsetY;
+
+                    const lineColor = conn.color || '#2c3e50';
+                    const colorId = lineColor.replace('#', '');
+
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', x1);
+                    line.setAttribute('y1', y1);
+                    line.setAttribute('x2', x2);
+                    line.setAttribute('y2', y2);
+                    line.setAttribute('stroke', lineColor);
+                    line.setAttribute('stroke-width', '2');
+
+                    if (conn.arrowType === 'single') {
+                        line.setAttribute('marker-end', `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'double') {
+                        line.setAttribute('marker-start', `url(#arrowhead-double-${colorId})`);
+                        line.setAttribute('marker-end', `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'dashed') {
+                        line.setAttribute('stroke-dasharray', '8,4');
+                    }
+
+                    this.svgLayer.appendChild(line);
+
+                    if (conn.label) {
+                        const midX = (x1 + x2) / 2;
+                        const midY = (y1 + y2) / 2;
+                        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        text.setAttribute('x', midX);
+                        text.setAttribute('y', midY - 5);
+                        text.setAttribute('text-anchor', 'middle');
+                        text.setAttribute('font-size', '12');
+                        text.setAttribute('fill', '#e74c3c');
+                        text.textContent = conn.label;
+                        this.svgLayer.appendChild(text);
+                    }
+                });
+            }
+
+            getEdgePoint(node, from, to) {
+                const dx = to.x - from.x;
+                const dy = to.y - from.y;
+                const w = node.width / 2;
+                const h = node.height / 2;
+
+                if (dx === 0 && dy === 0) return from;
+
+                const scaleX = dx !== 0 ? w / Math.abs(dx) : Infinity;
+                const scaleY = dy !== 0 ? h / Math.abs(dy) : Infinity;
+                const scale = Math.min(scaleX, scaleY);
+
+                return {
+                    x: from.x + dx * scale,
+                    y: from.y + dy * scale
+                };
+            }
+
+            updateSVGSize() {
+                const rect = this.container.getBoundingClientRect();
+                this.svgLayer.setAttribute('width', rect.width);
+                this.svgLayer.setAttribute('height', rect.height);
+            }
+
+            getTouchDistance(touches) {
+                const dx = touches[0].clientX - touches[1].clientX;
+                const dy = touches[0].clientY - touches[1].clientY;
+                return Math.sqrt(dx * dx + dy * dy);
+            }
+
+            getTouchCenter(touches) {
+                return {
+                    x: (touches[0].clientX + touches[1].clientX) / 2,
+                    y: (touches[0].clientY + touches[1].clientY) / 2
+                };
+            }
+
+            // v4.8: 全域 Hit Test 方法 - 檢測點擊位置是否在節點上
+            handleNodeClick(e) {
+                const rect = this.container.getBoundingClientRect();
+                const clickX = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const clickY = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                // 檢測是否點擊到節點
+                for (const node of this.nodes) {
+                    if (clickX >= node.x && clickX <= node.x + node.width &&
+                        clickY >= node.y && clickY <= node.y + node.height) {
+                        // 找到被點擊的節點
+                        if (node.link) {
+                            const href = node.link;
+                            const isProjectHtml = !href.match(/^[a-zA-Z]+:\/\//) &&
+                                                  !href.match(/^\//) &&
+                                                  !href.match(/^[a-zA-Z]:[\/\\]/) &&
+                                                  href.match(/\.html?$/i);
+                            if (isProjectHtml) {
+                                window.location.href = node.link;
+                            } else {
+                                window.open(node.link, '_blank', 'noopener,noreferrer');
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // v4.8: 動態更新游標
+            updateCursor(e) {
+                if (this.isPanning) return;
+
+                const rect = this.container.getBoundingClientRect();
+                const mouseX = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const mouseY = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                let isOverClickable = false;
+                for (const node of this.nodes) {
+                    if (node.link &&
+                        mouseX >= node.x && mouseX <= node.x + node.width &&
+                        mouseY >= node.y && mouseY <= node.y + node.height) {
+                        isOverClickable = true;
+                        break;
+                    }
+                }
+
+                this.container.style.cursor = isOverClickable ? 'pointer' : 'grab';
+            }
+        }
+
+        new MapViewer();
+    </script>
+
+
+</body></html>
