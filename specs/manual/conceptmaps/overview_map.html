@@ -1,0 +1,1343 @@
+<!DOCTYPE html>
+<html lang="zh-TW"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OuroKore 系統全景與三層邊界隔離架構圖 - Concept Map Viewer</title>
+
+    <!-- Favicon: Requires concept-crafter_icon.png in the same directory -->
+    <link rel="icon" type="image/png" href="./concept-crafter_icon.png">
+
+    <style>
+        /* === Map Viewer CSS === */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;  /* IMPORTANT: Prevents connection line issues */
+            user-select: none;       /* 防止滑鼠拖曳畫布時意外選取反白文字 */
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            background: #f0f0f0;
+        }
+
+        /* Container */
+        #container {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+            touch-action: none;  /* 觸控支援：防止瀏覽器預設觸控行為 */
+        }
+
+        #container.grabbing {
+            cursor: grabbing;
+        }
+
+        /* Canvas */
+        #canvas {
+            width: 100%;
+            height: 100%;
+            transform-origin: 0 0;
+            position: relative;
+        }
+
+        /* SVG Layer for Connections */
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 50;
+            overflow: visible;
+        }
+
+        /* Title */
+        #map-title {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            font-size: 24px;
+            font-weight: bold;
+            color: #2c3e50;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            pointer-events: none;
+        }
+
+        /* Node Styles */
+        .node {
+            position: absolute;
+            background: #3498db;
+            /* color 由 JS getContrastColor() 動態設定，不在此寫死 */
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            user-select: none;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        /* 緊湊型標籤節點 - 用於連接線拐點（基於尺寸自動套用） */
+        .node-compact {
+            padding: 3px 6px;
+            min-width: unset;
+            min-height: unset;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        /* 標籤樣式節點 - 基於 isLabel 屬性套用 */
+        .node.node-label-mode {
+            padding: 4px !important;
+            width: auto !important;
+            height: auto !important;
+            min-width: unset !important;
+            min-height: unset !important;
+            white-space: nowrap;  /* 強制文字橫向排列，不換行 */
+        }
+
+        .node-content {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+        }
+
+        .node-content * {
+            margin: 0;
+            pointer-events: none;
+        }
+
+        .node-content h1 {
+            font-size: 1.5em;
+            margin-bottom: 0.3em;
+        }
+
+        .node-content h2 {
+            font-size: 1.2em;
+            margin-bottom: 0.2em;
+        }
+
+        .node-content ul,
+        .node-content ol {
+            padding-left: 20px;
+            text-align: left;
+        }
+
+        .node-content a {
+            color: navy;
+            text-decoration: underline;
+            pointer-events: auto;  /* ⚠️ 唯一例外：文字中的超連結可點擊 */
+        }
+
+        /* Frame Styles */
+        .frame {
+            position: absolute;
+            border: 2px dashed #95a5a6;
+            background: rgba(149, 165, 166, 0.1);
+            border-radius: 4px;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        /* Status Badges */
+        .status-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 4px;
+            pointer-events: none;
+        }
+
+        .status-completed {
+            background: #27ae60;
+            color: white;
+        }
+
+        .status-abandoned {
+            background: #e74c3c;
+            color: white;
+        }
+    </style>
+
+    <!-- Map Data: Insert JSON below -->
+    <script id="map-data" type="application/json">{
+    "title": "OuroKore 系統全景與三層邊界隔離架構圖",
+    "data": {
+        "nodes": [
+            {
+                "id": "node-host-ctx",
+                "x": 94.58446797438711,
+                "y": 73.75340392316133,
+                "width": 275.4155320256129,
+                "height": 89.90998487360827,
+                "text": "<b>HostContext (宿主上下文)</b><br>進程級特權掌控者 (RAII 守衛)",
+                "color": "#8e44ad",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-host-priv",
+                "x": 459.90998487360827,
+                "y": 115.59556227839632,
+                "width": 277.70776601280636,
+                "height": 101.51664145601382,
+                "text": "<b>Host 獨佔特權操作</b><br>Shutdown / FlushDeletions<br>SetObjectDestroyedCallback",
+                "color": "#9b59b6",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-storage-inject",
+                "x": 102.29223398719355,
+                "y": 212.88779626558988,
+                "width": 265.5055471520046,
+                "height": 97.61775088641468,
+                "text": "<b>基礎設施注入</b><br>SetStorageDriver()<br>背景執行緒池調度與救援",
+                "color": "#8e44ad",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-core-registry",
+                "x": 420.21498990765514,
+                "y": 396.90780887253305,
+                "width": 272.6646848215702,
+                "height": 98.32342410785117,
+                "text": "<b>ObjectRegistry (核心登錄表)</b><br>配發 64-bit HandleID<br>純記憶體索引 (Zero-UUID)",
+                "color": "#2980b9",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-control-block",
+                "x": 477.1760654911604,
+                "y": 546.847629499534,
+                "width": 297.97919062648737,
+                "height": 135.2996419666939,
+                "text": "<b>ControlBlock (長存墓碑)</b><br>Strong/Weak 引用計數代數<br>m_rw_lock 原子讀寫鎖<br>m_storage_state 四態機",
+                "color": "#3498db",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-payload",
+                "x": 483.837777545086,
+                "y": 752.4469134329217,
+                "width": 262.00594553528936,
+                "height": 90.32936964314047,
+                "text": "<b>Domain Object Payload</b><br>業務資料肉體 (受管實體)<br>支援透明脫水換頁與原位復水",
+                "color": "#1abc9c",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-cycle-collector",
+                "x": 111.10110943040092,
+                "y": 408.8988905695991,
+                "width": 287.527735760023,
+                "height": 104.81996974721653,
+                "text": "<b>CycleCollector (循環回收器)</b><br>背景逆向走訪 m_owners<br>嫌疑犯過濾與有向環破壞",
+                "color": "#2c3e50",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-deferred-delete",
+                "x": 110,
+                "y": 538.7188603168156,
+                "width": 256.6966717087972,
+                "height": 110.83106405122567,
+                "text": "<b>DeferredDeleteQueue</b><br>延遲解構佇列 (平行壓平)<br>防深層遞迴 Stack Overflow",
+                "color": "#34495e",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-storage-interface",
+                "x": 94.9368229921154,
+                "y": 679.2095436305968,
+                "width": 278.65279375099163,
+                "height": 100.98810892942129,
+                "text": "<b>IStorageDriver (抽象儲存介面)</b><br>純虛擬契約 Save / Load / Delete<br>進程內記憶體或外部持久化",
+                "color": "#16a085",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-handles",
+                "x": 14.13938397938714,
+                "y": 961.906729585668,
+                "width": 282.58775792231205,
+                "height": 121.74898558491304,
+                "text": "<b>三大安全 Handles 武器庫</b><br>OwningHandle (強邊有向權屬)<br>UnboundHandle (旁路弱觀察)<br>OuroPtr (RAII 零計數臨時存取)",
+                "color": "#27ae60",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-active-owner",
+                "x": 502.04553956655354,
+                "y": 968.9873434169685,
+                "width": 270,
+                "height": 85,
+                "text": "<b>ActiveOwnerGuard</b><br>Parent-Driven 拓撲防呆<br>執行緒安全宿主上下文繼承",
+                "color": "#2ecc71",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-safe-queries",
+                "x": 110.9077730071609,
+                "y": 1101.8546921184136,
+                "width": 292.02857636404605,
+                "height": 140.5785850011266,
+                "text": "<b>純唯讀安全狀態查詢</b><br>IsAlive / GetStorageState<br>Is&lt;T&gt; / GetTypeID (純記憶體零 I/O)",
+                "color": "#27ae60",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-plugin-objects",
+                "x": 459.56185657875045,
+                "y": 1097.9210177676912,
+                "width": 292.0285763640461,
+                "height": 123.27041785794745,
+                "text": "<b>領域業務物件 (Subclass&lt;T&gt;)</b><br>繼承 OuroObject<br>僅透過 Handles 溝通",
+                "color": "#2ecc71",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-contract-req",
+                "x": 851.7299812472116,
+                "y": 108.05441735708351,
+                "width": 307.45892847810865,
+                "height": 106.13449236823683,
+                "text": "<b>能力契約宣告 (CreatePart)</b><br>使用端手握純介面 (如 IWeapon)<br>零具體類別相依，規格大於來源",
+                "color": "#e67e22",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-factory-resolve",
+                "x": 1260.539003489262,
+                "y": 81.40657915365443,
+                "width": 311.9455826429164,
+                "height": 116.64783820342907,
+                "text": "<b>階層工廠尋路 (DynamicLibrary)</b><br>Vendor/Plugin/ver 標籤映射<br>動態加載 DLL C++ 工廠函式<br>掛載專屬 Deleter / Rehydrate",
+                "color": "#f39c12",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-shared-map",
+                "x": 860,
+                "y": 245,
+                "width": 462.0653579653365,
+                "height": 89.41193225552144,
+                "text": "<b>運行期共用快表 (Active Map)</b><br>CID / Anchor ➔ 64-bit HandleID<br>共用優先原則，命中直接復用",
+                "color": "#e67e22",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-gateway-driver",
+                "x": 927.1676752544562,
+                "y": 387.9778113919816,
+                "width": 287.3528406466871,
+                "height": 137.94261739748447,
+                "text": "<b>OrkGatewayDriver (網關驅動)</b><br>外部插件實作 IStorageDriver<br>對接次世代規格與工廠尋路<br>🛡️ 防火牆：核心保持 100% 零更動",
+                "color": "#d35400",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-cas-storage",
+                "x": 860,
+                "y": 622.6482986908587,
+                "width": 291.76477290220873,
+                "height": 135.58977675079734,
+                "text": "<b>CAS 內容定址儲存 (CIDv1)</b><br>純 CPU SHA-256 密碼學雜湊<br>標準 Multihash (0x12, 0x20)<br>不可變規格藍圖 (.orkt)",
+                "color": "#e74c3c",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-atomic-file",
+                "x": 1291.1795535015947,
+                "y": 623.5306851419631,
+                "width": 298.23522709779127,
+                "height": 132.94261739748447,
+                "text": "<b>原子防損毀寫入 (FileUtils)</b><br>寫入同目錄 .tmp 暫存檔案<br>OS 原生 MoveFileExW 原子替換<br>斷電崩潰零半殘檔案保證",
+                "color": "#c0392b",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-base-infra",
+                "x": 865.3293696431405,
+                "y": 870,
+                "width": 310.65873928628093,
+                "height": 145.95838125297485,
+                "text": "<b>ourokore_base 基礎排程</b><br>Fixed/Dynamic ThreadPool<br>Semaphore & Event 同步原語<br>ThreadSafeQueue (C++23 expected)",
+                "color": "#7f8c8d",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-base-tools",
+                "x": 1279.281805360826,
+                "y": 875.3293696431405,
+                "width": 323.98216339413216,
+                "height": 131.3026147343386,
+                "text": "<b>Base 模組與記憶體安全</b><br>DynamicLibrary (生命週期反向錨定)<br>HeapTracker / PluginHeap (堆稽核)<br>Result&lt;T, E&gt; (C++23 Monadic)",
+                "color": "#7f8c8d",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-base-nextgen",
+                "x": 863.9970272323553,
+                "y": 1069.6111750039663,
+                "width": 685.9732450911981,
+                "height": 85.32936964314035,
+                "text": "<b>次世代專用純通用工具 (零外部依賴)</b><br>SHA256 & CIDv1 | FileUtils 原子替換 | PathUtils 標籤防穿越 | Endian 小端序",
+                "color": "#34495e",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "waypoint-priv-bypass",
+                "x": -114.59937108385061,
+                "y": 605.053669066246,
+                "width": 170,
+                "height": 28,
+                "text": "🚫 外掛嚴禁直接碰觸特權",
+                "color": "#e74c3c",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            },
+            {
+                "id": "waypoint-inject-gw",
+                "x": 570.8161593238598,
+                "y": 266.99195944594265,
+                "width": 140,
+                "height": 28,
+                "text": "配置注入網關驅動",
+                "color": "#16a085",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            },
+            {
+                "id": "waypoint-driver-impl",
+                "x": 645.2997165526967,
+                "y": 868.5738808883073,
+                "width": 160,
+                "height": 28,
+                "text": "網關實作 IStorageDriver",
+                "color": "#d35400",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            },
+            {
+                "id": "waypoint-base-gw",
+                "x": 1202.9426173974844,
+                "y": 558.5335334858278,
+                "width": 160,
+                "height": 28,
+                "text": "提供原子寫入與 SHA256",
+                "color": "#7f8c8d",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            },
+            {
+                "id": "node-1792770007852",
+                "x": 1379.353679447669,
+                "y": 281.4218064929694,
+                "width": 141.47659970828772,
+                "height": 30,
+                "text": "<font color=\"#d47535\"><b>1. 宣告需求 CreatePart</b></font><t></t>",
+                "color": "#f7f7f7",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            }
+        ],
+        "frames": [
+            {
+                "id": "frame-host",
+                "x": 68.9889056959908,
+                "y": 32.5622793663687,
+                "width": 679.9099848736083,
+                "height": 291.9321734816267,
+                "label": "主程式宿主特權層 (Host Context Layer - 進程級掌控)",
+                "borderColor": "#8e44ad",
+                "bgColor": "rgba(142, 68, 173, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            },
+            {
+                "id": "frame-core",
+                "x": 61.3472062490084,
+                "y": 356.3323424107851,
+                "width": 737.9494629500408,
+                "height": 527.9345991118176,
+                "label": "OuroKore 核心微內核 (ourokore_core - 🔒 100% 保持現狀零更動)",
+                "borderColor": "#2980b9",
+                "bgColor": "rgba(41, 128, 185, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            },
+            {
+                "id": "frame-plugin",
+                "x": -5.633062708734336,
+                "y": 919.774078287113,
+                "width": 808.4653371454323,
+                "height": 360.52654753387196,
+                "label": "第三方插件與業務組件隔離區 (Plugin & Components)",
+                "borderColor": "#27ae60",
+                "bgColor": "rgba(39, 174, 96, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            },
+            {
+                "id": "frame-nextgen",
+                "x": 820,
+                "y": 68.16221805493592,
+                "width": 840.0045573501834,
+                "height": 722.3528406466871,
+                "label": "次世代零件與網關擴充層 (Next-Gen Materialization & Gateway)",
+                "borderColor": "#d35400",
+                "bgColor": "rgba(211, 84, 0, 0.05)",
+                "zIndex": 0,
+                "completed": false,
+                "abandoned": false
+            },
+            {
+                "id": "frame-base",
+                "x": 820,
+                "y": 820,
+                "width": 838.5784745598751,
+                "height": 418.23424107851133,
+                "label": "OuroKore 基礎通用設施庫 (ourokore_base - 零依賴核心)",
+                "borderColor": "#7f8c8d",
+                "bgColor": "rgba(127, 140, 141, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            }
+        ],
+        "connections": [
+            {
+                "id": "conn-host-1",
+                "from": "node-host-ctx",
+                "to": "node-host-priv",
+                "arrowType": "single",
+                "label": "掌控特權",
+                "color": "#8e44ad"
+            },
+            {
+                "id": "conn-host-2",
+                "from": "node-host-ctx",
+                "to": "node-storage-inject",
+                "arrowType": "single",
+                "label": "配置",
+                "color": "#8e44ad"
+            },
+            {
+                "id": "conn-inject-wp1",
+                "from": "node-storage-inject",
+                "to": "waypoint-inject-gw",
+                "arrowType": "none",
+                "label": "",
+                "color": "#16a085"
+            },
+            {
+                "id": "conn-inject-wp2",
+                "from": "waypoint-inject-gw",
+                "to": "node-gateway-driver",
+                "arrowType": "single",
+                "label": "",
+                "color": "#16a085"
+            },
+            {
+                "id": "conn-ng-2",
+                "from": "node-contract-req",
+                "to": "node-factory-resolve",
+                "arrowType": "single",
+                "label": "提示工廠標籤",
+                "color": "#f39c12"
+            },
+            {
+                "id": "conn-ng-3",
+                "from": "node-gateway-driver",
+                "to": "node-shared-map",
+                "arrowType": "double",
+                "label": "共用查表 (命中復用)",
+                "color": "#e67e22"
+            },
+            {
+                "id": "conn-ng-4",
+                "from": "node-gateway-driver",
+                "to": "node-cas-storage",
+                "arrowType": "single",
+                "label": "脫水時算 Hash 落盤",
+                "color": "#e74c3c"
+            },
+            {
+                "id": "conn-ng-5",
+                "from": "node-cas-storage",
+                "to": "node-atomic-file",
+                "arrowType": "single",
+                "label": "原子防損毀寫入",
+                "color": "#c0392b"
+            },
+            {
+                "id": "conn-core-reg",
+                "from": "node-gateway-driver",
+                "to": "node-core-registry",
+                "arrowType": "single",
+                "label": "2. 登錄肉體核發 HandleID",
+                "color": "#2980b9"
+            },
+            {
+                "id": "conn-driver-wp1",
+                "from": "node-gateway-driver",
+                "to": "waypoint-driver-impl",
+                "arrowType": "none",
+                "label": "",
+                "color": "#d35400"
+            },
+            {
+                "id": "conn-driver-wp2",
+                "from": "waypoint-driver-impl",
+                "to": "node-storage-interface",
+                "arrowType": "single",
+                "label": "",
+                "color": "#d35400"
+            },
+            {
+                "id": "conn-core-1",
+                "from": "node-core-registry",
+                "to": "node-control-block",
+                "arrowType": "single",
+                "label": "配置長存墓碑",
+                "color": "#2980b9"
+            },
+            {
+                "id": "conn-core-2",
+                "from": "node-control-block",
+                "to": "node-payload",
+                "arrowType": "double",
+                "label": "靈肉分離 (原位脫水/復水)",
+                "color": "#3498db"
+            },
+            {
+                "id": "conn-core-3",
+                "from": "node-cycle-collector",
+                "to": "node-control-block",
+                "arrowType": "single",
+                "label": "逆向 BFS 走訪破環",
+                "color": "#2c3e50"
+            },
+            {
+                "id": "conn-core-4",
+                "from": "node-deferred-delete",
+                "to": "node-payload",
+                "arrowType": "single",
+                "label": "平級壓平解構",
+                "color": "#34495e"
+            },
+            {
+                "id": "conn-plg-1",
+                "from": "node-handles",
+                "to": "node-control-block",
+                "arrowType": "single",
+                "label": "持有 64-bit HandleID",
+                "color": "#27ae60"
+            },
+            {
+                "id": "conn-plg-2",
+                "from": "node-handles",
+                "to": "node-payload",
+                "arrowType": "single",
+                "label": "RAII Invoke() 存取",
+                "color": "#1abc9c"
+            },
+            {
+                "id": "conn-plg-3",
+                "from": "node-active-owner",
+                "to": "node-handles",
+                "arrowType": "single",
+                "label": "綁定 OwnerID (防呆拓撲)",
+                "color": "#2ecc71"
+            },
+            {
+                "id": "conn-guard-wp1",
+                "from": "node-handles",
+                "to": "waypoint-priv-bypass",
+                "arrowType": "dashed",
+                "label": "",
+                "color": "#e74c3c"
+            },
+            {
+                "id": "conn-guard-wp2",
+                "from": "waypoint-priv-bypass",
+                "to": "node-host-priv",
+                "arrowType": "dashed",
+                "label": "",
+                "color": "#e74c3c"
+            },
+            {
+                "id": "conn-base-wp1",
+                "from": "node-base-nextgen",
+                "to": "waypoint-base-gw",
+                "arrowType": "none",
+                "label": "",
+                "color": "#7f8c8d"
+            },
+            {
+                "id": "conn-base-wp2",
+                "from": "waypoint-base-gw",
+                "to": "node-gateway-driver",
+                "arrowType": "single",
+                "label": "",
+                "color": "#7f8c8d"
+            },
+            {
+                "id": "conn-1792770482889",
+                "from": "node-contract-req",
+                "to": "node-1792770007852",
+                "arrowType": "none",
+                "label": "",
+                "color": "#e0861f"
+            },
+            {
+                "id": "conn-1792770620677",
+                "from": "node-1792770007852",
+                "to": "node-gateway-driver",
+                "arrowType": "single",
+                "label": "",
+                "color": "#e0861f"
+            }
+        ]
+    }
+}</script>
+</head>
+<body>
+    <div id="map-title">OuroKore 系統全景與三層邊界隔離架構圖</div>
+
+    <div id="container">
+        <svg id="svg-layer"></svg>
+        <div id="canvas"></div>
+    </div>
+
+    <script>
+        class MapViewer {
+            constructor() {
+                this.container = document.getElementById('container');
+                this.canvas = document.getElementById('canvas');
+                this.svgLayer = document.getElementById('svg-layer');
+                this.data = JSON.parse(document.getElementById('map-data').textContent);
+
+                this.nodes = this.data.data.nodes || [];
+                this.frames = this.data.data.frames || [];
+                this.connections = this.data.data.connections || [];
+
+                this.scale = 1;
+                this.offsetX = 0;
+                this.offsetY = 0;
+                this.isPanning = false;
+                this.panStart = { x: 0, y: 0 };
+                this.isMoved = false;  // ⚠️ 關鍵：區分拖曳和點擊
+
+                // 觸控相關狀態
+                this.touches = [];
+                this.lastTouchDistance = 0;
+
+                this.init();
+            }
+
+            init() {
+                this.centerContent();
+                this.updateSVGSize();
+                window.addEventListener('resize', () => this.updateSVGSize());
+
+                // ===== 滑鼠事件 =====
+                this.container.addEventListener('mousedown', (e) => {
+                    if (e.button === 0) {
+                        e.preventDefault();  // ⚠️ 關鍵：阻止瀏覽器將滑鼠拖曳行為視為反白文字選取
+                        this.isPanning = true;
+                        this.isMoved = false;
+                        this.panStart = { x: e.clientX, y: e.clientY };
+                        this.container.classList.add('grabbing');
+                    }
+                });
+
+                // ⚠️ 使用 Container 的 click 事件 + Hit Test 處理節點點擊
+                this.container.addEventListener('click', (e) => this.handleNodeClick(e));
+
+                window.addEventListener('mousemove', (e) => {
+                    if (this.isPanning) {
+                        window.getSelection()?.removeAllRanges();  // 清除任何潛在的殘留文字選取
+                        this.offsetX += e.clientX - this.panStart.x;
+                        this.offsetY += e.clientY - this.panStart.y;
+                        this.panStart = { x: e.clientX, y: e.clientY };
+                        this.isMoved = true;
+                        this.render();
+                    } else {
+                        this.updateCursor(e);
+                    }
+                });
+
+                window.addEventListener('mouseup', () => {
+                    this.isPanning = false;
+                    this.container.classList.remove('grabbing');
+                });
+
+                this.container.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                    const rect = this.container.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+
+                    this.offsetX = mouseX - (mouseX - this.offsetX) * delta;
+                    this.offsetY = mouseY - (mouseY - this.offsetY) * delta;
+                    this.scale *= delta;
+                    this.scale = Math.max(0.1, Math.min(5, this.scale));
+                    this.render();
+                }, { passive: false });
+
+                // ===== 觸控事件 =====
+                this.container.addEventListener('touchstart', (e) => {
+                    this.touches = Array.from(e.touches);
+
+                    if (this.touches.length === 1) {
+                        this.isPanning = true;
+                        this.isMoved = false;
+                        this.panStart = { x: this.touches[0].clientX, y: this.touches[0].clientY };
+                    } else if (this.touches.length === 2) {
+                        this.isPanning = false;
+                        const dx = this.touches[0].clientX - this.touches[1].clientX;
+                        const dy = this.touches[0].clientY - this.touches[1].clientY;
+                        this.lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchmove', (e) => {
+                    e.preventDefault();  // ⚠️ 重要：防止頁面滾動
+                    this.touches = Array.from(e.touches);
+
+                    if (this.touches.length === 1 && this.isPanning) {
+                        this.offsetX += this.touches[0].clientX - this.panStart.x;
+                        this.offsetY += this.touches[0].clientY - this.panStart.y;
+                        this.panStart = { x: this.touches[0].clientX, y: this.touches[0].clientY };
+                        this.isMoved = true;
+                        this.render();
+                    } else if (this.touches.length === 2) {
+                        const dx = this.touches[0].clientX - this.touches[1].clientX;
+                        const dy = this.touches[0].clientY - this.touches[1].clientY;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+
+                        if (this.lastTouchDistance > 0) {
+                            const delta = distance / this.lastTouchDistance;
+                            const rect = this.container.getBoundingClientRect();
+                            const centerX = (this.touches[0].clientX + this.touches[1].clientX) / 2 - rect.left;
+                            const centerY = (this.touches[0].clientY + this.touches[1].clientY) / 2 - rect.top;
+
+                            this.offsetX = centerX - (centerX - this.offsetX) * delta;
+                            this.offsetY = centerY - (centerY - this.offsetY) * delta;
+                            this.scale *= delta;
+                            this.scale = Math.max(0.1, Math.min(5, this.scale));
+                            this.render();
+                        }
+
+                        this.lastTouchDistance = distance;
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchend', (e) => {
+                    this.touches = Array.from(e.touches);
+
+                    if (this.touches.length === 0) {
+                        this.isPanning = false;
+                        this.lastTouchDistance = 0;
+                    } else if (this.touches.length === 1) {
+                        this.isPanning = true;
+                        this.panStart = { x: this.touches[0].clientX, y: this.touches[0].clientY };
+                        this.lastTouchDistance = 0;
+                    }
+                });
+
+                this.render();
+            }
+
+            // ⭐ Hit Test：動態游標更新
+            updateCursor(e) {
+                const rect = this.container.getBoundingClientRect();
+                const wx = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const wy = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                let hitLink = false;
+                for (let i = this.nodes.length - 1; i >= 0; i--) {
+                    const node = this.nodes[i];
+                    if (wx >= node.x && wx <= node.x + node.width &&
+                        wy >= node.y && wy <= node.y + node.height) {
+                        if (node.link && node.link.trim()) {
+                            hitLink = true;
+                        }
+                        break;
+                    }
+                }
+                this.container.style.cursor = hitLink ? 'pointer' : (this.isPanning ? 'grabbing' : 'grab');
+            }
+
+            // ⭐ Hit Test：節點點擊處理
+            handleNodeClick(e) {
+                if (this.isMoved) return;
+                if (e.target.closest('a')) return;
+
+                const rect = this.container.getBoundingClientRect();
+                const wx = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const wy = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                for (let i = this.nodes.length - 1; i >= 0; i--) {
+                    const node = this.nodes[i];
+                    if (wx >= node.x && wx <= node.x + node.width &&
+                        wy >= node.y && wy <= node.y + node.height) {
+
+                        if (node.link && node.link.trim()) {
+                            const link = node.link.trim();
+                            const isProjectHtml = !link.match(/^[a-zA-Z]+:\/\//) &&
+                                                  !link.match(/^\//) &&
+                                                  !link.match(/^[a-zA-Z]:[\/\\]/) &&
+                                                  link.match(/\.html?$/i);
+
+                            if (isProjectHtml) {
+                                window.location.href = link;
+                            } else {
+                                window.open(link, '_blank', 'noopener,noreferrer');
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // 內容自動置中
+            centerContent() {
+                if (this.nodes.length === 0 && this.frames.length === 0) return;
+
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+                this.nodes.forEach(node => {
+                    minX = Math.min(minX, node.x);
+                    minY = Math.min(minY, node.y);
+                    maxX = Math.max(maxX, node.x + node.width);
+                    maxY = Math.max(maxY, node.y + node.height);
+                });
+
+                this.frames.forEach(frame => {
+                    minX = Math.min(minX, frame.x);
+                    minY = Math.min(minY, frame.y);
+                    maxX = Math.max(maxX, frame.x + frame.width);
+                    maxY = Math.max(maxY, frame.y + frame.height);
+                });
+
+                if (minX === Infinity) return;
+
+                const contentCenterX = (minX + maxX) / 2;
+                const contentCenterY = (minY + maxY) / 2;
+
+                const rect = this.container.getBoundingClientRect();
+                this.offsetX = rect.width / 2 - contentCenterX;
+                this.offsetY = rect.height / 2 - contentCenterY;
+            }
+
+            // 根據背景亮度自動回傳深色或淺色文字色（sRGB luminance 公式）
+            getContrastColor(hex) {
+                const h = (hex || '#3498db').replace(/^#/, '');
+                const r = parseInt(h.substr(0, 2), 16);
+                const g = parseInt(h.substr(2, 2), 16);
+                const b = parseInt(h.substr(4, 2), 16);
+                const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                return luminance > 0.5 ? '#1a1a1a' : '#ffffff';
+            }
+
+            render() {
+                this.canvas.innerHTML = '';
+                this.svgLayer.innerHTML = '';
+
+                // 渲染框架（按 zIndex 排序）
+                const sortedFrames = [...this.frames].sort((a, b) =>
+                    (a.zIndex || 0) - (b.zIndex || 0)
+                );
+                sortedFrames.forEach(frame => this.renderFrame(frame));
+
+                // 渲染節點
+                this.nodes.forEach(node => this.renderNode(node));
+
+                // 渲染連接線（⚠️ 必須在節點/框架渲染後，才能讀到 DOM 實際尺寸）
+                this.updateConnections();
+
+                // ⚠️ SVG 層不使用 transform，連接線座標在 updateConnections() 中手動計算
+                this.canvas.style.transform =
+                    `translate(${this.offsetX}px, ${this.offsetY}px) scale(${this.scale})`;
+
+                // 後置安全檢查：確保每個節點都有正確的文字對比色
+                this.canvas.querySelectorAll('.node').forEach(el => {
+                    if (!el.style.color) {
+                        const bg = el.style.background || el.style.backgroundColor || '#3498db';
+                        el.style.color = this.getContrastColor(bg);
+                    }
+                });
+            }
+
+            renderNode(node) {
+                const el = document.createElement('div');
+                el.className = 'node';
+                el.setAttribute('data-id', node.id);  // ⚠️ 必須：用於連接線查詢 DOM 實際尺寸
+
+                // 標籤樣式（基於 isLabel 屬性）
+                if (node.isLabel) {
+                    el.classList.add('node-label-mode');
+                }
+
+                // 小節點自動套用緊湊樣式（基於尺寸，與 isLabel 獨立）
+                if (node.height < 40 || node.width < 60) {
+                    el.classList.add('node-compact');
+                }
+
+                el.style.left = node.x + 'px';
+                el.style.top = node.y + 'px';
+                el.style.width = node.width + 'px';
+                el.style.height = node.height + 'px';
+                const nodeBg = node.color || '#3498db';
+                el.style.background = nodeBg;
+                el.style.color = this.getContrastColor(nodeBg);
+                el.style.zIndex = 101;
+                el.innerHTML = '<div class="node-content">' + (node.text || '') + '</div>';
+
+                // 設置文字對齊
+                const nodeContent = el.querySelector('.node-content');
+                const textAlign = node.textAlign || 'center';
+                const alignItemsMap = { left: 'flex-start', center: 'center', right: 'flex-end' };
+                nodeContent.style.textAlign = textAlign;
+                nodeContent.style.alignItems = alignItemsMap[textAlign] || 'center';
+
+                // 處理文字中的超連結
+                el.querySelectorAll('a').forEach(link => {
+                    const href = link.getAttribute('href');
+                    if (href) {
+                        const isProjectHtml = !href.match(/^[a-zA-Z]+:\/\//) &&
+                                              !href.match(/^\//) &&
+                                              !href.match(/^[a-zA-Z]:[\/\\]/) &&
+                                              href.match(/\.html?$/i);
+                        if (!isProjectHtml) {
+                            link.setAttribute('target', '_blank');
+                            link.setAttribute('rel', 'noopener noreferrer');
+                        }
+                    }
+                });
+
+                // 狀態徽章
+                if (node.completed || node.abandoned) {
+                    const badge = document.createElement('div');
+                    badge.className = `status-badge ${node.completed ? 'status-completed' : 'status-abandoned'}`;
+                    badge.textContent = node.completed ? '\u2714' : '\u2717';
+                    el.appendChild(badge);
+                }
+
+                this.canvas.appendChild(el);
+            }
+
+            renderFrame(frame) {
+                const el = document.createElement('div');
+                el.className = 'frame';
+                el.setAttribute('data-id', frame.id);  // ⚠️ 必須：用於連接線查詢 DOM 實際尺寸
+                el.style.left = frame.x + 'px';
+                el.style.top = frame.y + 'px';
+                el.style.width = frame.width + 'px';
+                el.style.height = frame.height + 'px';
+                el.style.borderColor = frame.borderColor || '#95a5a6';
+                el.style.background = frame.bgColor || 'rgba(149, 165, 166, 0.1)';
+                el.style.zIndex = frame.zIndex || 0;
+
+                if (frame.label) {
+                    const label = document.createElement('div');
+                    label.style.position = 'absolute';
+                    label.style.top = '5px';
+                    label.style.left = '10px';
+                    label.style.fontSize = '14px';
+                    label.style.fontWeight = '600';
+                    label.style.color = '#7f8c8d';
+                    label.textContent = frame.label;
+                    el.appendChild(label);
+                }
+
+                // 狀態徽章
+                if (frame.completed || frame.abandoned) {
+                    const badge = document.createElement('div');
+                    badge.className = `status-badge ${frame.completed ? 'status-completed' : 'status-abandoned'}`;
+                    badge.textContent = frame.completed ? '\u2714' : '\u2717';
+                    el.appendChild(badge);
+                }
+
+                this.canvas.appendChild(el);
+            }
+
+            updateConnections() {
+                // ⚠️ 關鍵：為每種顏色創建專屬箭頭標記，確保箭頭與連接線顏色一致
+                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                const colors = new Set();
+                this.connections.forEach(conn => colors.add(conn.color || '#2c3e50'));
+
+                // ⚠️ 必須搭配 viewBox 才能讓 markerWidth 動態縮放生效
+                // 路徑座標系：寬 9 高 6，markerUnits=strokeWidth（預設）
+                // 視覺大小 = markerHeight × strokeWidth = 6 × 2 = 12px（scale=1 時）
+                const markerW = (9 * this.scale).toString();
+                const markerH = (6 * this.scale).toString();
+
+                colors.forEach(color => {
+                    const colorId = color.replace('#', '');
+
+                    const markerSingle = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerSingle.setAttribute('id', `arrowhead-single-${colorId}`);
+                    markerSingle.setAttribute('viewBox', '0 0 9 6');
+                    markerSingle.setAttribute('markerWidth', markerW);
+                    markerSingle.setAttribute('markerHeight', markerH);
+                    markerSingle.setAttribute('refX', '9');
+                    markerSingle.setAttribute('refY', '3');
+                    markerSingle.setAttribute('orient', 'auto');
+                    const pathSingle = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathSingle.setAttribute('d', 'M0,0 L0,6 L9,3 z');
+                    pathSingle.setAttribute('fill', color);
+                    markerSingle.appendChild(pathSingle);
+                    defs.appendChild(markerSingle);
+
+                    const markerDouble = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerDouble.setAttribute('id', `arrowhead-double-${colorId}`);
+                    markerDouble.setAttribute('viewBox', '0 0 9 6');
+                    markerDouble.setAttribute('markerWidth', markerW);
+                    markerDouble.setAttribute('markerHeight', markerH);
+                    markerDouble.setAttribute('refX', '0');
+                    markerDouble.setAttribute('refY', '3');
+                    markerDouble.setAttribute('orient', 'auto');
+                    const pathDouble = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathDouble.setAttribute('d', 'M9,0 L9,6 L0,3 z');
+                    pathDouble.setAttribute('fill', color);
+                    markerDouble.appendChild(pathDouble);
+                    defs.appendChild(markerDouble);
+                });
+
+                this.svgLayer.appendChild(defs);
+
+                // 繪製連接線（⚠️ 支援節點和框架）
+                this.connections.forEach(conn => {
+                    const fromNode = this.nodes.find(n => n.id === conn.from) ||
+                                     this.frames.find(f => f.id === conn.from);
+                    const toNode   = this.nodes.find(n => n.id === conn.to) ||
+                                     this.frames.find(f => f.id === conn.to);
+                    if (!fromNode || !toNode) return;
+
+                    // ⚠️ 關鍵：查詢 DOM 元素以獲取實際渲染尺寸（CSS 可能改變節點大小）
+                    const fromEl = this.canvas.querySelector(`[data-id="${fromNode.id}"]`);
+                    const toEl   = this.canvas.querySelector(`[data-id="${toNode.id}"]`);
+                    const fromWidth  = fromEl ? fromEl.offsetWidth  : fromNode.width;
+                    const fromHeight = fromEl ? fromEl.offsetHeight : fromNode.height;
+                    const toWidth    = toEl   ? toEl.offsetWidth    : toNode.width;
+                    const toHeight   = toEl   ? toEl.offsetHeight   : toNode.height;
+
+                    const fromCenter = { x: fromNode.x + fromWidth / 2,  y: fromNode.y + fromHeight / 2 };
+                    const toCenter   = { x: toNode.x   + toWidth / 2,    y: toNode.y   + toHeight / 2 };
+
+                    const fromRect = { x: fromNode.x, y: fromNode.y, width: fromWidth,  height: fromHeight };
+                    const toRect   = { x: toNode.x,   y: toNode.y,   width: toWidth,    height: toHeight };
+
+                    const fromEdge = this.getEdgePoint(fromRect, fromCenter, toCenter);
+                    const toEdge   = this.getEdgePoint(toRect,   toCenter,   fromCenter);
+
+                    // ⚠️ 手動應用 scale 和 offset（SVG 層不使用 transform）
+                    const x1 = fromEdge.x * this.scale + this.offsetX;
+                    const y1 = fromEdge.y * this.scale + this.offsetY;
+                    const x2 = toEdge.x   * this.scale + this.offsetX;
+                    const y2 = toEdge.y   * this.scale + this.offsetY;
+
+                    const lineColor = conn.color || '#2c3e50';
+                    const colorId = lineColor.replace('#', '');
+
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', x1);
+                    line.setAttribute('y1', y1);
+                    line.setAttribute('x2', x2);
+                    line.setAttribute('y2', y2);
+                    line.setAttribute('stroke', lineColor);
+                    line.setAttribute('stroke-width', '2');
+
+                    if (conn.arrowType === 'single') {
+                        line.setAttribute('marker-end', `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'double') {
+                        line.setAttribute('marker-start', `url(#arrowhead-double-${colorId})`);
+                        line.setAttribute('marker-end',   `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'dashed') {
+                        // 虛線樣式，無箭頭，用於註解連接
+                        line.setAttribute('stroke-dasharray', '8,4');
+                    }
+                    // 'none' 類型：無箭頭實線，不需要額外設置
+
+                    this.svgLayer.appendChild(line);
+
+                    // 連接線標籤（使用變換後的座標）
+                    if (conn.label) {
+                        const midX = (x1 + x2) / 2;
+                        const midY = (y1 + y2) / 2;
+                        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        text.setAttribute('x', midX);
+                        text.setAttribute('y', midY - 5);
+                        text.setAttribute('text-anchor', 'middle');
+                        text.setAttribute('font-size', '12');
+                        text.setAttribute('fill', '#e74c3c');
+                        text.setAttribute('stroke', 'white');
+                        text.setAttribute('stroke-width', '3');
+                        text.setAttribute('paint-order', 'stroke fill');
+                        text.setAttribute('font-weight', 'bold');
+                        text.textContent = conn.label;
+                        this.svgLayer.appendChild(text);
+                    }
+                });
+            }
+
+            // ⚠️ 計算從矩形中心到邊緣的交點
+            // 注意：不使用 Math.max 限制最小尺寸，以支援小型標籤節點（isLabel: true）
+            getEdgePoint(rect, center, target) {
+                const dx = target.x - center.x;
+                const dy = target.y - center.y;
+                if (dx === 0 && dy === 0) return { x: center.x, y: center.y };
+
+                const halfWidth  = rect.width  / 2;
+                const halfHeight = rect.height / 2;
+
+                let t;
+                if (Math.abs(dx) * halfHeight > Math.abs(dy) * halfWidth) {
+                    t = halfWidth  / Math.abs(dx);
+                } else {
+                    t = halfHeight / Math.abs(dy);
+                }
+
+                return { x: center.x + dx * t, y: center.y + dy * t };
+            }
+
+            updateSVGSize() {
+                const rect = this.container.getBoundingClientRect();
+                this.svgLayer.setAttribute('width',  rect.width);
+                this.svgLayer.setAttribute('height', rect.height);
+            }
+        }
+
+        // Initialize the viewer
+        new MapViewer();
+    </script>
+
+
+</body></html>

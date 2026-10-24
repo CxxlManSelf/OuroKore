@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="zh-TW"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OuroKore 循環參照收集器與逆向圖論走訪全景 (CycleCollector &amp; Silent Unbind) - Concept Map Viewer</title>
+
+    <!-- Favicon: Requires concept-crafter_icon.png in the same directory -->
+    <link rel="icon" type="image/png" href="./concept-crafter_icon.png">
+
+    <style>
+        /* === Map Viewer CSS === */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;  /* IMPORTANT: Prevents connection line issues */
+            user-select: none;       /* 防止滑鼠拖曳畫布時意外選取反白文字 */
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            background: #f0f0f0;
+        }
+
+        /* Container */
+        #container {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+            touch-action: none;  /* 觸控支援：防止瀏覽器預設觸控行為 */
+        }
+
+        #container.grabbing {
+            cursor: grabbing;
+        }
+
+        /* Canvas */
+        #canvas {
+            width: 100%;
+            height: 100%;
+            transform-origin: 0 0;
+            position: relative;
+        }
+
+        /* SVG Layer for Connections */
+        svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 50;
+            overflow: visible;
+        }
+
+        /* Title */
+        #map-title {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            font-size: 24px;
+            font-weight: bold;
+            color: #2c3e50;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            pointer-events: none;
+        }
+
+        /* Node Styles */
+        .node {
+            position: absolute;
+            background: #3498db;
+            /* color 由 JS getContrastColor() 動態設定，不在此寫死 */
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            user-select: none;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        /* 緊湊型標籤節點 - 用於連接線拐點（基於尺寸自動套用） */
+        .node-compact {
+            padding: 3px 6px;
+            min-width: unset;
+            min-height: unset;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        /* 標籤樣式節點 - 基於 isLabel 屬性套用 */
+        .node.node-label-mode {
+            padding: 4px !important;
+            width: auto !important;
+            height: auto !important;
+            min-width: unset !important;
+            min-height: unset !important;
+            white-space: nowrap;  /* 強制文字橫向排列，不換行 */
+        }
+
+        .node-content {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: none;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+        }
+
+        .node-content * {
+            margin: 0;
+            pointer-events: none;
+        }
+
+        .node-content h1 {
+            font-size: 1.5em;
+            margin-bottom: 0.3em;
+        }
+
+        .node-content h2 {
+            font-size: 1.2em;
+            margin-bottom: 0.2em;
+        }
+
+        .node-content ul,
+        .node-content ol {
+            padding-left: 20px;
+            text-align: left;
+        }
+
+        .node-content a {
+            color: navy;
+            text-decoration: underline;
+            pointer-events: auto;  /* ⚠️ 唯一例外：文字中的超連結可點擊 */
+        }
+
+        /* Frame Styles */
+        .frame {
+            position: absolute;
+            border: 2px dashed #95a5a6;
+            background: rgba(149, 165, 166, 0.1);
+            border-radius: 4px;
+            pointer-events: none;  /* v4.8: 讓觸控/滑鼠事件穿透到 Container */
+        }
+
+        /* Status Badges */
+        .status-badge {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 4px;
+            pointer-events: none;
+        }
+
+        .status-completed {
+            background: #27ae60;
+            color: white;
+        }
+
+        .status-abandoned {
+            background: #e74c3c;
+            color: white;
+        }
+    </style>
+
+    <!-- Map Data: Insert JSON below -->
+    <script id="map-data" type="application/json">{
+    "title": "OuroKore 循環參照收集器與逆向圖論走訪全景 (CycleCollector & Silent Unbind)",
+    "data": {
+        "nodes": [
+            {
+                "id": "node-edge-drop",
+                "x": 81.75549863718899,
+                "y": -195.29132280437096,
+                "width": 297.2978005451244,
+                "height": 180.14100635978474,
+                "text": "<b>強擁有邊緣斷開 (UnregisterEdge)</b><br>父物件或業務調用釋放 OwningHandle<br>若目標 StrongCount &gt; 0 (仍有互指殘留)<br>觸發 CAS 搶入嫌疑犯標記 (O(1) 常數時間)",
+                "color": "#e67e22",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-suspect-queue",
+                "x": 512.9563264673055,
+                "y": -222.58117572656175,
+                "width": 323.3793009993948,
+                "height": 176.49210608722254,
+                "text": "<b>Suspect Queue (嫌疑犯排隊佇列)</b><br>m_suspect_queue 執行緒安全等待佇列<br>m_cv 條件變數通知單一背景清潔工<br>Stop() 停機時安全拒絕並復位標記",
+                "color": "#d35400",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-single-worker",
+                "x": 980.6392913425417,
+                "y": -242.3051337580215,
+                "width": 329.7304007268326,
+                "height": 167.97800545124406,
+                "text": "<b>嚴格單一背景執行緒 (WorkerLoop)</b><br>嚴禁多執行緒並發走訪 (消滅死鎖與顛簸)<br>swap(m_suspect_queue) 批次原子置換<br>unordered_set 批次去重，消除同環冗餘走訪",
+                "color": "#2c3e50",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-double-check",
+                "x": 90.26959927316746,
+                "y": 53.76818310114345,
+                "width": 290,
+                "height": 202.16920763174167,
+                "text": "<b>雙重存活審查 (Double-Check Guard)</b><br>檢查 m_is_destructing == true?<br>檢查 StrongCount == 0?<br>若已在拆解或已交給延遲隊列，立即略過<br>重置 m_in_suspect_queue 入隊標記",
+                "color": "#16a085",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-upstream-bfs",
+                "x": 548.6262328526715,
+                "y": 55.65965682382622,
+                "width": 312.43260018170815,
+                "height": 192.7084061780766,
+                "text": "<b>逆向圖論走訪 (Upstream BFS)</b><br>從嫌疑犯溯源其逆向強擁有者名冊<br>微秒級獲取 m_owners 快照後立即釋放鎖<br>visited 集合單次走訪防無限循環<br>逐級向上回溯所有父節點",
+                "color": "#2980b9",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-root-early-exit",
+                "x": 972.1301284743753,
+                "y": 59.44260426919176,
+                "width": 328.51410063597837,
+                "height": 201.22250681405507,
+                "text": "<b>存活判定與早退 (Root Early Exit)</b><br>• 觸及 ORK_ROOT_ID (棧上 OuroPtr 持有)<br>• 觸及外部非受管宿主 (Registry 查無 CB)<br>• 觸及兩階段構造預留節點 (m_is_reserved)<br><b>✨ 宣告存活，立即退出走訪，絕不破壞！</b>",
+                "color": "#27ae60",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-sort-asc",
+                "x": 89.0532991823134,
+                "y": 400.67089482131814,
+                "width": 318.24450136281104,
+                "height": 167.0313046335575,
+                "text": "<b>第一層防禦：HandleID 升冪排序</b><br>std::sort(island_nodes)<br>嚴格依 64-bit ID 數值大小依序取鎖<br>徹底消除跨物件反向取鎖引發的哲學家死鎖",
+                "color": "#8e44ad",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-pin-guards",
+                "x": 527.1497860391444,
+                "y": 369.3201245725311,
+                "width": 323.3793009993948,
+                "height": 181.62690572380632,
+                "text": "<b>第二層防禦：弱引用釘住 (Pinning)</b><br>為孤島全體成員獲取 ControlBlockPinGuard<br>釘住期間弱計數 weak_count &gt;= 1<br>其他執行緒絕無法釋放 CB，100% 杜絕 UAF",
+                "color": "#9b59b6",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-verify-locks",
+                "x": 1011.8510766507134,
+                "y": 378.6483837809537,
+                "width": 329.7304007268324,
+                "height": 168.2476047244116,
+                "text": "<b>第三層防禦：全體鎖定二次複查</b><br>升冪獲取所有成員之 m_owners_mutex<br>再次檢查：是否有外部節點連入？<br>若發現外部入邊 (並發復活)，立即全盤放棄拆解！",
+                "color": "#c0392b",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-mark-destructing",
+                "x": 100,
+                "y": 670,
+                "width": 307.5658948907311,
+                "height": 150.3953693443865,
+                "text": "<b>第四層防禦：標記 Destructing 態</b><br>m_is_destructing.store(true)<br>全面封鎖並發加邊與跨執行緒存取<br>杜絕殭屍物件 (Zombie) 在拆解途中死者甦醒",
+                "color": "#c0392b",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-silent-unbind",
+                "x": 540.5501303453948,
+                "y": 669.3084093634778,
+                "width": 334.589158394876,
+                "height": 140.9380007309726,
+                "text": "<b>外科手術式斷鏈 (Silent Unbind)</b><br>釋放 owners 鎖，調用 UnregisterEdge<br>silent=true 靜音模式：禁止斷鏈再次入隊<br>孤島成員內部相互依賴被徹底切除",
+                "color": "#d35400",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "node-deferred-queue",
+                "x": 1023.0729900715085,
+                "y": 676.5826746464065,
+                "width": 333.2403160587794,
+                "height": 150.3953693443865,
+                "text": "<b>DeferredDeleteQueue 平行壓平銷毀</b><br>斷鏈後強引用 StrongCount 自然歸零<br>移交延遲銷毀佇列處理物理 delete<br>收集器絕不卡在解構耗時上，立即回頭處理下一批",
+                "color": "#34495e",
+                "textAlign": "center",
+                "completed": true,
+                "abandoned": false,
+                "link": "",
+                "isLabel": false
+            },
+            {
+                "id": "waypoint-safe-abort",
+                "x": 1431.1611832219273,
+                "y": -126.97613880541698,
+                "width": 170,
+                "height": 28,
+                "text": "🚫 外部存活，安全早退退出",
+                "color": "#27ae60",
+                "textAlign": "center",
+                "completed": false,
+                "abandoned": false,
+                "link": "",
+                "isLabel": true
+            }
+        ],
+        "frames": [
+            {
+                "id": "frame-suspect",
+                "x": 51.755498637188985,
+                "y": -265.9684243488901,
+                "width": 1335.2258628674258,
+                "height": 263.6558594595436,
+                "label": "嫌疑犯排隊與單一背景執行緒架構 (Suspect Queue & Single Background Worker)",
+                "borderColor": "#e67e22",
+                "bgColor": "rgba(230, 126, 34, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            },
+            {
+                "id": "frame-upstream",
+                "x": 60.26959927316746,
+                "y": 18.76818310114345,
+                "width": 1325.2273677949863,
+                "height": 280.1379965046632,
+                "label": "逆向圖論走訪與存活根早退判定 (Upstream BFS & Micro-Snapshot Invariants)",
+                "borderColor": "#2980b9",
+                "bgColor": "rgba(41, 128, 185, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            },
+            {
+                "id": "frame-protocol",
+                "x": 69.18584142755594,
+                "y": 352.9660149899717,
+                "width": 1317.7955200770587,
+                "height": 242.43763145599905,
+                "label": "孤島二階段確認四層防禦協議 (DestructIsland Four-Tier Protocol)",
+                "borderColor": "#8e44ad",
+                "bgColor": "rgba(142, 68, 173, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            },
+            {
+                "id": "frame-unbind",
+                "x": 70,
+                "y": 625,
+                "width": 1320.4962146043738,
+                "height": 224.1783167897521,
+                "label": "外科手術式靜音斷鏈與解構交棒 (Silent Unbind & Deferred Deletion)",
+                "borderColor": "#c0392b",
+                "bgColor": "rgba(192, 57, 43, 0.05)",
+                "zIndex": 0,
+                "completed": true,
+                "abandoned": false
+            }
+        ],
+        "connections": [
+            {
+                "id": "conn-susp-1",
+                "from": "node-edge-drop",
+                "to": "node-suspect-queue",
+                "arrowType": "single",
+                "label": "CAS 成功搶入排隊",
+                "color": "#e67e22"
+            },
+            {
+                "id": "conn-susp-2",
+                "from": "node-suspect-queue",
+                "to": "node-single-worker",
+                "arrowType": "single",
+                "label": "批次 swap 交換消化",
+                "color": "#d35400"
+            },
+            {
+                "id": "conn-worker-check",
+                "from": "node-single-worker",
+                "to": "node-double-check",
+                "arrowType": "single",
+                "label": "提取嫌疑犯審查",
+                "color": "#2c3e50"
+            },
+            {
+                "id": "conn-check-bfs",
+                "from": "node-double-check",
+                "to": "node-upstream-bfs",
+                "arrowType": "single",
+                "label": "活體嫌疑犯啟動溯源",
+                "color": "#16a085"
+            },
+            {
+                "id": "conn-bfs-exit",
+                "from": "node-upstream-bfs",
+                "to": "node-root-early-exit",
+                "arrowType": "single",
+                "label": "走訪遇 Root / 外部宿主",
+                "color": "#27ae60"
+            },
+            {
+                "id": "conn-proto-1",
+                "from": "node-sort-asc",
+                "to": "node-pin-guards",
+                "arrowType": "single",
+                "label": "1. 升冪排好",
+                "color": "#8e44ad"
+            },
+            {
+                "id": "conn-proto-2",
+                "from": "node-pin-guards",
+                "to": "node-verify-locks",
+                "arrowType": "single",
+                "label": "2. Pin 釘住 CB 壽命",
+                "color": "#9b59b6"
+            },
+            {
+                "id": "conn-verify-destruct",
+                "from": "node-verify-locks",
+                "to": "node-mark-destructing",
+                "arrowType": "single",
+                "label": "3. 鎖定複查無外部入邊",
+                "color": "#c0392b"
+            },
+            {
+                "id": "conn-destruct-unbind",
+                "from": "node-mark-destructing",
+                "to": "node-silent-unbind",
+                "arrowType": "single",
+                "label": "4. 標記拆解態",
+                "color": "#c0392b"
+            },
+            {
+                "id": "conn-unbind-deferred",
+                "from": "node-silent-unbind",
+                "to": "node-deferred-queue",
+                "arrowType": "single",
+                "label": "強計數歸零移交平行銷毀",
+                "color": "#d35400"
+            },
+            {
+                "id": "conn-abort-wp1",
+                "from": "node-root-early-exit",
+                "to": "waypoint-safe-abort",
+                "arrowType": "dashed",
+                "label": "",
+                "color": "#27ae60"
+            },
+            {
+                "id": "conn-abort-wp2",
+                "from": "waypoint-safe-abort",
+                "to": "node-single-worker",
+                "arrowType": "dashed",
+                "label": "",
+                "color": "#27ae60"
+            },
+            {
+                "id": "conn-1792843159992",
+                "from": "node-upstream-bfs",
+                "to": "node-sort-asc",
+                "arrowType": "single",
+                "label": "初步判定為封閉孤島",
+                "color": "#c0392b"
+            }
+        ]
+    }
+}</script>
+</head>
+<body>
+    <div id="map-title">OuroKore 循環參照收集器與逆向圖論走訪全景 (CycleCollector &amp; Silent Unbind)</div>
+
+    <div id="container">
+        <svg id="svg-layer"></svg>
+        <div id="canvas"></div>
+    </div>
+
+    <script>
+        class MapViewer {
+            constructor() {
+                this.container = document.getElementById('container');
+                this.canvas = document.getElementById('canvas');
+                this.svgLayer = document.getElementById('svg-layer');
+                this.data = JSON.parse(document.getElementById('map-data').textContent);
+
+                this.nodes = this.data.data.nodes || [];
+                this.frames = this.data.data.frames || [];
+                this.connections = this.data.data.connections || [];
+
+                this.scale = 1;
+                this.offsetX = 0;
+                this.offsetY = 0;
+                this.isPanning = false;
+                this.panStart = { x: 0, y: 0 };
+                this.isMoved = false;  // ⚠️ 關鍵：區分拖曳和點擊
+
+                // 觸控相關狀態
+                this.touches = [];
+                this.lastTouchDistance = 0;
+
+                this.init();
+            }
+
+            init() {
+                this.centerContent();
+                this.updateSVGSize();
+                window.addEventListener('resize', () => this.updateSVGSize());
+
+                // ===== 滑鼠事件 =====
+                this.container.addEventListener('mousedown', (e) => {
+                    if (e.button === 0) {
+                        e.preventDefault();  // ⚠️ 關鍵：阻止瀏覽器將滑鼠拖曳行為視為反白文字選取
+                        this.isPanning = true;
+                        this.isMoved = false;
+                        this.panStart = { x: e.clientX, y: e.clientY };
+                        this.container.classList.add('grabbing');
+                    }
+                });
+
+                // ⚠️ 使用 Container 的 click 事件 + Hit Test 處理節點點擊
+                this.container.addEventListener('click', (e) => this.handleNodeClick(e));
+
+                window.addEventListener('mousemove', (e) => {
+                    if (this.isPanning) {
+                        window.getSelection()?.removeAllRanges();  // 清除任何潛在的殘留文字選取
+                        this.offsetX += e.clientX - this.panStart.x;
+                        this.offsetY += e.clientY - this.panStart.y;
+                        this.panStart = { x: e.clientX, y: e.clientY };
+                        this.isMoved = true;
+                        this.render();
+                    } else {
+                        this.updateCursor(e);
+                    }
+                });
+
+                window.addEventListener('mouseup', () => {
+                    this.isPanning = false;
+                    this.container.classList.remove('grabbing');
+                });
+
+                this.container.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                    const rect = this.container.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+
+                    this.offsetX = mouseX - (mouseX - this.offsetX) * delta;
+                    this.offsetY = mouseY - (mouseY - this.offsetY) * delta;
+                    this.scale *= delta;
+                    this.scale = Math.max(0.1, Math.min(5, this.scale));
+                    this.render();
+                }, { passive: false });
+
+                // ===== 觸控事件 =====
+                this.container.addEventListener('touchstart', (e) => {
+                    this.touches = Array.from(e.touches);
+
+                    if (this.touches.length === 1) {
+                        this.isPanning = true;
+                        this.isMoved = false;
+                        this.panStart = { x: this.touches[0].clientX, y: this.touches[0].clientY };
+                    } else if (this.touches.length === 2) {
+                        this.isPanning = false;
+                        const dx = this.touches[0].clientX - this.touches[1].clientX;
+                        const dy = this.touches[0].clientY - this.touches[1].clientY;
+                        this.lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchmove', (e) => {
+                    e.preventDefault();  // ⚠️ 重要：防止頁面滾動
+                    this.touches = Array.from(e.touches);
+
+                    if (this.touches.length === 1 && this.isPanning) {
+                        this.offsetX += this.touches[0].clientX - this.panStart.x;
+                        this.offsetY += this.touches[0].clientY - this.panStart.y;
+                        this.panStart = { x: this.touches[0].clientX, y: this.touches[0].clientY };
+                        this.isMoved = true;
+                        this.render();
+                    } else if (this.touches.length === 2) {
+                        const dx = this.touches[0].clientX - this.touches[1].clientX;
+                        const dy = this.touches[0].clientY - this.touches[1].clientY;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+
+                        if (this.lastTouchDistance > 0) {
+                            const delta = distance / this.lastTouchDistance;
+                            const rect = this.container.getBoundingClientRect();
+                            const centerX = (this.touches[0].clientX + this.touches[1].clientX) / 2 - rect.left;
+                            const centerY = (this.touches[0].clientY + this.touches[1].clientY) / 2 - rect.top;
+
+                            this.offsetX = centerX - (centerX - this.offsetX) * delta;
+                            this.offsetY = centerY - (centerY - this.offsetY) * delta;
+                            this.scale *= delta;
+                            this.scale = Math.max(0.1, Math.min(5, this.scale));
+                            this.render();
+                        }
+
+                        this.lastTouchDistance = distance;
+                    }
+                }, { passive: false });
+
+                this.container.addEventListener('touchend', (e) => {
+                    this.touches = Array.from(e.touches);
+
+                    if (this.touches.length === 0) {
+                        this.isPanning = false;
+                        this.lastTouchDistance = 0;
+                    } else if (this.touches.length === 1) {
+                        this.isPanning = true;
+                        this.panStart = { x: this.touches[0].clientX, y: this.touches[0].clientY };
+                        this.lastTouchDistance = 0;
+                    }
+                });
+
+                this.render();
+            }
+
+            // ⭐ Hit Test：動態游標更新
+            updateCursor(e) {
+                const rect = this.container.getBoundingClientRect();
+                const wx = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const wy = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                let hitLink = false;
+                for (let i = this.nodes.length - 1; i >= 0; i--) {
+                    const node = this.nodes[i];
+                    if (wx >= node.x && wx <= node.x + node.width &&
+                        wy >= node.y && wy <= node.y + node.height) {
+                        if (node.link && node.link.trim()) {
+                            hitLink = true;
+                        }
+                        break;
+                    }
+                }
+                this.container.style.cursor = hitLink ? 'pointer' : (this.isPanning ? 'grabbing' : 'grab');
+            }
+
+            // ⭐ Hit Test：節點點擊處理
+            handleNodeClick(e) {
+                if (this.isMoved) return;
+                if (e.target.closest('a')) return;
+
+                const rect = this.container.getBoundingClientRect();
+                const wx = (e.clientX - rect.left - this.offsetX) / this.scale;
+                const wy = (e.clientY - rect.top - this.offsetY) / this.scale;
+
+                for (let i = this.nodes.length - 1; i >= 0; i--) {
+                    const node = this.nodes[i];
+                    if (wx >= node.x && wx <= node.x + node.width &&
+                        wy >= node.y && wy <= node.y + node.height) {
+
+                        if (node.link && node.link.trim()) {
+                            const link = node.link.trim();
+                            const isProjectHtml = !link.match(/^[a-zA-Z]+:\/\//) &&
+                                                  !link.match(/^\//) &&
+                                                  !link.match(/^[a-zA-Z]:[\/\\]/) &&
+                                                  link.match(/\.html?$/i);
+
+                            if (isProjectHtml) {
+                                window.location.href = link;
+                            } else {
+                                window.open(link, '_blank', 'noopener,noreferrer');
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // 內容自動置中
+            centerContent() {
+                if (this.nodes.length === 0 && this.frames.length === 0) return;
+
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+                this.nodes.forEach(node => {
+                    minX = Math.min(minX, node.x);
+                    minY = Math.min(minY, node.y);
+                    maxX = Math.max(maxX, node.x + node.width);
+                    maxY = Math.max(maxY, node.y + node.height);
+                });
+
+                this.frames.forEach(frame => {
+                    minX = Math.min(minX, frame.x);
+                    minY = Math.min(minY, frame.y);
+                    maxX = Math.max(maxX, frame.x + frame.width);
+                    maxY = Math.max(maxY, frame.y + frame.height);
+                });
+
+                if (minX === Infinity) return;
+
+                const contentCenterX = (minX + maxX) / 2;
+                const contentCenterY = (minY + maxY) / 2;
+
+                const rect = this.container.getBoundingClientRect();
+                this.offsetX = rect.width / 2 - contentCenterX;
+                this.offsetY = rect.height / 2 - contentCenterY;
+            }
+
+            // 根據背景亮度自動回傳深色或淺色文字色（sRGB luminance 公式）
+            getContrastColor(hex) {
+                const h = (hex || '#3498db').replace(/^#/, '');
+                const r = parseInt(h.substr(0, 2), 16);
+                const g = parseInt(h.substr(2, 2), 16);
+                const b = parseInt(h.substr(4, 2), 16);
+                const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+                return luminance > 0.5 ? '#1a1a1a' : '#ffffff';
+            }
+
+            render() {
+                this.canvas.innerHTML = '';
+                this.svgLayer.innerHTML = '';
+
+                // 渲染框架（按 zIndex 排序）
+                const sortedFrames = [...this.frames].sort((a, b) =>
+                    (a.zIndex || 0) - (b.zIndex || 0)
+                );
+                sortedFrames.forEach(frame => this.renderFrame(frame));
+
+                // 渲染節點
+                this.nodes.forEach(node => this.renderNode(node));
+
+                // 渲染連接線（⚠️ 必須在節點/框架渲染後，才能讀到 DOM 實際尺寸）
+                this.updateConnections();
+
+                // ⚠️ SVG 層不使用 transform，連接線座標在 updateConnections() 中手動計算
+                this.canvas.style.transform =
+                    `translate(${this.offsetX}px, ${this.offsetY}px) scale(${this.scale})`;
+
+                // 後置安全檢查：確保每個節點都有正確的文字對比色
+                this.canvas.querySelectorAll('.node').forEach(el => {
+                    if (!el.style.color) {
+                        const bg = el.style.background || el.style.backgroundColor || '#3498db';
+                        el.style.color = this.getContrastColor(bg);
+                    }
+                });
+            }
+
+            renderNode(node) {
+                const el = document.createElement('div');
+                el.className = 'node';
+                el.setAttribute('data-id', node.id);  // ⚠️ 必須：用於連接線查詢 DOM 實際尺寸
+
+                // 標籤樣式（基於 isLabel 屬性）
+                if (node.isLabel) {
+                    el.classList.add('node-label-mode');
+                }
+
+                // 小節點自動套用緊湊樣式（基於尺寸，與 isLabel 獨立）
+                if (node.height < 40 || node.width < 60) {
+                    el.classList.add('node-compact');
+                }
+
+                el.style.left = node.x + 'px';
+                el.style.top = node.y + 'px';
+                el.style.width = node.width + 'px';
+                el.style.height = node.height + 'px';
+                const nodeBg = node.color || '#3498db';
+                el.style.background = nodeBg;
+                el.style.color = this.getContrastColor(nodeBg);
+                el.style.zIndex = 101;
+                el.innerHTML = '<div class="node-content">' + (node.text || '') + '</div>';
+
+                // 設置文字對齊
+                const nodeContent = el.querySelector('.node-content');
+                const textAlign = node.textAlign || 'center';
+                const alignItemsMap = { left: 'flex-start', center: 'center', right: 'flex-end' };
+                nodeContent.style.textAlign = textAlign;
+                nodeContent.style.alignItems = alignItemsMap[textAlign] || 'center';
+
+                // 處理文字中的超連結
+                el.querySelectorAll('a').forEach(link => {
+                    const href = link.getAttribute('href');
+                    if (href) {
+                        const isProjectHtml = !href.match(/^[a-zA-Z]+:\/\//) &&
+                                              !href.match(/^\//) &&
+                                              !href.match(/^[a-zA-Z]:[\/\\]/) &&
+                                              href.match(/\.html?$/i);
+                        if (!isProjectHtml) {
+                            link.setAttribute('target', '_blank');
+                            link.setAttribute('rel', 'noopener noreferrer');
+                        }
+                    }
+                });
+
+                // 狀態徽章
+                if (node.completed || node.abandoned) {
+                    const badge = document.createElement('div');
+                    badge.className = `status-badge ${node.completed ? 'status-completed' : 'status-abandoned'}`;
+                    badge.textContent = node.completed ? '\u2714' : '\u2717';
+                    el.appendChild(badge);
+                }
+
+                this.canvas.appendChild(el);
+            }
+
+            renderFrame(frame) {
+                const el = document.createElement('div');
+                el.className = 'frame';
+                el.setAttribute('data-id', frame.id);  // ⚠️ 必須：用於連接線查詢 DOM 實際尺寸
+                el.style.left = frame.x + 'px';
+                el.style.top = frame.y + 'px';
+                el.style.width = frame.width + 'px';
+                el.style.height = frame.height + 'px';
+                el.style.borderColor = frame.borderColor || '#95a5a6';
+                el.style.background = frame.bgColor || 'rgba(149, 165, 166, 0.1)';
+                el.style.zIndex = frame.zIndex || 0;
+
+                if (frame.label) {
+                    const label = document.createElement('div');
+                    label.style.position = 'absolute';
+                    label.style.top = '5px';
+                    label.style.left = '10px';
+                    label.style.fontSize = '14px';
+                    label.style.fontWeight = '600';
+                    label.style.color = '#7f8c8d';
+                    label.textContent = frame.label;
+                    el.appendChild(label);
+                }
+
+                // 狀態徽章
+                if (frame.completed || frame.abandoned) {
+                    const badge = document.createElement('div');
+                    badge.className = `status-badge ${frame.completed ? 'status-completed' : 'status-abandoned'}`;
+                    badge.textContent = frame.completed ? '\u2714' : '\u2717';
+                    el.appendChild(badge);
+                }
+
+                this.canvas.appendChild(el);
+            }
+
+            updateConnections() {
+                // ⚠️ 關鍵：為每種顏色創建專屬箭頭標記，確保箭頭與連接線顏色一致
+                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                const colors = new Set();
+                this.connections.forEach(conn => colors.add(conn.color || '#2c3e50'));
+
+                // ⚠️ 必須搭配 viewBox 才能讓 markerWidth 動態縮放生效
+                // 路徑座標系：寬 9 高 6，markerUnits=strokeWidth（預設）
+                // 視覺大小 = markerHeight × strokeWidth = 6 × 2 = 12px（scale=1 時）
+                const markerW = (9 * this.scale).toString();
+                const markerH = (6 * this.scale).toString();
+
+                colors.forEach(color => {
+                    const colorId = color.replace('#', '');
+
+                    const markerSingle = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerSingle.setAttribute('id', `arrowhead-single-${colorId}`);
+                    markerSingle.setAttribute('viewBox', '0 0 9 6');
+                    markerSingle.setAttribute('markerWidth', markerW);
+                    markerSingle.setAttribute('markerHeight', markerH);
+                    markerSingle.setAttribute('refX', '9');
+                    markerSingle.setAttribute('refY', '3');
+                    markerSingle.setAttribute('orient', 'auto');
+                    const pathSingle = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathSingle.setAttribute('d', 'M0,0 L0,6 L9,3 z');
+                    pathSingle.setAttribute('fill', color);
+                    markerSingle.appendChild(pathSingle);
+                    defs.appendChild(markerSingle);
+
+                    const markerDouble = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    markerDouble.setAttribute('id', `arrowhead-double-${colorId}`);
+                    markerDouble.setAttribute('viewBox', '0 0 9 6');
+                    markerDouble.setAttribute('markerWidth', markerW);
+                    markerDouble.setAttribute('markerHeight', markerH);
+                    markerDouble.setAttribute('refX', '0');
+                    markerDouble.setAttribute('refY', '3');
+                    markerDouble.setAttribute('orient', 'auto');
+                    const pathDouble = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    pathDouble.setAttribute('d', 'M9,0 L9,6 L0,3 z');
+                    pathDouble.setAttribute('fill', color);
+                    markerDouble.appendChild(pathDouble);
+                    defs.appendChild(markerDouble);
+                });
+
+                this.svgLayer.appendChild(defs);
+
+                // 繪製連接線（⚠️ 支援節點和框架）
+                this.connections.forEach(conn => {
+                    const fromNode = this.nodes.find(n => n.id === conn.from) ||
+                                     this.frames.find(f => f.id === conn.from);
+                    const toNode   = this.nodes.find(n => n.id === conn.to) ||
+                                     this.frames.find(f => f.id === conn.to);
+                    if (!fromNode || !toNode) return;
+
+                    // ⚠️ 關鍵：查詢 DOM 元素以獲取實際渲染尺寸（CSS 可能改變節點大小）
+                    const fromEl = this.canvas.querySelector(`[data-id="${fromNode.id}"]`);
+                    const toEl   = this.canvas.querySelector(`[data-id="${toNode.id}"]`);
+                    const fromWidth  = fromEl ? fromEl.offsetWidth  : fromNode.width;
+                    const fromHeight = fromEl ? fromEl.offsetHeight : fromNode.height;
+                    const toWidth    = toEl   ? toEl.offsetWidth    : toNode.width;
+                    const toHeight   = toEl   ? toEl.offsetHeight   : toNode.height;
+
+                    const fromCenter = { x: fromNode.x + fromWidth / 2,  y: fromNode.y + fromHeight / 2 };
+                    const toCenter   = { x: toNode.x   + toWidth / 2,    y: toNode.y   + toHeight / 2 };
+
+                    const fromRect = { x: fromNode.x, y: fromNode.y, width: fromWidth,  height: fromHeight };
+                    const toRect   = { x: toNode.x,   y: toNode.y,   width: toWidth,    height: toHeight };
+
+                    const fromEdge = this.getEdgePoint(fromRect, fromCenter, toCenter);
+                    const toEdge   = this.getEdgePoint(toRect,   toCenter,   fromCenter);
+
+                    // ⚠️ 手動應用 scale 和 offset（SVG 層不使用 transform）
+                    const x1 = fromEdge.x * this.scale + this.offsetX;
+                    const y1 = fromEdge.y * this.scale + this.offsetY;
+                    const x2 = toEdge.x   * this.scale + this.offsetX;
+                    const y2 = toEdge.y   * this.scale + this.offsetY;
+
+                    const lineColor = conn.color || '#2c3e50';
+                    const colorId = lineColor.replace('#', '');
+
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', x1);
+                    line.setAttribute('y1', y1);
+                    line.setAttribute('x2', x2);
+                    line.setAttribute('y2', y2);
+                    line.setAttribute('stroke', lineColor);
+                    line.setAttribute('stroke-width', '2');
+
+                    if (conn.arrowType === 'single') {
+                        line.setAttribute('marker-end', `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'double') {
+                        line.setAttribute('marker-start', `url(#arrowhead-double-${colorId})`);
+                        line.setAttribute('marker-end',   `url(#arrowhead-single-${colorId})`);
+                    } else if (conn.arrowType === 'dashed') {
+                        // 虛線樣式，無箭頭，用於註解連接
+                        line.setAttribute('stroke-dasharray', '8,4');
+                    }
+                    // 'none' 類型：無箭頭實線，不需要額外設置
+
+                    this.svgLayer.appendChild(line);
+
+                    // 連接線標籤（使用變換後的座標）
+                    if (conn.label) {
+                        const midX = (x1 + x2) / 2;
+                        const midY = (y1 + y2) / 2;
+                        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        text.setAttribute('x', midX);
+                        text.setAttribute('y', midY - 5);
+                        text.setAttribute('text-anchor', 'middle');
+                        text.setAttribute('font-size', '12');
+                        text.setAttribute('fill', '#e74c3c');
+                        text.setAttribute('stroke', 'white');
+                        text.setAttribute('stroke-width', '3');
+                        text.setAttribute('paint-order', 'stroke fill');
+                        text.setAttribute('font-weight', 'bold');
+                        text.textContent = conn.label;
+                        this.svgLayer.appendChild(text);
+                    }
+                });
+            }
+
+            // ⚠️ 計算從矩形中心到邊緣的交點
+            // 注意：不使用 Math.max 限制最小尺寸，以支援小型標籤節點（isLabel: true）
+            getEdgePoint(rect, center, target) {
+                const dx = target.x - center.x;
+                const dy = target.y - center.y;
+                if (dx === 0 && dy === 0) return { x: center.x, y: center.y };
+
+                const halfWidth  = rect.width  / 2;
+                const halfHeight = rect.height / 2;
+
+                let t;
+                if (Math.abs(dx) * halfHeight > Math.abs(dy) * halfWidth) {
+                    t = halfWidth  / Math.abs(dx);
+                } else {
+                    t = halfHeight / Math.abs(dy);
+                }
+
+                return { x: center.x + dx * t, y: center.y + dy * t };
+            }
+
+            updateSVGSize() {
+                const rect = this.container.getBoundingClientRect();
+                this.svgLayer.setAttribute('width',  rect.width);
+                this.svgLayer.setAttribute('height', rect.height);
+            }
+        }
+
+        // Initialize the viewer
+        new MapViewer();
+    </script>
+
+
+</body></html>

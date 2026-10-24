@@ -42,8 +42,13 @@
 ## 🗺️ 4. 視覺化互動概念圖體系 (Interactive Concept Maps)
 
 為解決純文字手冊在複雜圖論拓撲與多維狀態機上的認知負擔，手冊體系採取**「圖文互補、按需增強」**方針：
-* **心智模型先行**：在核心拓撲章節開頭提供互動式 HTML 概念圖（支援縮放、平移與節點探索），使開發者在 30 秒內建立全貌直覺。
-* **概念圖目錄**：所有互動概念圖統一存放於 [manual/conceptmaps/](manual/conceptmaps/) 目錄。
+* **心智模型先行**：在核心拓撲章節開頭提供互動式 HTML 概念圖（支援滑鼠滾輪縮放、平移與節點探索），使開發者在 30 秒內建立全貌直覺。
+* **概念圖目錄**：所有互動概念圖統一存放於 [manual/conceptmaps/](manual/conceptmaps/) 目錄：
+  - 🗺️ **[OuroKore 系統全景與三層邊界互動概念圖](manual/conceptmaps/overview_map.html)**（對應《01. 系統概述與架構哲學》）
+  - 🗺️ **[三大安全句柄與物件圖拓撲全景概念圖](manual/conceptmaps/handles_topology_map.html)**（對應《04. Handle 拓撲管理系統》）
+  - 🗺️ **[自動換頁脫水、墓碑查詢與儲存驅動全景概念圖](manual/conceptmaps/dehydration_lifecycle_map.html)**（對應《05. 自動換頁脫水與儲存驅動》）
+  - 🗺️ **[循環參照收集器與逆向圖論走訪全景概念圖](manual/conceptmaps/cycle_collector_map.html)**（對應《04. Handle 拓撲管理系統》第 2 節與技術手冊《01. 系統架構設計規範》第 3 節）
+  - 🗺️ **[五層單向鎖階層與併發防死鎖全景概念圖](manual/conceptmaps/lock_hierarchy_map.html)**（對應技術手冊《04. 併發模型、鎖階層規範與防死鎖設計》）
 * **文字規範兜底**：各章節 Markdown 文件始終維持作為具有最終工程約束力的標準字典。
 
 ---

@@ -14,6 +14,10 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;  /* IMPORTANT: Prevents connection line issues */
+            user-select: none;       /* 防止滑鼠拖曳畫布時意外選取反白文字 */
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
         }
 
         body {
@@ -220,6 +224,7 @@
                 // ===== 滑鼠事件 =====
                 this.container.addEventListener('mousedown', (e) => {
                     if (e.button === 0) {
+                        e.preventDefault();  // ⚠️ 關鍵：阻止瀏覽器將滑鼠拖曳行為視為反白文字選取
                         this.isPanning = true;
                         this.isMoved = false;
                         this.panStart = { x: e.clientX, y: e.clientY };
@@ -232,6 +237,7 @@
 
                 window.addEventListener('mousemove', (e) => {
                     if (this.isPanning) {
+                        window.getSelection()?.removeAllRanges();  // 清除任何潛在的殘留文字選取
                         this.offsetX += e.clientX - this.panStart.x;
                         this.offsetY += e.clientY - this.panStart.y;
                         this.panStart = { x: e.clientX, y: e.clientY };

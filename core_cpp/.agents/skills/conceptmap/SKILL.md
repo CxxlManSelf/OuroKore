@@ -61,8 +61,14 @@ allowed-tools: "Read, Write, Bash, Glob, Grep"
   - Frame 必須包含：`id, x, y, width, height, label, borderColor, bgColor, zIndex, completed, abandoned`
   - Connection 必須包含：`id, from, to, arrowType, label, color`
 - 所有 ID 必須是字符串格式：`"node-" + Date.now()`
-- CSS 必須包含：`* { box-sizing: border-box; }`
-- Icon 檔案必須與 Map 檔在同一目錄
+- CSS 必須包含：`* { box-sizing: border-box; user-select: none; -webkit-user-select: none; }`
+- **畫布拖曳防文字反白**：`mousedown` 必須調用 `e.preventDefault()`，防止移動畫布時意外框選反白文字
+- **連線禁絕穿透與標籤拐點繞行**：
+  - 長距離或跨層連線必須建立標籤拐點節點（`isLabel: true`）進行繞行，禁止橫穿無關節點
+  - **標籤寫入節點內（Label in Node）**：說明文字一律寫在拐點節點內（`text`），連線上的 `label` 保持為空字串 `""`，避免連線折線疊字紊亂
+  - **虛線註解對稱性（Dashed Waypoint）**：註解虛線經過拐點時，**拐點兩端連線必須同為 `arrowType: "dashed"`**，不可一實一虛
+  - 拐點節點維持嚴格「一進一出」規範
+- Icon 檔案必須與 Map 檔在同一目錄（使用專案指定的 `concept-crafter_icon.png`）
 - **SVG 層不可使用 transform**（搜尋 `svgLayer.style.transform` 應無結果）
 - **必須在瀏覽器中測試後才交付**
 

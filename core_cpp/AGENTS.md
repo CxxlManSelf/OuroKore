@@ -134,6 +134,13 @@
 3. **存放路徑與關聯規範**：
    - 生成的 HTML 互動概念圖統一存放於：`../specs/manual/conceptmaps/`（如 `overview_map.html`）。
    - 對應的 Markdown 章節開頭應以顯著的「🗺️ 互動概念圖導覽」區塊提供點擊連結。
+4. **繪圖佈局、拐點繞行與互動防禦鐵律 (ConceptMap Layout Invariants)**：
+   - **視線直達與禁絕穿透**：連線絕不可隨意橫穿、跨越無關節點造成畫面紊亂；長距離或跨層路徑必須利用標籤節點（Waypoint / Label Node，`isLabel: true`）進行外圍拐彎繞行。
+   - **標籤內嵌原則（Label in Node）**：說明文字一律直接寫在作為拐點的標籤節點內部（`text`），連線本身的 `label` 保持為空字串 `""`，杜絕連線疊字遮擋線條。
+   - **虛線註解對稱性（Dashed Waypoint Invariant）**：虛線（`arrowType: "dashed"`）專用於註解與防護隔離說明；若虛線路徑需要經過拐點繞行，**拐點兩端連線一律強制同為虛線**，嚴禁一實一虛。
+   - **一進一出連線約束**：標籤拐點節點嚴格維持「1 條進入、1 條流出」，實線維持「入邊無箭頭（`none`）、出邊帶箭頭（`single`）」，方向一致。
+   - **畫布拖曳防文字反白（Anti-Selection Invariant）**：全域 CSS 必須包含 `user-select: none;`、`-webkit-user-select: none;`，且 `mousedown` 拖曳啟動時必須調用 `e.preventDefault()`，杜絕滑鼠移動時畫面文字被意外選取反白。
+   - **專屬圖標綁定**：圖標統一採用專案指定之 `concept-crafter_icon.png`，不可遺漏或使用預設佔位符。
 
 ### 3. 目錄連動與終端附錄鐵律
 未來凡是涉及到對外 API 介面、公開調用語意、範本程式碼或應用端開發避坑指南之變更，**必須強制連動更新上一層目錄之應用端文件**：

@@ -1,5 +1,9 @@
 # 01. OuroKore 系統概述與架構哲學
 
+> 🗺️ **互動概念圖導覽**：
+> 閱讀文字手冊前，強烈建議先點擊開啟 **[🗺️ OuroKore 系統全景與三層邊界互動概念圖](conceptmaps/overview_map.html)**（支援滑鼠滾輪縮放與拖曳），30 秒建立對「Host 特權層」、「Core 核心微內核」、「Plugin 隔離區」與「次世代網關層」的全景心智模型！
+
+
 ## 📖 什麼是 OuroKore？
 
 **OuroKore** 是一個專為**超大規模物件圖（Large-Scale Object Graph）**、**極致執行緒安全**、**記憶體吃緊時自動換頁脫水（Dehydration/Rehydration）**以及**藍圖持久化打包（Blueprint Packaging）**所設計的高效能 C++ 領域物件託管系統。

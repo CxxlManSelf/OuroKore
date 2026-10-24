@@ -94,90 +94,66 @@ OuroKore 系統嚴格劃分三大權限與職責邊界，貫徹「**C ABI 為底
 
 ## 🧬 3. 循環參照收集演算法規範 (Cycle Collection Algorithm)
 
-OuroKore 採用非同步 Bacon-Rajan 試探性減計數圖論演算法（Trial Deletion），安全偵測由強擁有權邊緣形成的孤島環路。
-以下使用**中性結構化演算法偽代碼（Neutral Algorithmic Pseudocode）**完整定義其處理邏輯：
+> 🗺️ **互動概念圖導覽**：
+> 強烈建議點擊開啟 **[🗺️ 循環參照收集器與逆向圖論走訪全景概念圖](../manual/conceptmaps/cycle_collector_map.html)**（支援平滑拖曳與滾輪縮放），直觀掌握「單一背景執行緒架構」、「Upstream BFS 逆向快照走訪」、「HandleID 升冪排序防哲學家死鎖」與「外科手術式靜音斷鏈 (Silent Unbind)」的四層防禦全景！
 
-```text
-Algorithm: BaconRajanCycleCollection
+OuroKore 放棄了傳統複雜易錯的多階段試探性減計數染色法，採用了現代化、極高併發且零死鎖的**「非同步逆向溯源走訪 (Upstream BFS) + 四層防禦二階段確認 (Two-Phase Lock & Verify) + 外科手術式靜音斷鏈 (Silent Unbind)」**演算法，專職負責將無根循環參照孤島（Cyclic Garbage）進行純物理銷毀。
 
-Global State:
-    SuspectQueue: Queue of Reference<ControlBlock>
-    DeferredDeleteQueue: Queue of Reference<ControlBlock>
+---
 
-Procedure RegisterSuspect(node):
-    If node.color != PURPLE Then
-        node.color = PURPLE
-        SuspectQueue.Push(node)
-    End If
-End Procedure
+### 3.1 核心架構約束與設計定理
 
-Procedure CollectCycles():
-    // 階段一：試探性減去內部邊緣 (MarkGray)
-    For Each suspect In SuspectQueue Do
-        If suspect.color == PURPLE Then
-            MarkGray(suspect)
-        Else
-            SuspectQueue.Remove(suspect)
-        End If
-    End For
+1. **嚴格單一背景執行緒架構 (Single Background Worker Thread)**：
+   - **定理**：圖結構之反向走訪在多執行緒併發下必然遭遇不同執行緒以反向順序索取節點鎖，引發典型的「哲學家就餐死鎖（Dining Philosophers Problem）」，且伴隨嚴重的 CPU 快取顛簸。
+   - **解法**：核心強制規定全進程僅由唯一背景執行緒（`WorkerLoop`）執行孤島分析與破壞，徹底消滅走訪死鎖與爭搶。
+2. **純物理銷毀定理 (Physical Destruction Only)**：
+   - 循環回收器處理的孤島在語意上已被全域拋棄，**嚴禁在收集過程中觸碰脫水（Dehydration）或藍圖打包（PackBlueprint）**，直接純記憶體釋放，零多餘 I/O。
+3. **序號同步屏障 (Sequence Barrier: `CollectCyclesExplicit`)**：
+   - 供單元測試或宿主顯式調度，外部調用端僅透過序號屏障委託單一背景執行緒消化排隊批次，調用端在條件變數上安全阻塞等待，徹底消滅跨執行緒 Data Race。
 
-    // 階段二：掃描根可達性 (ScanRoots)
-    For Each suspect In SuspectQueue Do
-        Scan(suspect)
-    End For
+---
 
-    // 階段三：孤島斷鏈與延遲回收 (CollectWhite)
-    For Each suspect In SuspectQueue Do
-        SuspectQueue.Remove(suspect)
-        CollectWhite(suspect)
-    End For
-End Procedure
+### 3.2 演算法處理管線 (Pipeline)
 
-Procedure MarkGray(node):
-    If node.color != GRAY Then
-        node.color = GRAY
-        For Each child In node.RegisteredOutgoingEdges Do
-            child.local_in_count = child.local_in_count - 1
-            MarkGray(child)
-        End For
-    End If
-End Procedure
+#### 階段一：嫌疑犯 O(1) 入隊與批次去重 (Suspect Ingestion & Deduplication)
+- 當調用 `ork_unregister_edge` 斷開強擁有邊緣時，若目標物件 `StrongCount > 0`（代表仍有其他引用或內部互指殘留），透過 CAS 原語原子搶入 `m_in_suspect_queue` 標記。
+- 搶入成功者推入 `m_suspect_queue` 並發送信號喚醒背景清潔工；若收集器已停機，復位標記並早退，連互斥鎖都不必爭搶。
+- 收集器被喚醒後，以 `current_batch.swap(m_suspect_queue)` 在微秒級鎖內整批取出，並在批次內透過 `unordered_set` 去重，消除同環多節點引發的冗餘重複走訪。
 
-Procedure Scan(node):
-    If node.color == GRAY Then
-        If node.local_in_count > 0 Or node.root_count > 0 Then
-            ScanBlack(node)
-        Else
-            node.color = WHITE
-            For Each child In node.RegisteredOutgoingEdges Do
-                Scan(child)
-            End For
-        End If
-    End If
-End Procedure
+#### 階段二：雙重存活審查 (Double-Check Guard)
+- 提取嫌疑犯時，若物件已被標記為正在拆解（`m_is_destructing == true`）或其強計數已歸零（`StrongCount == 0`，代表已被業務執行緒或 `DeferredDeleteQueue` 接管），立即重置標記並安全略過。
 
-Procedure ScanBlack(node):
-    node.color = BLACK
-    For Each child In node.RegisteredOutgoingEdges Do
-        child.local_in_count = child.local_in_count + 1
-        If child.color != BLACK Then
-            ScanBlack(child)
-        End If
-    End For
-End Procedure
+#### 階段三：微秒級快照與逆向圖論走訪 (Upstream BFS & Micro-Snapshot)
+- 從嫌疑犯出發，依據 `ControlBlock::m_owners` 逆向名冊逐級向上廣度優先回溯（BFS）：
+  1. **微秒級快照 (Micro-Snapshot)**：僅在極短時間獲取節點之 `m_owners_mutex`，複製其快照後立即釋放鎖，絕不在持鎖狀態下遞迴走訪。
+  2. **外部存活根早退 (Root Early Exit)**：
+     - 若節點入度為 0（非閉環依賴）；
+     - 或觸及 `ORK_ROOT_ID`（代表有棧上 `OuroPtr` 根引用活躍持有）；
+     - 或上游 owner 為外部非受管節點（Registry 查無 ControlBlock）；
+     - 或上游 owner 正處於兩階段構造預留態（`m_is_reserved == true`）；
+     - **✨ 立即判定為外部存活！立刻中斷 BFS 早退，絕不破壞該物件圖！**
+  3. **visited 集合單次走訪防環**：基於即時快照嚴格審查，走訪結束即銷毀集合，無跨次過期快取毒化風險。
 
-Procedure CollectWhite(node):
-    If node.color == WHITE And Not node.IsInDeferredDeleteQueue Then
-        node.color = BLACK
-        // 外科手術斷鏈：原子清除所有出邊，觸發計數歸零並移交延遲銷毀隊列
-        node.ReleaseAllOutgoingEdges()
-        DeferredDeleteQueue.Push(node)
-        For Each child In node.RegisteredOutgoingEdges Do
-            CollectWhite(child)
-        End For
-    End If
-End Procedure
-```
+#### 階段四：四層防禦協議之孤島二階段確認 (DestructIsland Four-Tier Protocol)
+若 Upstream BFS 回溯完成且未觸及任何外部存活根，該連通分量初步判定為死結孤島，隨後啟動嚴格的四層防禦協議進行二階段確認：
+1. **第一層防禦：HandleID 升冪排序**：
+   - 將孤島全體節點按 64 位元 `HandleID` 數值由小到大嚴格升冪排序（`std::sort`），徹底杜絕多鎖依序鎖定時的反向死鎖。
+2. **第二層防禦：弱引用 Pin 守衛生命週期釘住 (Pinning)**：
+   - 遍歷升冪清單，為每個節點獲取 `ControlBlockPinGuard`。在釘住期間各節點 `weak_count >= 1`，保證併發業務執行緒絕無法銷毀任何一個 ControlBlock 墓碑，100% 杜絕釋放後使用（UAF）。
+3. **第三層防禦：全體鎖定二次複查 (Two-Phase Lock & Verify)**：
+   - 依升冪順序逐一獲取全體孤島節點之 `m_owners_mutex`。
+   - 二次檢查孤島全體成員的存活態與 `m_owners`：若孤島內任何節點之 owner 位於孤島集合之外（例如在排隊間隙有其他執行緒併發加邊連回 Root 或外部），**孤島已宣告復活，收集器立即解開所有鎖並全盤放棄拆解！**
+4. **第四層防禦：原子標記 Destructing 態**：
+   - 經複查確認為封閉孤島後，對全體孤島節點原子標記 `m_is_destructing = true`。
+   - 此標記徹底封鎖外部任何併發加邊請求，並阻止殭屍物件死者甦醒。
+
+#### 階段五：外科手術式靜音斷鏈與延遲銷毀交棒 (Silent Unbind & Deferred Deletion)
+1. 解開所有 `m_owners_mutex` 鎖。
+2. 逐一調用 `Registry::UnregisterEdge(owner, target, silent=true)`，以靜音模式切斷孤島成員間的相互強擁有邊緣。
+   - `silent=true` 靜音模式保證斷鏈時不會再次向嫌疑犯佇列推入多餘項目。
+3. 邊緣切斷後，孤島節點的強引用計數（`StrongCount`）自然遞減至 0。
+4. 核心自動將其移交至 `DeferredDeleteQueue`（延遲銷毀佇列），由平級佇列平行壓平解構釋放肉體記憶體。
+5. **收集器本身絕不卡在解構耗時上**，移交完畢後立即回頭處理下一批嫌疑犯，保證進程級背景清潔的高吞吐與低延遲！
 
 ---
 

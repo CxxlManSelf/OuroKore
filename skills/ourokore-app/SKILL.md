@@ -14,7 +14,7 @@ description: "OuroKore 應用端與第三方外掛開發指南、領域物件設
 1. **零裸指標與 ControlBlock 託管**：
    - 領域物件嚴格繼承 `ork::Subclass<T, Base = ork::OuroObject>`，嚴禁直接裸 new。
    - 物件生命週期由全域唯一 `HandleID` 與 ControlBlock 託管。
-   - 拓撲持有：雙向關聯 100% 使用 `OwningHandle<T>`，背景 `CycleCollector` 自動消化破環。
+   - 拓撲持有：業務圖內部雙向互指 100% 大膽直接使用 `OwningHandle<T>`。背景單一執行緒 `CycleCollector` 自動透過 Upstream BFS 逆向走訪偵測孤島，並以四層防禦協議（HandleID 升冪排序防哲學家死鎖、Pin 釘住、二次確認）執行外科手術式靜音斷鏈（Silent Unbind），移交 `DeferredDeleteQueue` 平行壓平物理釋放，徹底消滅傳統 `std::weak_ptr` 手動破環的心智負擔！
    - 旁路觀察：外掛隨時卸載防卡死使用 `UnboundHandle<T>`，絕不釘死對方。
    - 棧上呼叫：一律使用 `OuroPtr<T>` 根引用守衛，透過成員指標存取，杜絕指標逃逸。
 2. **自動脫水與透明復水**：
