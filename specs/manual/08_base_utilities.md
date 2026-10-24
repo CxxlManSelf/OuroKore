@@ -548,9 +548,99 @@ Base 基礎層秉持「零依賴、純通用、防範破壞外掛 Heap 隔離」
 * ❌ **巨型外掛註冊中心與 SemVer 解析器**：外掛版本相依直接由不可變 CID 釘死，目錄尋址採階層標籤（Vendor/Plugin/Version），已剔除。
 * ❌ **全域事件匯流排 (EventBus)**：堅決捍衛「組裝即拓撲」的圖論顯式依賴，防範隱式廣播產生懸空回呼與野指標，已剔除。
 
-### 7.3 即將落地之 4 大通用基礎工具
-為無縫支援外部次世代零件網關外掛 OrkGatewayDriver，Base 庫聚焦於補齊以下 4 項純通用基礎工具：
-1. **SHA256.hpp / CID.hpp**：純 C++ 零外部依賴之 SHA-256 運算與標準 Multihash (CIDv1) 格式化編碼。
-2. **FileUtils.hpp**：二進位全檔讀寫、**原子防損毀寫入（WriteAllBytesAtomic，先寫同目錄 .tmp 後以 OS 原生 API 原子替換）**與目錄遞迴建立。
-3. **Endian.hpp**：基於 C++20 <bit> 強制小端序讀寫，保證跨 CPU 架構 CID 雜湊 100% 一致。
-4. **PathUtils.hpp**：三段式標籤拆解（Vendor/Plugin/ver）、**防路徑穿越（Path Traversal 防禦）**與跨平台路徑正規化。
+### 7.3 已落地之 4 大通用基礎工具 (已全數通過單元測試)
+為無縫支援外部次世代零件網關外掛 `OrkGatewayDriver` 與 CAS 內容定址儲存，`ourokore_base` 基礎庫正式落地以下 4 項純通用輕量工具（位於 `include/ourokore/base/`），全數以 ISO C++23 撰寫、零外部第三方程式庫依賴、無 Windows bcrypt.lib 連結負擔，並 100% 通過單元測試：
+
+#### 1. Endian.hpp（跨架構強制小端序讀寫）
+* **標頭檔**：`<ourokore/base/Endian.hpp>`
+* **命名空間**：`ork::base::endian`
+* **核心功能**：
+  - 基於 C++20 `<bit>`（`std::endian::native` 與 `std::byteswap`）實現編譯期常數評估與零開銷位元組序轉換。
+  - 提供 `write_uint16_le`、`write_uint32_le`、`write_uint64_le` 與對應的浮點數 `write_float32_le`、`write_float64_le`。
+  - 提供支援記憶體邊界防護的 safe span 讀取原語 `read_le_checked<T>(std::span<const uint8_t>, size_t offset)`，若緩衝區越界則返回 `std::nullopt`。
+* **使用範例**：
+```cpp
+#include <ourokore/base/Endian.hpp>
+
+uint8_t buffer[8];
+ork::base::endian::write_uint32_le(buffer, 0x12345678);
+uint32_t val = ork::base::endian::read_uint32_le(buffer); // 0x12345678
+
+// 帶邊界安全檢查之讀取
+auto safe_val = ork::base::endian::read_le_checked<uint32_t>(buffer, 0);
+if (safe_val) {
+    // 成功解析 safe_val.value()
+}
+```
+
+#### 2. Sha256.hpp（純 CPU SHA-256 與 CidV1 內容定址）
+* **標頭檔**：`<ourokore/base/Sha256.hpp>`
+* **命名空間**：`ork::base`
+* **核心功能**：
+  - 符合 FIPS PUB 180-4 與 RFC 6234 標準之純 CPU SHA-256 密碼學雜湊演算法。
+  - 支援串流增量雜湊（`Sha256 ctx; ctx.update(data); auto hash = ctx.finalize();`）與一次性靜態計算（`Sha256::hash(data)`）。
+  - 整合不可變零件規格落盤之標準 Multihash（CIDv1）結構體 `CidV1`（總長 34 位元組：前綴 `0x12` (sha2-256)、`0x20` (32 bytes)，後接 32 位元組 SHA-256 雜湊）。
+  - 提供 16 進位字串格式化（`to_hex()`）與 Multihash 十六進位輸出（`to_string()`）。
+* **使用範例**：
+```cpp
+#include <ourokore/base/Sha256.hpp>
+
+// 計算二進位資料之 SHA-256 與 CID
+std::string payload = "OuroKore Part Blueprint v1.0";
+auto hash = ork::base::Sha256::hash(payload);
+ork::base::CidV1 cid = ork::base::Sha256::compute_cid(payload);
+
+std::cout << "SHA-256: " << hash.to_hex() << std::endl;
+std::cout << "CIDv1:   " << cid.to_string() << std::endl;
+```
+
+#### 3. FileUtils.hpp（二進位 I/O 與原子防損毀寫入）
+* **標頭檔**：`<ourokore/base/FileUtils.hpp>`
+* **命名空間**：`ork::base::fs`
+* **核心功能**：
+  - **原子防損毀覆寫（`atomic_write`）**：落盤時先寫入同目錄之隨機臨時檔（`.tmp_PID_TID_RAND`），寫入完畢後強制調用系統刷盤（Windows: `FlushFileBuffers`，POSIX: `fsync`），最後利用作業系統原生 API（Windows: `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)`，POSIX: `rename`）進行原子替換。即使寫入過程突遇斷電或程式崩潰，原檔案絕不損壞。
+  - 一次性讀取全檔位元組（`read_all_bytes`）與 UTF-8 文字（`read_all_text`）。
+  - 遞迴目錄建立（`ensure_directory`）、檔案存在判定（`exists`）與檔案安全刪除（`remove_file`）。全數返回 C++23 `Result<T>`。
+* **使用範例**：
+```cpp
+#include <ourokore/base/FileUtils.hpp>
+
+// 原子無損寫入檔案
+std::vector<uint8_t> data = { 0x01, 0x02, 0x03, 0x04 };
+auto write_res = ork::base::fs::atomic_write("configs/part_spec.bin", data);
+if (!write_res) {
+    std::cerr << "原子寫入失敗: " << write_res.error().message() << std::endl;
+}
+
+// 讀取全檔
+auto read_res = ork::base::fs::read_all_bytes("configs/part_spec.bin");
+if (read_res) {
+    std::cout << "成功讀取位元組數: " << read_res->size() << std::endl;
+}
+```
+
+#### 4. PathUtils.hpp（三段式標籤解析與目錄穿越防禦）
+* **標頭檔**：`<ourokore/base/PathUtils.hpp>`
+* **命名空間**：`ork::base::path`
+* **核心功能**：
+  - **三段式工廠標籤解析（`parse_factory_tag`）**：嚴格驗證並拆解 `Vendor/Plugin/Version` 標籤字串，防範非法字元與非法格式，提供外掛工廠依階層快速尋址。
+  - **目錄穿越防禦（`is_safe_relative_path`）**：嚴密阻截包含 `../`、`..\`、絕對路徑、Windows 磁碟代號（如 `C:`）或非法控制字元之惡意相對路徑，保護宿主目錄安全。
+  - **跨平台路徑正規化（`normalize`）**：統一將 Windows 反斜線轉換為正規正斜線（`/`），折疊重複斜線與 `./`。
+  - **安全路徑拼接（`combine_safe`）**：將基礎目錄與相對路徑安全拼接，若相對路徑偵測到穿越企圖則拒絕拼接並返回錯誤。
+* **使用範例**：
+```cpp
+#include <ourokore/base/PathUtils.hpp>
+
+// 1. 三段式標籤拆解
+auto tag_res = ork::base::path::parse_factory_tag("EpicGames/ChaosEngine/v1.2.0");
+if (tag_res) {
+    std::cout << "Vendor:  " << tag_res->vendor << std::endl;
+    std::cout << "Plugin:  " << tag_res->plugin << std::endl;
+    std::cout << "Version: " << tag_res->version << std::endl;
+}
+
+// 2. 阻截路徑穿越攻擊
+bool safe = ork::base::path::is_safe_relative_path("../../Windows/System32/evil.dll");
+// safe == false，成功攔截！
+```
+

@@ -254,3 +254,31 @@ OuroKore 透過**「維度解耦（Dimensional Decoupling）」**完美調和此
 2. **規格與持久化標籤**：**100% 唯一只認 CID**。
    - 徹底廢除全域 UUID 映射機制與相關系統庫依賴。
 3. **網關隔離**：次世代零件能力由外掛驅動 **OrkGatewayDriver** 實現，核心引擎保持零更動。
+
+### 7.3 次世代基礎工具鏈架構賦能 (Base Utilities Foundation for Gateway)
+為讓 `OrkGatewayDriver` 外掛能以最高效能與最高安全性完成零件管理，`ourokore_base` 基礎庫在架構底層提供了 4 大專屬工具基石（純 C++23、零外部依賴、純 CPU 運算）：
+
+```
+                 [ OrkGatewayDriver 次世代網關 ]
+                                │
+        ┌───────────────────────┼───────────────────────┐
+        ▼                       ▼                       ▼
+  [ Endian.hpp ]          [ Sha256.hpp ]         [ FileUtils.hpp ]
+  強制 Little-Endian    純 CPU Multihash CID    Crash-Resistant 原子落盤
+  (跨 CPU 決定性佈局)     (0x12 0x20 + SHA-256)   (Flush + MoveFileExW)
+                                │
+                                ▼
+                         [ PathUtils.hpp ]
+                      Vendor/Plugin/Version 標籤
+                      與沙盒目錄穿越 (../) 攔截防禦
+```
+
+1. **跨架構決定性佈局 (`Endian.hpp`)**：
+   - 確保所有不可變規格藍圖在寫入二進位串流與計算雜湊前，強制採用 Little-Endian。消弭跨架構差池，保證跨平台產生的 CID 100% 吻合。
+2. **純 CPU 零依賴 CAS 內容定址 (`Sha256.hpp` / `CidV1`)**：
+   - 符合 RFC 6234，零外部密碼庫依賴（徹底移除 Windows `bcrypt.lib` 與 OpenSSL 鏈結負擔），提供純 CPU 增量與一次性計算，封裝標準 34 位元組 Multihash (`0x12, 0x20 + 32-byte hash`)。
+3. **物理級防損毀原子寫入 (`FileUtils.hpp`)**：
+   - CAS 內容定址庫要求檔案一旦落盤便永不損毀。工具庫採用三階段物理保證：**「同目錄隨機暫存檔寫入 ➔ 磁碟強制刷盤 (`FlushFileBuffers` / `fsync`) ➔ OS 原生原子替換 (`MoveFileExW` / `rename`)」**。即使遭遇突發斷電，原檔案絕對無損。
+4. **階層標籤解析與目錄穿越隔離 (`PathUtils.hpp`)**：
+   - 提供 `parse_factory_tag` 嚴格驗證三段式工廠提示（`Vendor/Plugin/Version`），並以 `is_safe_relative_path` 在路徑拼接前嚴密阻截 `../`、`..\\` 與磁碟機代號等穿越企圖，徹底捍衛宿主檔案沙盒。
+

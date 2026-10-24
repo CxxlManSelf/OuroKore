@@ -258,7 +258,85 @@
 
 ---
 
-## 🌐 13. 底層純 C ABI（Cross-Language FFI）分類索引
+## 🛠️ 13. 次世代網關與 CAS 基礎工具庫：`ork::base`
+
+為次世代不可變零件規格、內容定址落盤與 `OrkGatewayDriver` 提供零外部依賴之純通用 C++23 工具基石：
+
+### 13.1 跨架構小端序轉換：`ork::base::endian`
+* **標頭檔**：`<ourokore/base/Endian.hpp>`
+* **常數與查詢**：
+  * `constexpr bool is_little_endian() noexcept`
+  * `constexpr bool is_big_endian() noexcept`
+* **位元組序轉換**：
+  * `constexpr T to_little_endian(T value) noexcept`
+  * `constexpr T from_little_endian(T value) noexcept`
+* **固定大小寫入與讀取**：
+  * `void write_uint16_le(uint8_t *dst, uint16_t val) noexcept`
+  * `uint16_t read_uint16_le(const uint8_t *src) noexcept`
+  * `void write_uint32_le(uint8_t *dst, uint32_t val) noexcept`
+  * `uint32_t read_uint32_le(const uint8_t *src) noexcept`
+  * `void write_uint64_le(uint8_t *dst, uint64_t val) noexcept`
+  * `uint64_t read_uint64_le(const uint8_t *src) noexcept`
+  * `void write_float32_le(uint8_t *dst, float val) noexcept`
+  * `float read_float32_le(const uint8_t *src) noexcept`
+  * `void write_float64_le(uint8_t *dst, double val) noexcept`
+  * `double read_float64_le(const uint8_t *src) noexcept`
+* **邊界安全讀取原語**：
+  * `std::optional<T> read_le_checked<T>(std::span<const uint8_t> buffer, size_t offset = 0) noexcept`
+
+---
+
+### 13.2 純 CPU SHA-256 與 Multihash CIDv1：`ork::base::Sha256` / `ork::base::CidV1`
+* **標頭檔**：`<ourokore/base/Sha256.hpp>`
+* **不可變內容定址標識 `CidV1`**：
+  * 34 位元組標準 Multihash：前綴包含 `0x12` (SHA-256)、`0x20` (32 Bytes)，後接 32 位元組之摘要。
+  * `std::string to_string() const`：輸出 68 字元之十六進位 Multihash 字串。
+  * `std::string to_hex() const`：輸出 64 字元之原生 SHA-256 十六進位字串。
+  * `static Result<CidV1> from_multihash_hex(std::string_view hex)`：自 Multihash 十六進位反序列化。
+  * `static Result<CidV1> from_raw_sha256_hex(std::string_view hex)`：自原生 SHA-256 十六進位建立。
+  * `operator==` / `operator<=>` 支援完整值比較與關聯式容器鍵。
+* **純 CPU SHA-256 計算器 `Sha256`**：
+  * 符合 FIPS PUB 180-4 / RFC 6234，零外部密碼庫依賴。
+  * 串流雜湊：`void update(const void *data, size_t length)` / `void update(std::span<const uint8_t>)`
+  * `HashResult finalize() noexcept`
+  * 靜態一次性計算：`static HashResult hash(const void *data, size_t length)`、`static HashResult hash(std::string_view / span)`
+  * 內容定址便捷方法：`static CidV1 compute_cid(const void *data, size_t length)`、`static CidV1 compute_cid(std::string_view / span)`
+
+---
+
+### 13.3 二進位全檔 I/O 與原子防損毀寫入：`ork::base::fs`
+* **標頭檔**：`<ourokore/base/FileUtils.hpp>`
+* **核心方法（全數返回 C++23 `Result<T>`）**：
+  * `Result<void> atomic_write(const std::filesystem::path &path, std::span<const uint8_t> data)`：先寫入同目錄 `.tmp` 暫存檔，調用系統刷盤（FlushFileBuffers / fsync）後，執行 OS 原生原子覆寫（Windows: MoveFileExW，POSIX: rename）。
+  * `Result<void> atomic_write_text(const std::filesystem::path &path, std::string_view text)`
+  * `Result<std::vector<uint8_t>> read_all_bytes(const std::filesystem::path &path)`
+  * `Result<std::string> read_all_text(const std::filesystem::path &path)`
+  * `Result<void> ensure_directory(const std::filesystem::path &path)`
+  * `bool exists(const std::filesystem::path &path) noexcept`
+  * `Result<void> remove_file(const std::filesystem::path &path)`
+  * `Result<uint64_t> get_file_size(const std::filesystem::path &path)`
+
+---
+
+### 13.4 三段式標籤解析與目錄穿越防禦：`ork::base::path`
+* **標頭檔**：`<ourokore/base/PathUtils.hpp>`
+* **三段式工廠標籤結構體 `FactoryTag`**：
+  * `std::string vendor`
+  * `std::string plugin`
+  * `std::string version`
+  * `std::string to_string() const`：還原為 `"Vendor/Plugin/Version"`
+* **核心路徑方法**：
+  * `Result<FactoryTag> parse_factory_tag(std::string_view tag_str)`：解析三段式標籤，驗證合法字元（`[a-zA-Z0-9_.-]`），阻絕穿越與非法格式。
+  * `bool is_safe_relative_path(std::string_view rel_path) noexcept`：嚴格阻截包含 `../`、`..\`、磁碟機代號或根目錄之穿越攻擊。
+  * `std::string normalize(std::string_view path)`：跨平台路徑正規化（統一正斜線 `/`，消除重複斜線與 `./`）。
+  * `Result<std::string> combine_safe(std::string_view base_dir, std::string_view rel_path)`：安全路徑拼接（防範穿越目標跳出 base_dir）。
+  * `std::string get_filename(std::string_view path)`
+  * `std::string get_extension(std::string_view path)`
+  * `std::string get_parent_path(std::string_view path)`
+
+---
+
+## 🌐 14. 底層純 C ABI（Cross-Language FFI）分類索引
 所有底層操作保證跨 DLL 邊界零例外逃逸，完整清單與參數規格請參見《[03. 純 C ABI 規格與記憶體佈局規範](../technical/03_c_abi_and_memory.md)》：
 * **類別 A：物件生命週期與工廠**（`ork_create_object`、`ork_retain_object`、`ork_release_object`、`ork_acquire_object_pointer`、`ork_release_object_pointer`）
 * **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_is_payload_loaded`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）

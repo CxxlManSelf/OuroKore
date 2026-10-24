@@ -126,11 +126,19 @@ End Interface
 
 * **Key-Value 格式**：儲存驅動以 `HandleID (UInt64)` 為唯一 Key，以本規範定義的兩段式二進位串流為 Value。
 * **跨語言相容性**：無論底層介質採用本機檔案（File Storage）、記憶體（InMemoryStorage）、SQLite 或分散式 KV 資料庫，其儲存的資料二進位 Payload 均完全相同，可直接被不同語言之 OuroKore 核心交換讀取。
-* **次世代內容定址協議 (CAS & CID Wire Format 展望)**：
-  - 在次世代網關外掛（OrkGatewayDriver）中，落盤與傳輸格式升級為標準內容定址（CAS）。
-  - 物件規格與狀態藍圖之雜湊採用標準 CIDv1 (Multihash)：前綴包含 0x12 (SHA-256) 與 0x20 (32 Bytes 長度)，後接 32 位元組之 SHA-256 摘要。
-  - **Zero-UUID 保證**：二進位資料串流與藍圖名冊中，徹底揚棄隨機 UUID 格式，僅允許 64 位元 HandleID（進程內）與標準 CID（外部符號）兩種定址形式。
-
+* **次世代內容定址協議 (CAS & CID Wire Format 規範與已落地基礎庫支援)**：
+  - 在次世代零件網關外掛（`OrkGatewayDriver`）中，落盤與 CAS 尋址格式全面標準化為內容定址（Content Addressing）。
+  - **不可變 CIDv1 二進位與傳輸佈局**：
+    - 物件規格與狀態藍圖之雜湊採用純 CPU SHA-256 密碼學標準（RFC 6234），二進位固定為 34 位元組之標準 Multihash：
+      `[0x12 (sha2-256: 1 Byte)] [0x20 (hash_len=32: 1 Byte)] [32-Byte SHA-256 Hash]`
+    - 十六進位字串輸出格式固定為 68 個十六進位小寫字元（例如 `1220ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`）。
+  - **Zero-UUID 保證**：
+    - 二進位資料串流、藍圖名冊與儲存層中，徹底揚棄隨機 UUID 格式，僅允許 64 位元整數 `HandleID`（進程內記憶體快速尋址）與標準 `CIDv1`（外部規格與不可變 CAS 定址）雙軌身分標識。
+  - **基礎層 4 大工具鏈支援**：
+    - `Endian.hpp`：強制 Little-Endian，消弭 CPU 架構差異，保證相同藍圖產出 100% 相同之 CID。
+    - `Sha256.hpp` / `CidV1`：純 CPU 零外部密碼庫依賴，直接以 `compute_cid(span)` 與 `from_multihash_hex()` 進行極速離線校驗。
+    - `FileUtils.hpp`：CAS 落盤強制採用 `atomic_write` 三階段原子防損毀保證（同目錄暫存檔 ➔ `FlushFileBuffers` 刷盤 ➔ `MoveFileExW` 原子覆寫），杜絕斷電損壞。
+    - `PathUtils.hpp`：工廠尋址採三段式標籤 `parse_factory_tag`（`Vendor/Plugin/Version`），並以 `is_safe_relative_path` 嚴密封殺路徑穿越（`../`）漏洞。
 
 ---
 

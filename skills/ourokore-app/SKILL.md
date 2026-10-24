@@ -322,7 +322,37 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
    - 應用端開發時，切勿向核心索求或傳遞 UUID；若特定業務個體需要實體錨點（Instance Anchor），應採用**創世雜湊（Genesis CID）**或**語意階層字串（如 player/hero_01）**。
 3. **階層式零件尋址與網關防護 (OrkGatewayDriver)**：
    - **能力契約宣告**：使用端在創世建立零件時，僅需持抽象介面（如 IWeapon）與三段式工廠提示（Vendor/Plugin/Version），透過 OrkGatewayDriver 取得物件。
-   - **核心零變更**：網關產出之物件在核心眼中與標準 ork::CreateObject 完全相同，生命週期完整受 ControlBlock 與 CycleCollector 守護。
+   - **網關基礎工具庫支援**：`ourokore_base` 原生提供 4 大通用工具：跨架構小端序轉換（`Endian.hpp`）、純 CPU SHA-256 與 Multihash CIDv1（`Sha256.hpp`）、原子防損毀檔案落盤（`FileUtils.hpp`）以及三段式標籤拆解與目錄穿越防禦（`PathUtils.hpp`），以現代 C++23 值語意（`Result<T>`）支援網關驅動。
+4. **網關與 CAS 輕量基礎工具範本 (Gateway & CAS Utilities CheatSheet)**：
+```cpp
+#include <ourokore/base/Endian.hpp>
+#include <ourokore/base/Sha256.hpp>
+#include <ourokore/base/FileUtils.hpp>
+#include <ourokore/base/PathUtils.hpp>
+
+// 1. 純 CPU 計算不可變藍圖之 Multihash CIDv1 (34 位元組)
+std::string blueprint_data = "PartSpec:LaserCannon_v1";
+ork::base::CidV1 cid = ork::base::Sha256::compute_cid(blueprint_data);
+std::string cid_str = cid.to_string(); // 68 位元組十六進位 Multihash (0x12 0x20 ...)
+
+// 2. 跨架構小端序編碼與安全邊界讀取
+uint8_t buffer[16];
+ork::base::endian::write_uint32_le(buffer, 0x12345678);
+auto safe_val = ork::base::endian::read_le_checked<uint32_t>(buffer, 0); // std::optional<uint32_t>
+
+// 3. CAS 落盤：三階段物理防損毀原子寫入 (先寫 .tmp -> flush -> MoveFileExW/rename)
+std::vector<uint8_t> payload = { /* binary data */ };
+auto write_res = ork::base::fs::atomic_write("cas_store/" + cid_str + ".bin", payload);
+if (!write_res) {
+    // 寫入失敗處理 write_res.error().message()
+}
+
+// 4. 三段式工廠提示拆解與目錄穿越攻擊阻截
+auto tag_res = ork::base::path::parse_factory_tag("Epic/WeaponPlugin/v2.1.0");
+if (tag_res && ork::base::path::is_safe_relative_path("addons/weapon.dll")) {
+    auto full_path = ork::base::path::combine_safe("C:/Plugins", "addons/weapon.dll");
+}
+```
 ---
 
 ## 🗺️ 11. 文件建立與 ConceptMap 視覺化維護原則 (Documentation & Visual Evolution)
