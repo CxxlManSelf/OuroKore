@@ -282,3 +282,31 @@ OuroKore 透過**「維度解耦（Dimensional Decoupling）」**完美調和此
 4. **階層標籤解析與目錄穿越隔離 (`PathUtils.hpp`)**：
    - 提供 `parse_factory_tag` 嚴格驗證三段式工廠提示（`Vendor/Plugin/Version`），並以 `is_safe_relative_path` 在路徑拼接前嚴密阻截 `../`、`..\\` 與磁碟機代號等穿越企圖，徹底捍衛宿主檔案沙盒。
 
+### 7.4 宿主特權能力裝配與 WASM 沙盒標準介面 (IPartProvider & Capability Pattern)
+為解決 WebAssembly (WASM) 沙盒環境下「WASM 模組如何安全獲取其所需的依賴 WASM 零件」之核心命題，OuroKore 確立了「**能力導向（Capability-Based）的兩階解耦架構**」：
+
+```
+  [ OrkGatewayDriver ] ──(注入)──> [ HostContext (特權主控) ]
+                                            │
+                                            │ CreatePartProvider() (最小特權裁切)
+                                            ▼
+                                   [ IPartProvider 抽象標準 ]
+                                            │
+                       ┌────────────────────┴────────────────────┐
+                       ▼                                         ▼
+            [ 主程式原生調用 ]                          [ 傳遞給 WASM 沙盒 ]
+         (Direct Native Access)                    (WASM Import / Object Capability)
+```
+
+1. **核心標準介面 (`IPartProvider`) 與外掛解耦**：
+   - `IPartProvider` 為 OuroKore 官方 SDK 標準契約，不依賴任何特定外掛實作。
+   - 包含兩大標準能力：
+     * **`CreateNewPart(factory_tag, init_params)`**：全新零件創生生成。
+     * **`RestorePart(persistence_id)`**：自 CAS 不可變藍圖（CIDv1）或永續識別碼還原物件。
+2. **宿主特權裝配模式 (`HostContext::CreatePartProvider`)**：
+   - 宿主以最高特權持有 `HostContext`，將動態載入之 `OrkGatewayDriver` 注入，裝配產出安全的 `std::shared_ptr<IPartProvider>`。
+   - 產出之介面**嚴格剔除**關閉核心、強制 GC、儲存驅動切換等進程級特權，符合最小特權原則 (ISP)。
+3. **WASM 跨沙盒安全閉環**：
+   - 宿主將 `IPartProvider` 作為受管能力權柄（Capability Handle）傳遞給 WASM 實例。
+   - WASM 模組呼叫 `provider->CreateNewPart` 索求相依模組時，由宿主代為自 CAS 檢索二進位流並實例化，再將受管 `HandleID` 返還。
+   - WASM 模組代碼 100% 保持純粹沙盒計算，無須碰觸實體檔案系統或持有載入特權，達成最高規格的零信任架構防禦。

@@ -70,6 +70,10 @@ add_dependencies(base_result_tests test_plugin_dll)
 add_executable(base_gateway_tools_tests base_gateway_tools_tests.cpp)
 target_link_libraries(base_gateway_tools_tests ourokore_base)
 
+add_executable(gateway_driver_tests gateway_driver_tests.cpp)
+target_link_libraries(gateway_driver_tests ourokore_base)
+add_dependencies(gateway_driver_tests OrkGatewayDriver)
+
 
 
 

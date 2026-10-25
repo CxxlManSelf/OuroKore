@@ -353,6 +353,24 @@ if (tag_res && ork::base::path::is_safe_relative_path("addons/weapon.dll")) {
     auto full_path = ork::base::path::combine_safe("C:/Plugins", "addons/weapon.dll");
 }
 ```
+
+5. **WASM 沙盒零件提供者標準與宿主特權裝配 (`IPartProvider`)**：
+   - **標準標頭檔**：`#include <ourokore/host/IPartProvider.hpp>`
+   - **宿主特權裝配**：
+     ```cpp
+     // 主程式將 GatewayDriver 注入 HostContext，裁切出最小特權之標準提供者
+     std::shared_ptr<ork::IPartProvider> provider = host.CreatePartProvider(gateway_driver);
+     // 將 provider 安全交給 WASM 沙盒 (WASM Import / Object Capability)
+     ```
+   - **WASM 模組共通調用模式 (Host 與 WASM 語意 100% 對稱)**：
+     ```cpp
+     // 1. 創生全新零件實體 (三段式標籤定位模組或 Wasm Bytecode)
+     ork::Result<ork::HandleID> part_id = provider->CreateNewPart("Vendor/Engine/v1.0", "{hp=100}");
+
+     // 2. 自 CAS 永續藍圖或狀態還原零件實體
+     ork::Result<ork::HandleID> restored_id = provider->RestorePart("1220ba7816bf8f01...");
+     ```
+   - **安全公理**：WASM 模組永遠只認識標準抽象介面 `IPartProvider`，無須碰觸檔案系統或宿主關閉特權，即可安全獲取其所需的子 WASM 零件實體。
 ---
 
 ## 🗺️ 11. 文件建立與 ConceptMap 視覺化維護原則 (Documentation & Visual Evolution)

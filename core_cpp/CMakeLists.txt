@@ -25,6 +25,7 @@ endif()
 add_subdirectory(base)
 
 add_subdirectory(core)
+add_subdirectory(plugins/ork_gateway_driver)
 add_subdirectory(tests)
 
 install(DIRECTORY include/ DESTINATION include)

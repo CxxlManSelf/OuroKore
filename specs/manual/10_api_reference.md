@@ -21,6 +21,16 @@
   * `void SetObjectModuleLoader(HandleID id, const DynamicLibrary &loader)`：綁定動態庫載入器至受管物件控制區塊（脫水長存，Payload 銷毀即刻解錨）。
   * `DynamicLibrary GetObjectModuleLoader(HandleID id) const`：取得物件綁定之動態庫載入器。
   * `std::shared_ptr<IObjectModuleBinder> GetModuleBinder() const`：取得專職模組綁定介面（最小特權原則，委派給外掛工廠）。
+  * `std::shared_ptr<IPartProvider> CreatePartProvider(std::shared_ptr<gateway::IGatewayDriver> gateway) const`：裝配網關驅動並產出受管之標準零件提供者介面（最小特權原則，可安全轉交給 WASM 沙盒）。
+
+---
+
+### 1.1 標準零件與 WASM 能力介面：`ork::IPartProvider`
+* **標頭檔**：`ourokore/host/IPartProvider.hpp`
+* **定位**：OuroKore 官方標準零件與 WASM 沙盒能力契約（Capability-Based Interface）
+* **方法**：
+  * `virtual Result<HandleID> CreateNewPart(std::string_view factory_tag, std::string_view init_params = "") = 0`：全新零件創生生成
+  * `virtual Result<HandleID> RestorePart(std::string_view persistence_id) = 0`：自 CAS 藍圖/永續識別碼還原物件
 
 ---
 
@@ -336,9 +346,30 @@
 
 ---
 
+### 13.5 次世代零件網關外掛：`ork::gateway` / `OrkGatewayDriver`
+* **標頭檔**：`<ourokore/gateway/IGatewayDriver.hpp>`、`<ourokore/gateway/gateway_api.h>`
+* **外掛屬性**：CMake `MODULE` 動態外掛，輸出至 `bin/plugins/OrkGatewayDriver.dll`，與核心完全解耦
+* **現代 C++ 介面 `IGatewayDriver`**：
+  * `static std::unique_ptr<IGatewayDriver> Create(const std::filesystem::path &cas_root_dir)`：建立網關驅動實體
+  * `virtual Result<CidV1> PutCas(std::span<const uint8_t> data)`：原子防損毀寫入 CAS，自動去重並回傳 CIDv1
+  * `virtual Result<std::vector<uint8_t>> GetCas(const CidV1 &cid)`：依據 CIDv1 讀出資料並校驗完整性
+  * `virtual bool HasCas(const CidV1 &cid) const noexcept`：查詢 CAS 中是否存在指定 CID
+  * `virtual Result<std::string> ResolvePluginPath(std::string_view tag, std::string_view rel_path)`：三段式工廠標籤解析與目錄穿越攔截
+  * `virtual const std::filesystem::path &GetCasRoot() const noexcept`：取得 CAS 根目錄
+* **純 C ABI 介面（FFI 匯出）**：
+  * `int32_t ork_gateway_create(const char *cas_root_dir, ork_gateway_handle_t *out_handle)`
+  * `void ork_gateway_destroy(ork_gateway_handle_t handle)`
+  * `int32_t ork_gateway_put_cas(handle, data, size, out_cid_hex, max_len)`
+  * `int32_t ork_gateway_get_cas(handle, cid_hex, out_buffer, buffer_size, out_actual_size)`
+  * `int32_t ork_gateway_has_cas(handle, cid_hex, out_exists)`
+  * `int32_t ork_gateway_resolve_plugin_path(handle, tag, rel_path, out_full_path, max_len)`
+
+---
+
 ## 🌐 14. 底層純 C ABI（Cross-Language FFI）分類索引
 所有底層操作保證跨 DLL 邊界零例外逃逸，完整清單與參數規格請參見《[03. 純 C ABI 規格與記憶體佈局規範](../technical/03_c_abi_and_memory.md)》：
 * **類別 A：物件生命週期與工廠**（`ork_create_object`、`ork_retain_object`、`ork_release_object`、`ork_acquire_object_pointer`、`ork_release_object_pointer`）
 * **類別 B：狀態查詢與圖拓撲**（`ork_is_alive`、`ork_get_storage_state`、`ork_is_payload_loaded`、`ork_get_type_id`、`ork_is_instance_of`、`ork_read_lock`、`ork_write_lock` 等）
 * **類別 C：宿主全域特權**（`ork_host_initialize`、`ork_host_shutdown`、`ork_host_set_storage_driver`、`ork_host_trigger_dehydration_rescue` 等）
 * **類別 D：外掛 Heap 記憶體檢查**（`ork_heap_allocate`、`ork_heap_deallocate`、`ork_heap_is_clean`、`ork_heap_dump_leaks`、`ork_heap_assert_clean`）
+* **類別 E：次世代零件網關與 CAS 內容定址**（`ork_gateway_create`、`ork_gateway_destroy`、`ork_gateway_put_cas`、`ork_gateway_get_cas`、`ork_gateway_has_cas`、`ork_gateway_resolve_plugin_path`）

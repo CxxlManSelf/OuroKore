@@ -11,9 +11,15 @@
 #include "ourokore/component/Types.hpp"
 #include "ourokore/host/HostRuntimeAPI.hpp"
 #include "ourokore/host/IObjectModuleBinder.hpp"
+#include "ourokore/host/IPartProvider.hpp"
 
 namespace ork
 {
+
+namespace gateway
+{
+class IGatewayDriver;
+}
 
 namespace detail
 {
@@ -324,6 +330,28 @@ public:
     CheckOwner();
     return std::make_shared<detail::ObjectModuleBinderImpl>();
   }
+
+  /**
+   * @brief 裝配網關驅動並產出受管之標準零件提供者介面 (最小特權原則，Capability-Based IPartProvider)
+   *
+   * 允許宿主將外部 OrkGatewayDriver 注入核心進行裝配，產出可安全轉交給 WebAssembly (WASM) 沙盒
+   * 或第三方組裝工廠之標準 IPartProvider 介面實例。
+   *
+   * @param gateway 外部注入之 IGatewayDriver 實例
+   * @return 具備零件創生與還原能力、可安全轉交給 WASM 的標準 std::shared_ptr<IPartProvider>
+   */
+  std::shared_ptr<IPartProvider> CreatePartProvider(
+      std::shared_ptr<gateway::IGatewayDriver> gateway) const
+  {
+    CheckOwner();
+    if (!gateway)
+    {
+      throw std::invalid_argument("OuroKore Host Error: Gateway driver cannot be null.");
+    }
+    // 規格已就緒，實作將於後續完整對接 CAS 藍圖反序列化與 Wasm 沙盒加載管線
+    return nullptr;
+  }
+
 
   // =========================================================================
   // --- 白盒測試與故障模擬專用方法 (White-Box Testing & Fault Simulation) ---

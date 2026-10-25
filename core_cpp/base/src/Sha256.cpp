@@ -123,6 +123,68 @@ std::string CidV1::to_string() const
   return "cid:sha256:" + Sha256::to_hex(d);
 }
 
+Result<CidV1> CidV1::from_hex(std::string_view hex) noexcept
+{
+  if (hex.size() != MULTIHASH_SIZE * 2)
+  {
+    return unexpected(Status::InvalidArgument("CIDv1 十六進位字串長度不符：預期 68 字元"));
+  }
+
+  auto parse_nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+
+  std::array<uint8_t, MULTIHASH_SIZE> buf{};
+  for (size_t i = 0; i < MULTIHASH_SIZE; ++i)
+  {
+    int hi = parse_nibble(hex[i * 2]);
+    int lo = parse_nibble(hex[i * 2 + 1]);
+    if (hi < 0 || lo < 0)
+    {
+      return unexpected(Status::InvalidArgument("CIDv1 包含非法十六進位字元"));
+    }
+    buf[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+
+  return from_bytes(buf);
+}
+
+Result<CidV1> CidV1::from_string(std::string_view str) noexcept
+{
+  static constexpr std::string_view prefix = "cid:sha256:";
+  if (str.starts_with(prefix))
+  {
+    auto hex_digest = str.substr(prefix.size());
+    if (hex_digest.size() != 64)
+    {
+      return unexpected(Status::InvalidArgument("標準 CID SHA-256 摘要長度不符：預期 64 字元"));
+    }
+    auto parse_nibble = [](char c) -> int {
+      if (c >= '0' && c <= '9') return c - '0';
+      if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+      if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+      return -1;
+    };
+    Digest32 d{};
+    for (size_t i = 0; i < 32; ++i)
+    {
+      int hi = parse_nibble(hex_digest[i * 2]);
+      int lo = parse_nibble(hex_digest[i * 2 + 1]);
+      if (hi < 0 || lo < 0)
+      {
+        return unexpected(Status::InvalidArgument("摘要包含非法十六進位字元"));
+      }
+      d[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return from_digest(d);
+  }
+  return from_hex(str);
+}
+
+
 // ============================================================================
 // Sha256 實作
 // ============================================================================

@@ -50,6 +50,16 @@ public:
   static Result<CidV1> from_bytes(std::span<const uint8_t> bytes) noexcept;
 
   /**
+   * @brief 解析 68 字元之十六進位 Multihash 字串
+   */
+  static Result<CidV1> from_hex(std::string_view hex) noexcept;
+
+  /**
+   * @brief 解析標準 CID 字串 ("cid:sha256:<hex>" 或純 68 字元 Multihash hex)
+   */
+  static Result<CidV1> from_string(std::string_view str) noexcept;
+
+  /**
    * @brief 取得 32 位元組原始摘要參照
    */
   std::span<const uint8_t, 32> digest() const noexcept;
@@ -112,6 +122,12 @@ public:
   static std::string compute_hex(std::string_view str);
 
   /**
+   * @brief 一次性計算並封裝為 CIDv1 Multihash
+   */
+  static CidV1 compute_cid(std::span<const uint8_t> data) noexcept { return CidV1::from_data(data); }
+  static CidV1 compute_cid(std::string_view str) noexcept { return CidV1::from_data(str); }
+
+  /**
    * @brief 將 32 位元組摘要轉為十六進位字串
    */
   static std::string to_hex(const Digest32 &digest);
@@ -125,3 +141,9 @@ private:
 };
 
 }  // namespace ork::base::crypto
+
+namespace ork::base
+{
+using CidV1 = crypto::CidV1;
+using Sha256 = crypto::Sha256;
+}  // namespace ork::base
