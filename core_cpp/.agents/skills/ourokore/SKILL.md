@@ -114,6 +114,19 @@ OuroKore 是一個針對**超大規模物件圖（Large-Scale Object Graph）**�
 > 4. **跨語言純 C ABI 支援**：
 >    - 包含 `<ourokore/base/heap_api.h>`，提供 `ork_heap_allocate`、`ork_heap_deallocate`、`ork_heap_is_clean`、`ork_heap_dump_leaks` 與 `ork_heap_assert_clean` 等純 C ABI 函式。
 
+### 2.0.4 次世代零件網關外掛與階層式工廠標籤規範 (OrkGatewayDriver & Hierarchical FactoryTag Invariant)
+> ⚠️ **網關尋址與工廠標籤規範**：
+> 1. **階層式工廠標籤結構（`Vendor/[SubPath/...]ModuleStem`）**：
+>    - 最前面：**工廠或品牌分類（`vendor`）**（如 `OuroKore`）。
+>    - 中間：**階層目錄路徑（`subpath`）**（如 `xxx/yyy/zzz`，若為兩段式則為空）。
+>    - 最後：**模組主體名稱（`module_stem`）**（如 `GoodPlugin_1.0.0`，不帶平台副檔名與前綴）。
+> 2. **管理器自動「加油添醋」**：
+>    - 呼叫端透過 `ResolvePluginPath(factory_tag)` 尋路時，可省略相對模組路徑，由網關管理器根據作業系統與編譯工具鏈自動補綴動態庫副檔名（MinGW 補 `lib*.dll`、MSVC 補 `*.dll`、Linux 補 `lib*.so`）。
+> 3. **沙盒穿越嚴格防禦**：
+>    - 任何外部傳入之相對路徑嚴格經過 `ork::base::path::is_safe_relative_path` 檢驗，徹底杜絕 `../`、`..\`、磁碟機代號與目錄遍歷攻擊。
+> 4. **CAS 內容定址三階段物理原子寫入**：
+>    - 落盤儲存一律採用 `ork::base::fs::atomic_write`（暫存檔 ➔ 強制 Flush ➔ OS 原生原子替換），保障不可變規格藍圖永不損毀。
+
 ### 2.1 主程式 Entry Point (HostContext)
 ```cpp
 #include <ourokore/host/HostContext.hpp>

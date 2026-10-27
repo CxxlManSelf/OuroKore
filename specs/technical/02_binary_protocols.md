@@ -138,7 +138,7 @@ End Interface
     - `Endian.hpp`：強制 Little-Endian，消弭 CPU 架構差異，保證相同藍圖產出 100% 相同之 CID。
     - `Sha256.hpp` / `CidV1`：純 CPU 零外部密碼庫依賴，直接以 `compute_cid(span)` 與 `from_multihash_hex()` 進行極速離線校驗。
     - `FileUtils.hpp`：CAS 落盤強制採用 `atomic_write` 三階段原子防損毀保證（同目錄暫存檔 ➔ `FlushFileBuffers` 刷盤 ➔ `MoveFileExW` 原子覆寫），杜絕斷電損壞。
-    - `PathUtils.hpp`：工廠尋址採三段式標籤 `parse_factory_tag`（`Vendor/Plugin/Version`），並以 `is_safe_relative_path` 嚴密封殺路徑穿越（`../`）漏洞。
+    - `PathUtils.hpp`：工廠尋址採階層式標籤 `parse_factory_tag`（`Vendor/[SubPath/...]ModuleStem`，如 `OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0`，主體名稱交由管理器自適應補綴平台副檔名），並以 `is_safe_relative_path` 嚴密封殺路徑穿越（`../`）漏洞。
 
 ---
 

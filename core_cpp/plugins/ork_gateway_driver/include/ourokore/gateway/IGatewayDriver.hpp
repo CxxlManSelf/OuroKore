@@ -41,10 +41,12 @@ public:
 
     /**
      * @brief 安全解析外掛模組實體檔案路徑 (具備沙盒穿越防禦)
+     * @param factory_tag 模組工廠標籤 (Vendor/[SubPath/...]ModuleStem，如 "OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0")
+     * @param relative_module_path 選用之自訂相對路徑。若為空，管理器會依據 ModuleStem 自行補綴平台動態庫檔名 (如 .dll / .so)
      */
     virtual base::Result<std::string> ResolvePluginPath(
         std::string_view factory_tag,
-        std::string_view relative_module_path) = 0;
+        std::string_view relative_module_path = {}) = 0;
 
     /**
      * @brief 取得 CAS 內容定址根目錄

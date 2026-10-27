@@ -88,25 +88,26 @@
   * **標準 Multihash (CIDv1)**：按照標準加上前綴（`0x12` 代表 SHA-256、`0x20` 代表 32 位元組長度），並提供標準 Base32 / Hex 字串編碼與解碼。
 * 🚀 **[新增需求] 確定性跨平台端序轉換 (`Endian.hpp`)**：
   * 利用 C++20 `<bit>`（`std::endian`），強制在跨架構（x86_64 與 ARM64）打包二進位串流時統一為**小端序（Little-Endian）**，保證 CID 雜湊絕對確定性。
-* 🚀 **[新增需求] 階層標籤解析與路徑正規化 (`PathUtils.hpp`)**：
-  * **三段式拆解**：解析 `"Vendor/Plugin/Version"` 標籤。
+* 🚀 **[已完成落地] 階層式工廠標籤解析、平台檔名自適應與目錄穿越防禦 (`PathUtils.hpp`)**：
+  * **階層式拆解**：解析 `"Vendor/[SubPath/...]ModuleStem"` 標籤（如 `OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0`），最前為品牌、中間為子目錄、最後為主體名稱。
+  * **自適應平台動態庫補綴**：`get_platform_module_filename` 依據工具鏈（MinGW 補 `lib*.dll`、MSVC 補 `*.dll`、Linux 補 `lib*.so`）由管理器自行加油添醋。
   * **安全防路徑穿越**：阻絕包含 `..` 或非法字元的惡意路徑，防範目錄遍歷攻擊。
-  * **路徑正規化**：統一正反斜線，安全映射為本機檔案系統路徑。
+  * **路徑正規化與安全拼接**：統一正反斜線，安全映射為本機檔案系統路徑。
 * ❌ **全域事件匯流排 (`EventBus`)**：**【已剔除】**（確認不再需要）。
 
 ---
 
-## 🎯 四、 新版 Base 基礎庫待辦實裝路線圖 (Next Steps)
+## 🎯 四、 新版 Base 基礎庫實裝完成度報告 (Status Report)
 
 根據本次需求修訂，現有程式庫中已完成之核心基礎代碼（`ThreadPool`、`DynamicLibrary`、`HeapTracker`、`Tree`、`Hash`、`utf8`、`Result` 等）**皆屬極高質量之現役資產，100% 保留**；原先列為待辦但已否決的 7 大項目全數移出開發計畫。
 
-當前 `ourokore_base` 邁向完全就緒，僅剩下以下**唯一的 4 項輕量通用工具建置工作**：
+當前 `ourokore_base` 基礎工具套件已**100% 完成實裝與驗證**：
 
-| 步驟 | 預計產出標頭檔 | 核心工作內容 | 預估複雜度 |
+| 步驟 | 產出標頭檔 | 核心工作內容 | 狀態 |
 | :---: | :--- | :--- | :---: |
-| **Step 1** | `base/include/ourokore/base/SHA256.hpp`<br>`base/include/ourokore/base/CID.hpp` | 純 C++ 零依賴 SHA-256 實裝與 Multihash (CIDv1) 格式化工具 | 🟢 輕量純演算法 |
-| **Step 2** | `base/include/ourokore/base/FileUtils.hpp` | 二進位檔案全檔讀寫、原子防損毀替換（`WriteAllBytesAtomic`）、目錄遞迴建立 | 🟢 輕量 OS API 封裝 |
-| **Step 3** | `base/include/ourokore/base/Endian.hpp` | 基於 `<bit>` 的強制小端序編解碼工具（確定性雜湊保證） | 🟢 極輕量 Header-only |
-| **Step 4** | `base/include/ourokore/base/PathUtils.hpp` | 三段式標籤解析（`Vendor/Plugin/ver`）、防路徑穿越（Path Traversal 防禦）與路徑正規化 | 🟢 輕量字串/路徑工具 |
+| **Step 1** | `include/ourokore/base/Sha256.hpp` | 純 C++ 零依賴 CPU SHA-256 實裝與 Multihash (CIDv1) 格式化工具 | ✅ 100% 完成 |
+| **Step 2** | `include/ourokore/base/FileUtils.hpp` | 二進位檔案全檔讀寫、原子防損毀替換（`atomic_write`）、目錄遞迴建立 | ✅ 100% 完成 |
+| **Step 3** | `include/ourokore/base/Endian.hpp` | 基於 `<bit>` 的強制小端序編解碼工具（確定性雜湊保證） | ✅ 100% 完成 |
+| **Step 4** | `include/ourokore/base/PathUtils.hpp` | 階層式標籤解析（`Vendor/[SubPath/...]ModuleStem`）、平台動態庫檔名自適應、防路徑穿越 | ✅ 100% 完成 |
 
-完成上述 4 項通用工具後，`ourokore_base` 即可宣告以最精煉、最純粹的姿態完全成熟，並無縫供未來的次世代零件網關外掛 `OrkGatewayDriver` 呼叫使用！
+上述 4 項通用工具與次世代零件網關外掛 `OrkGatewayDriver` 已全面通過整合單元測試！

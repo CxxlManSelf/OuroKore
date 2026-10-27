@@ -1,6 +1,3 @@
-cmake_minimum_required(VERSION 3.10.0)
-project(OrkGatewayDriver LANGUAGES C CXX)
-
 set(TARGET_NAME OrkGatewayDriver)
 
 set(GATEWAY_HDRS

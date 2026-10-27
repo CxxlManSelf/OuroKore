@@ -545,7 +545,7 @@ Base 基礎層秉持「零依賴、純通用、防範破壞外掛 Heap 隔離」
 * ❌ **記憶體映射檔案 (MmapFile)**：CAS 首重原子防損毀替換（WriteAllBytesAtomic），mmap 無法保證原子替換防損毀，已剔除。
 * ❌ **通用物件池與區域分配器 (ObjectPool, Arena)**：避免打破各外掛 DLL 的「跨動態庫 Heap 邊界隔離」引發跨 CRT 釋放崩潰，已剔除。
 * ❌ **無鎖佇列 (LockFreeQueue) 與 Channel**：現有 ThreadSafeQueue 微秒級延遲已極充沛，次世代瓶頸在 SHA-256 與磁碟 I/O，無鎖佇列徒增 ABA 與記憶體屏障除錯災難，已剔除。
-* ❌ **巨型外掛註冊中心與 SemVer 解析器**：外掛版本相依直接由不可變 CID 釘死，目錄尋址採階層標籤（Vendor/Plugin/Version），已剔除。
+* ❌ **巨型外掛註冊中心與 SemVer 解析器**：外掛版本相依直接由不可變 CID 釘死，目錄尋址採階層標籤（Vendor/[SubPath/...]ModuleStem），已剔除。
 * ❌ **全域事件匯流排 (EventBus)**：堅決捍衛「組裝即拓撲」的圖論顯式依賴，防範隱式廣播產生懸空回呼與野指標，已剔除。
 
 ### 7.3 已落地之 4 大通用基礎工具 (已全數通過單元測試)
@@ -619,11 +619,16 @@ if (read_res) {
 }
 ```
 
-#### 4. PathUtils.hpp（三段式標籤解析與目錄穿越防禦）
+#### 4. PathUtils.hpp（階層式工廠標籤解析、平台檔名自適應與目錄穿越防禦）
 * **標頭檔**：`<ourokore/base/PathUtils.hpp>`
 * **命名空間**：`ork::base::path`
+* **核心設計哲學**：
+  - **三段架構定位**：最前面為**工廠或品牌分類（`vendor`）**、中間為**階層子目錄路徑（`subpath`，支援多層子目錄，可為空）**、最後為**模組主體名稱（`module_stem`）**。
+  - **目錄管理器友善**：呼叫端只需提供模組主體名稱（如 `GoodPlugin_1.0.0`），無需綁定平台前後綴，由路徑管理器依據作業系統與編譯工具鏈自行「加油添醋」補綴出標準動態庫檔名（例如 MinGW 補 `lib*.dll`、MSVC 補 `*.dll`、Linux 補 `lib*.so`）。
 * **核心功能**：
-  - **三段式工廠標籤解析（`parse_factory_tag`）**：嚴格驗證並拆解 `Vendor/Plugin/Version` 標籤字串，防範非法字元與非法格式，提供外掛工廠依階層快速尋址。
+  - **階層式工廠標籤解析（`parse_factory_tag`）**：嚴格驗證並拆解標籤字串（要求至少 2 段：Vendor 與 ModuleStem），各層段落均經過非法字元與遍歷符檢驗，防範注入攻擊。
+  - **所屬目錄與字串還原**：`tag.get_directory()` 返回完整目錄階層（`Vendor/SubPath`）；`tag.to_string()` 還原為標準化正斜線標籤字串。
+  - **自適應平台動態庫檔名工具（`get_platform_module_filename`）**：依據當前編譯環境自動為模組主體補上標準前後綴。
   - **目錄穿越防禦（`is_safe_relative_path`）**：嚴密阻截包含 `../`、`..\`、絕對路徑、Windows 磁碟代號（如 `C:`）或非法控制字元之惡意相對路徑，保護宿主目錄安全。
   - **跨平台路徑正規化（`normalize`）**：統一將 Windows 反斜線轉換為正規正斜線（`/`），折疊重複斜線與 `./`。
   - **安全路徑拼接（`combine_safe`）**：將基礎目錄與相對路徑安全拼接，若相對路徑偵測到穿越企圖則拒絕拼接並返回錯誤。
@@ -631,15 +636,22 @@ if (read_res) {
 ```cpp
 #include <ourokore/base/PathUtils.hpp>
 
-// 1. 三段式標籤拆解
-auto tag_res = ork::base::path::parse_factory_tag("EpicGames/ChaosEngine/v1.2.0");
+// 1. 多段式階層標籤拆解
+auto tag_res = ork::base::path::parse_factory_tag("OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0");
 if (tag_res) {
-    std::cout << "Vendor:  " << tag_res->vendor << std::endl;
-    std::cout << "Plugin:  " << tag_res->plugin << std::endl;
-    std::cout << "Version: " << tag_res->version << std::endl;
+    std::cout << "Vendor:    " << tag_res->vendor << std::endl;       // "OuroKore"
+    std::cout << "SubPath:   " << tag_res->subpath << std::endl;      // "xxx/yyy/zzz"
+    std::cout << "Stem:      " << tag_res->module_stem << std::endl;  // "GoodPlugin_1.0.0"
+    std::cout << "Directory: " << tag_res->get_directory() << std::endl; // "OuroKore/xxx/yyy/zzz"
 }
 
-// 2. 阻截路徑穿越攻擊
+// 2. 自適應平臺動態庫檔名推導 (管理器自動加油添醋)
+std::string dll_name = ork::base::path::get_platform_module_filename(tag_res->module_stem);
+// 在 MinGW 下: "libGoodPlugin_1.0.0.dll"
+// 在 MSVC 下:  "GoodPlugin_1.0.0.dll"
+// 在 Linux 下: "libGoodPlugin_1.0.0.so"
+
+// 3. 阻截路徑穿越攻擊
 bool safe = ork::base::path::is_safe_relative_path("../../Windows/System32/evil.dll");
 // safe == false，成功攔截！
 ```

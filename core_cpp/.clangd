@@ -2,7 +2,7 @@
 
 CompileFlags:
   # 指定 CMake 產生的編譯資料庫 (compile_commands.json) 所在目錄
-  CompilationDatabase: build_mingw
+  CompilationDatabase: build
 
   # 指定預設使用的 C++ 編譯器絕對路徑
   Compiler: 'C:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/bin/g++.exe'
@@ -15,6 +15,8 @@ CompileFlags:
     - '-D__cpp_lib_expected=202211L'
     - '-fno-builtin-__rdtsc'
     - '-Ic:/MySrc/OuroKore/core_cpp/include'
+    - '-Ic:/MySrc/OuroKore/core_cpp/plugins/ork_gateway_driver/include'
+    - '-Ic:/MySrc/OuroKore/core_cpp/plugins/ork_gateway_driver/src'
     - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++'
     - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/x86_64-w64-mingw32'
     - '-isystemC:/x86_64-16.2.0-release-posix-seh-ucrt-rt_v14-rev1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include/c++/backward'

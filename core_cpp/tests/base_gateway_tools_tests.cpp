@@ -1,5 +1,4 @@
 #include <cassert>
-#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -143,20 +142,51 @@ void test_file_utils()
 
 void test_path_utils()
 {
-  std::cout << "[測試 4: 路徑安全與三段式標籤解析 (PathUtils)]" << std::endl;
+  std::cout << "[測試 4: 路徑安全與階層式工廠標籤解析 (PathUtils)]" << std::endl;
 
-  // 1. 三段式標籤解析
-  auto tag_res = path::parse_factory_tag("Epic/WeaponPack/v1.2.0");
-  assert(tag_res.has_value());
-  assert(tag_res->vendor == "Epic");
-  assert(tag_res->plugin == "WeaponPack");
-  assert(tag_res->version == "v1.2.0");
-  assert(tag_res->to_string() == "Epic/WeaponPack/v1.2.0");
+  // 1. 多段式階層標籤解析 (OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0)
+  auto tag_res1 = path::parse_factory_tag("OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0");
+  assert(tag_res1.has_value());
+  assert(tag_res1->vendor == "OuroKore");
+  assert(tag_res1->subpath == "xxx/yyy/zzz");
+  assert(tag_res1->module_stem == "GoodPlugin_1.0.0");
+  assert(tag_res1->get_directory() == "OuroKore/xxx/yyy/zzz");
+  assert(tag_res1->to_string() == "OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0");
+
+  // 兩段式標籤 (無中間路徑: Vendor/ModuleStem)
+  auto tag_res2 = path::parse_factory_tag("Epic/GoodPlugin_1.0.0");
+  assert(tag_res2.has_value());
+  assert(tag_res2->vendor == "Epic");
+  assert(tag_res2->subpath.empty());
+  assert(tag_res2->module_stem == "GoodPlugin_1.0.0");
+  assert(tag_res2->get_directory() == "Epic");
+  assert(tag_res2->to_string() == "Epic/GoodPlugin_1.0.0");
+
+  // 三段式標籤 (相容 Vendor/SubPath/ModuleStem)
+  auto tag_res3 = path::parse_factory_tag("Epic/WeaponPack/v1.2.0");
+  assert(tag_res3.has_value());
+  assert(tag_res3->vendor == "Epic");
+  assert(tag_res3->subpath == "WeaponPack");
+  assert(tag_res3->module_stem == "v1.2.0");
+  assert(tag_res3->get_directory() == "Epic/WeaponPack");
+  assert(tag_res3->to_string() == "Epic/WeaponPack/v1.2.0");
+
+  // 驗證自適應平台動態庫檔名工具
+#if defined(__MINGW32__) || defined(__MINGW64__)
+  assert(path::get_platform_module_filename("GoodPlugin_1.0.0") == "libGoodPlugin_1.0.0.dll");
+#elif defined(_WIN32)
+  assert(path::get_platform_module_filename("GoodPlugin_1.0.0") == "GoodPlugin_1.0.0.dll");
+#elif defined(__APPLE__)
+  assert(path::get_platform_module_filename("GoodPlugin_1.0.0") == "libGoodPlugin_1.0.0.dylib");
+#else
+  assert(path::get_platform_module_filename("GoodPlugin_1.0.0") == "libGoodPlugin_1.0.0.so");
+#endif
 
   // 非法標籤測試
-  assert(!path::parse_factory_tag("Epic/WeaponPack").has_value()); // 僅兩段
+  assert(!path::parse_factory_tag("Epic").has_value()); // 僅一段 (缺少主體名稱)
   assert(!path::parse_factory_tag("Epic/Weapon Pack/v1").has_value()); // 包含空白
   assert(!path::parse_factory_tag("Epic/../v1").has_value()); // 包含遍歷符
+  assert(!path::parse_factory_tag("").has_value()); // 空字串
 
   // 2. 路徑正規化
   std::string norm1 = path::normalize("a//b/./c/../d");

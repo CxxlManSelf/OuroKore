@@ -328,15 +328,17 @@
 
 ---
 
-### 13.4 三段式標籤解析與目錄穿越防禦：`ork::base::path`
+### 13.4 階層式工廠標籤解析與目錄穿越防禦：`ork::base::path`
 * **標頭檔**：`<ourokore/base/PathUtils.hpp>`
-* **三段式工廠標籤結構體 `FactoryTag`**：
-  * `std::string vendor`
-  * `std::string plugin`
-  * `std::string version`
-  * `std::string to_string() const`：還原為 `"Vendor/Plugin/Version"`
+* **工廠尋路標籤結構體 `FactoryTag`**：
+  * `std::string vendor`：最前面之工廠或品牌分類 (如 `"OuroKore"`)
+  * `std::string subpath`：中間之階層式子路徑 (如 `"xxx/yyy/zzz"`，若無則為空)
+  * `std::string module_stem`：最後之模組主體名稱 (如 `"GoodPlugin_1.0.0"`，不含平台副檔名與前綴)
+  * `std::string get_directory() const`：取得所屬目錄路徑 (`"Vendor/SubPath"` 或 `"Vendor"`)
+  * `std::string to_string() const`：還原為完整標準化標籤字串
 * **核心路徑方法**：
-  * `Result<FactoryTag> parse_factory_tag(std::string_view tag_str)`：解析三段式標籤，驗證合法字元（`[a-zA-Z0-9_.-]`），阻絕穿越與非法格式。
+  * `Result<FactoryTag> parse_factory_tag(std::string_view tag_str)`：解析階層式工廠標籤（至少 2 段：Vendor 與 ModuleStem），驗證合法字元（`[a-zA-Z0-9_.-]`），阻絕穿越與非法格式。
+  * `std::string get_platform_module_filename(std::string_view stem)`：依據當前編譯環境自動補綴標準動態庫前後綴 (MinGW: `lib*.dll`, MSVC: `*.dll`, Linux: `lib*.so`, macOS: `lib*.dylib`)。
   * `bool is_safe_relative_path(std::string_view rel_path) noexcept`：嚴格阻截包含 `../`、`..\`、磁碟機代號或根目錄之穿越攻擊。
   * `std::string normalize(std::string_view path)`：跨平台路徑正規化（統一正斜線 `/`，消除重複斜線與 `./`）。
   * `Result<std::string> combine_safe(std::string_view base_dir, std::string_view rel_path)`：安全路徑拼接（防範穿越目標跳出 base_dir）。
@@ -354,7 +356,7 @@
   * `virtual Result<CidV1> PutCas(std::span<const uint8_t> data)`：原子防損毀寫入 CAS，自動去重並回傳 CIDv1
   * `virtual Result<std::vector<uint8_t>> GetCas(const CidV1 &cid)`：依據 CIDv1 讀出資料並校驗完整性
   * `virtual bool HasCas(const CidV1 &cid) const noexcept`：查詢 CAS 中是否存在指定 CID
-  * `virtual Result<std::string> ResolvePluginPath(std::string_view tag, std::string_view rel_path)`：三段式工廠標籤解析與目錄穿越攔截
+  * `virtual Result<std::string> ResolvePluginPath(std::string_view tag, std::string_view rel_path = {})`：階層式工廠標籤解析與安全尋路。若 `rel_path` 為空，由管理器依據 ModuleStem 自行加油添醋補綴平台動態庫檔名
   * `virtual const std::filesystem::path &GetCasRoot() const noexcept`：取得 CAS 根目錄
 * **純 C ABI 介面（FFI 匯出）**：
   * `int32_t ork_gateway_create(const char *cas_root_dir, ork_gateway_handle_t *out_handle)`

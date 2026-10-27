@@ -269,7 +269,7 @@ OuroKore 透過**「維度解耦（Dimensional Decoupling）」**完美調和此
                                 │
                                 ▼
                          [ PathUtils.hpp ]
-                      Vendor/Plugin/Version 標籤
+                      Vendor/[SubPath/...]ModuleStem 標籤
                       與沙盒目錄穿越 (../) 攔截防禦
 ```
 
@@ -280,7 +280,7 @@ OuroKore 透過**「維度解耦（Dimensional Decoupling）」**完美調和此
 3. **物理級防損毀原子寫入 (`FileUtils.hpp`)**：
    - CAS 內容定址庫要求檔案一旦落盤便永不損毀。工具庫採用三階段物理保證：**「同目錄隨機暫存檔寫入 ➔ 磁碟強制刷盤 (`FlushFileBuffers` / `fsync`) ➔ OS 原生原子替換 (`MoveFileExW` / `rename`)」**。即使遭遇突發斷電，原檔案絕對無損。
 4. **階層標籤解析與目錄穿越隔離 (`PathUtils.hpp`)**：
-   - 提供 `parse_factory_tag` 嚴格驗證三段式工廠提示（`Vendor/Plugin/Version`），並以 `is_safe_relative_path` 在路徑拼接前嚴密阻截 `../`、`..\\` 與磁碟機代號等穿越企圖，徹底捍衛宿主檔案沙盒。
+   - 提供 `parse_factory_tag` 嚴格驗證階層式工廠標籤（`Vendor/[SubPath/...]ModuleStem`，如 `OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0`），並由管理器依平台自動補綴動態庫副檔名，並以 `is_safe_relative_path` 在路徑拼接前嚴密阻截 `../`、`..\\` 與磁碟機代號等穿越企圖，徹底捍衛宿主檔案沙盒。
 
 ### 7.4 宿主特權能力裝配與 WASM 沙盒標準介面 (IPartProvider & Capability Pattern)
 為解決 WebAssembly (WASM) 沙盒環境下「WASM 模組如何安全獲取其所需的依賴 WASM 零件」之核心命題，OuroKore 確立了「**能力導向（Capability-Based）的兩階解耦架構**」：

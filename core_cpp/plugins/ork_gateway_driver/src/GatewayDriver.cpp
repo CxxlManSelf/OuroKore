@@ -1,6 +1,9 @@
 #include "GatewayDriver.hpp"
 #include <ourokore/base/PluginHeap.hpp>
+#include <filesystem>
 #include <mutex>
+#include <string>
+#include <string_view>
 
 ORK_ENABLE_PLUGIN_HEAP_TRACKING()
 
@@ -81,19 +84,29 @@ bool GatewayDriver::HasCas(const base::CidV1 &cid) const noexcept {
 base::Result<std::string> GatewayDriver::ResolvePluginPath(
     std::string_view factory_tag,
     std::string_view relative_module_path) {
-    // 1. 三段式標籤嚴格格式驗證
+    // 1. 標籤嚴格格式驗證 (Vendor/[SubPath/...]ModuleStem)
     auto tag_res = base::path::parse_factory_tag(factory_tag);
     if (!tag_res) {
         return base::unexpected(tag_res.error());
     }
 
-    // 2. 目錄穿越攻擊防禦
+    std::string tag_dir = tag_res->get_directory();
+
+    // 2. 若未指定 relative_module_path，由管理器依據 module_stem 自行加油添醋 (補綴平台動態庫檔名)
+    if (relative_module_path.empty()) {
+        std::string module_file = base::path::get_platform_module_filename(tag_res->module_stem);
+        auto combined_res = base::path::combine_safe(tag_dir, module_file);
+        if (!combined_res) {
+            return base::unexpected(combined_res.error());
+        }
+        return base::path::normalize(*combined_res);
+    }
+
+    // 3. 若有提供自訂 relative_module_path，進行目錄穿越攻擊防禦後拼接
     if (!base::path::is_safe_relative_path(relative_module_path)) {
         return base::unexpected(base::Status::PermissionDenied("相對模組路徑包含非法穿越或絕對路徑字元"));
     }
 
-    // 3. 組合階層式路徑: Vendor/Plugin/Version/relative_module_path
-    std::string tag_dir = tag_res->vendor + "/" + tag_res->plugin + "/" + tag_res->version;
     auto combined_res = base::path::combine_safe(tag_dir, relative_module_path);
     if (!combined_res) {
         return base::unexpected(combined_res.error());

@@ -136,13 +136,14 @@ ORK_GATEWAY_API int32_t ork_gateway_resolve_plugin_path(
     const char *relative_module_path,
     char *out_full_path,
     size_t max_len) {
-    if (!handle || !factory_tag || !relative_module_path || !out_full_path || max_len == 0) {
+    if (!handle || !factory_tag || !out_full_path || max_len == 0) {
         return ORK_GATEWAY_ERROR_INVALID_ARG;
     }
 
     try {
         auto driver = static_cast<GatewayDriver *>(handle);
-        auto res = driver->ResolvePluginPath(factory_tag, relative_module_path);
+        std::string_view rel_path = relative_module_path ? relative_module_path : "";
+        auto res = driver->ResolvePluginPath(factory_tag, rel_path);
         if (!res) {
             if (res.error().status_code() == ork::base::StatusCode::PermissionDenied) {
                 return ORK_GATEWAY_ERROR_SECURITY;

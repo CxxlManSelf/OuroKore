@@ -92,7 +92,7 @@ size_t freed = host.TriggerDehydrationRescue(1024 * 1024); // 嘗試騰出 1MB
   ```
 * **標準能力契約 (Host 與 WASM 共通標準)**：
   1. **`CreateNewPart(factory_tag, init_params)`**：
-     - 依據三段式工廠標籤（`Vendor/Plugin/Version`）定位模組或 Wasm Bytecode，創世生成全新受管實體並回傳 `HandleID`。
+     - 依據階層式工廠標籤（`Vendor/[SubPath/...]ModuleStem`，如 `OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0`）定位模組或 Wasm Bytecode，創世生成全新受管實體並回傳 `HandleID`。
   2. **`RestorePart(persistence_id)`**：
      - 依據不可變 CAS `CIDv1` 或永續識別碼，自落盤儲存庫還原物件狀態並接回 OuroKore 託管圖。
 * **WASM 跨沙盒安全公理**：

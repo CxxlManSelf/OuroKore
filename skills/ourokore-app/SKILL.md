@@ -321,8 +321,8 @@ std::string compact_dsl = TreeIO::SerializeToString(root, CompactMode::Compact);
    - ourokore_base 基礎庫零依賴系統密碼庫（無 crypt.lib 鏈結依賴）。
    - 應用端開發時，切勿向核心索求或傳遞 UUID；若特定業務個體需要實體錨點（Instance Anchor），應採用**創世雜湊（Genesis CID）**或**語意階層字串（如 player/hero_01）**。
 3. **階層式零件尋址與網關防護 (OrkGatewayDriver)**：
-   - **能力契約宣告**：使用端在創世建立零件時，僅需持抽象介面（如 IWeapon）與三段式工廠提示（Vendor/Plugin/Version），透過 OrkGatewayDriver 取得物件。
-   - **網關基礎工具庫支援**：`ourokore_base` 原生提供 4 大通用工具：跨架構小端序轉換（`Endian.hpp`）、純 CPU SHA-256 與 Multihash CIDv1（`Sha256.hpp`）、原子防損毀檔案落盤（`FileUtils.hpp`）以及三段式標籤拆解與目錄穿越防禦（`PathUtils.hpp`），以現代 C++23 值語意（`Result<T>`）支援網關驅動。
+   - **能力契約宣告**：使用端在創世建立零件時，僅需持抽象介面（如 IWeapon）與階層式工廠標籤（Vendor/[SubPath/...]ModuleStem，如 OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0），透過 OrkGatewayDriver 取得物件。
+   - **網關基礎工具庫支援**：`ourokore_base` 原生提供 4 大通用工具：跨架構小端序轉換（`Endian.hpp`）、純 CPU SHA-256 與 Multihash CIDv1（`Sha256.hpp`）、原子防損毀檔案落盤（`FileUtils.hpp`）以及階層式標籤拆解、自適應平台檔名與目錄穿越防禦（`PathUtils.hpp`），以現代 C++23 值語意（`Result<T>`）支援網關驅動。
 4. **網關與 CAS 輕量基礎工具範本 (Gateway & CAS Utilities CheatSheet)**：
 ```cpp
 #include <ourokore/base/Endian.hpp>
@@ -347,10 +347,14 @@ if (!write_res) {
     // 寫入失敗處理 write_res.error().message()
 }
 
-// 4. 三段式工廠提示拆解與目錄穿越攻擊阻截
-auto tag_res = ork::base::path::parse_factory_tag("Epic/WeaponPlugin/v2.1.0");
-if (tag_res && ork::base::path::is_safe_relative_path("addons/weapon.dll")) {
-    auto full_path = ork::base::path::combine_safe("C:/Plugins", "addons/weapon.dll");
+// 4. 階層式工廠標籤拆解與管理器自適應加油添醋 (平台動態庫補綴)
+auto tag_res = ork::base::path::parse_factory_tag("OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0");
+if (tag_res) {
+    std::string tag_dir = tag_res->get_directory(); // "OuroKore/xxx/yyy/zzz"
+    std::string lib_name = ork::base::path::get_platform_module_filename(tag_res->module_stem);
+    // 在 MinGW 下產出: "libGoodPlugin_1.0.0.dll"
+    // 在 MSVC 下產出:  "GoodPlugin_1.0.0.dll"
+    auto full_res = ork::base::path::combine_safe(tag_dir, lib_name);
 }
 ```
 
@@ -364,8 +368,8 @@ if (tag_res && ork::base::path::is_safe_relative_path("addons/weapon.dll")) {
      ```
    - **WASM 模組共通調用模式 (Host 與 WASM 語意 100% 對稱)**：
      ```cpp
-     // 1. 創生全新零件實體 (三段式標籤定位模組或 Wasm Bytecode)
-     ork::Result<ork::HandleID> part_id = provider->CreateNewPart("Vendor/Engine/v1.0", "{hp=100}");
+     // 1. 創生全新零件實體 (階層式標籤定位模組或 Wasm Bytecode)
+     ork::Result<ork::HandleID> part_id = provider->CreateNewPart("OuroKore/engine/core/PhysicsEngine_1.0.0", "{hp=100}");
 
      // 2. 自 CAS 永續藍圖或狀態還原零件實體
      ork::Result<ork::HandleID> restored_id = provider->RestorePart("1220ba7816bf8f01...");

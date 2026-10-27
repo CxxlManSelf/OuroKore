@@ -19,7 +19,7 @@ public:
     bool HasCas(const base::CidV1 &cid) const noexcept override;
     base::Result<std::string> ResolvePluginPath(
         std::string_view factory_tag,
-        std::string_view relative_module_path) override;
+        std::string_view relative_module_path = {}) override;
     const std::filesystem::path &GetCasRoot() const noexcept override;
 
 private:

@@ -69,7 +69,7 @@ void test_gateway_driver_plugin()
   assert(fn_resolve != nullptr);
 
   std::string test_cas_dir = "test_gateway_cas_repo";
-  (void)ork::base::fs::remove_file(test_cas_dir); // 清理
+  [[maybe_unused]] auto clean_res = ork::base::fs::remove_file(test_cas_dir); // 清理
 
   std::cout << "[測試 2: 網關實體生命週期與 CAS 落盤]" << std::endl;
   void *gateway = nullptr;
@@ -122,16 +122,31 @@ void test_gateway_driver_plugin()
   rc = fn_get(gateway, fake_cid, read_buf.data(), read_buf.size(), &actual_size);
   assert(rc == -3); // ORK_GATEWAY_ERROR_NOT_FOUND
 
-  std::cout << "[測試 3: 三段式標籤工廠與目錄穿越防禦]" << std::endl;
+  std::cout << "[測試 3: 階層式工廠標籤、自適應平台檔名與目錄穿越防禦]" << std::endl;
   char full_path[256] = {0};
-  // 合法解析
-  rc = fn_resolve(gateway, "EpicGames/ChaosEngine/v1.2.0", "bin/physics.dll", full_path, sizeof(full_path));
-  assert(rc == 0);
-  assert(std::string(full_path) == "EpicGames/ChaosEngine/v1.2.0/bin/physics.dll");
-  std::cout << "  合法標籤解析成功: " << full_path << std::endl;
 
-  // 惡意路徑穿越攔截
-  rc = fn_resolve(gateway, "EpicGames/ChaosEngine/v1.2.0", "../../Windows/System32/evil.dll", full_path, sizeof(full_path));
+  // 1. 自動加油添醋模式 (管理器依據模組主體自動補綴平台副檔名)
+  rc = fn_resolve(gateway, "OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0", nullptr, full_path, sizeof(full_path));
+  assert(rc == 0);
+#if defined(__MINGW32__) || defined(__MINGW64__)
+  assert(std::string(full_path) == "OuroKore/xxx/yyy/zzz/libGoodPlugin_1.0.0.dll");
+#elif defined(_WIN32)
+  assert(std::string(full_path) == "OuroKore/xxx/yyy/zzz/GoodPlugin_1.0.0.dll");
+#elif defined(__APPLE__)
+  assert(std::string(full_path) == "OuroKore/xxx/yyy/zzz/libGoodPlugin_1.0.0.dylib");
+#else
+  assert(std::string(full_path) == "OuroKore/xxx/yyy/zzz/libGoodPlugin_1.0.0.so");
+#endif
+  std::cout << "  管理器自動加油添醋解析成功: " << full_path << std::endl;
+
+  // 2. 自訂相對模組路徑模式
+  rc = fn_resolve(gateway, "EpicGames/ChaosEngine/GoodPlugin_1.0.0", "bin/physics.dll", full_path, sizeof(full_path));
+  assert(rc == 0);
+  assert(std::string(full_path) == "EpicGames/ChaosEngine/bin/physics.dll");
+  std::cout << "  自訂相對路徑解析成功: " << full_path << std::endl;
+
+  // 3. 惡意路徑穿越攔截
+  rc = fn_resolve(gateway, "EpicGames/ChaosEngine/GoodPlugin_1.0.0", "../../Windows/System32/evil.dll", full_path, sizeof(full_path));
   assert(rc == -4); // ORK_GATEWAY_ERROR_SECURITY
   std::cout << "  目錄穿越攻擊攔截成功 (rc = -4)！" << std::endl;
 

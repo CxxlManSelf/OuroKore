@@ -55,38 +55,73 @@ std::vector<std::string_view> split_path_segments(std::string_view path)
 
 }  // namespace
 
+std::string FactoryTag::get_directory() const
+{
+  if (subpath.empty())
+  {
+    return vendor;
+  }
+  return vendor + "/" + subpath;
+}
+
 std::string FactoryTag::to_string() const
 {
-  return vendor + "/" + plugin + "/" + version;
+  if (subpath.empty())
+  {
+    return vendor + "/" + module_stem;
+  }
+  return vendor + "/" + subpath + "/" + module_stem;
 }
 
 Result<FactoryTag> parse_factory_tag(std::string_view tag_str)
 {
   auto segments = split_path_segments(tag_str);
-  if (segments.size() != 3)
+  if (segments.size() < 2)
   {
     return unexpected(Status::InvalidArgument(
-        "工廠標籤格式錯誤：必須為 Vendor/Plugin/Version 三段式 (如 Epic/WeaponPack/v1.0.0)"));
+        "工廠標籤格式錯誤：至少需包含 Vendor 與 ModuleStem 兩段 (如 Vendor/ModuleStem 或 Vendor/SubPath.../ModuleStem)"));
   }
 
-  if (!is_valid_tag_segment(segments[0]))
+  for (size_t i = 0; i < segments.size(); ++i)
   {
-    return unexpected(Status::InvalidArgument("Vendor 欄位包含非法字元或為空"));
-  }
-  if (!is_valid_tag_segment(segments[1]))
-  {
-    return unexpected(Status::InvalidArgument("Plugin 欄位包含非法字元或為空"));
-  }
-  if (!is_valid_tag_segment(segments[2]))
-  {
-    return unexpected(Status::InvalidArgument("Version 欄位包含非法字元或為空"));
+    if (!is_valid_tag_segment(segments[i]))
+    {
+      return unexpected(Status::InvalidArgument("標籤路徑第 " + std::to_string(i + 1) + " 段包含非法字元或為空"));
+    }
   }
 
   FactoryTag tag;
-  tag.vendor = std::string(segments[0]);
-  tag.plugin = std::string(segments[1]);
-  tag.version = std::string(segments[2]);
+  tag.vendor = std::string(segments.front());
+  tag.module_stem = std::string(segments.back());
+
+  if (segments.size() > 2)
+  {
+    std::string mid_path;
+    for (size_t i = 1; i + 1 < segments.size(); ++i)
+    {
+      if (!mid_path.empty())
+      {
+        mid_path.push_back('/');
+      }
+      mid_path.append(segments[i]);
+    }
+    tag.subpath = std::move(mid_path);
+  }
+
   return tag;
+}
+
+std::string get_platform_module_filename(std::string_view stem)
+{
+#if defined(__MINGW32__) || defined(__MINGW64__)
+  return "lib" + std::string(stem) + ".dll";
+#elif defined(_WIN32)
+  return std::string(stem) + ".dll";
+#elif defined(__APPLE__)
+  return "lib" + std::string(stem) + ".dylib";
+#else
+  return "lib" + std::string(stem) + ".so";
+#endif
 }
 
 std::string normalize(std::string_view path)
