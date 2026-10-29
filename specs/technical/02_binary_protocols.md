@@ -1,4 +1,4 @@
-# 02. 二進位串流與藍圖打包協議 (Binary Protocols & Wire Format RFC)
+﻿# 02. 二進位串流與藍圖打包協議 (Binary Protocols & Wire Format RFC)
 
 本文件詳細定義 OuroKore 的**實體二進位資料串流佈局（Binary Wire Format）**。
 任何第三方工具、其他程式語言（C#、Rust、Go、Python）實現的 OuroKore 引擎或解析器，只要嚴格遵循本規格，即可與 C++ 實現版本產生的二進位藍圖或脫水存檔 **100% 互通與雙向讀寫**。
@@ -87,6 +87,14 @@
   * `slot_name`：插槽名稱（長度前綴 UTF-8 字串）。
   * `target_count`：該插槽所關聯的目標物件數量。
   * `target_ids`：連續的 `UInt64` HandleID 陣列。
+
+### 2.3 次世代零件雙套名冊串流結構 (Next-Gen OuroPart Dual-Roster Wire Format)
+當物件為次世代零件 (`ork::OuroPart`) 時，二進位藍圖串流遵循多型責任鏈協議：
+1. **段落一：純屬性資料區 (Pure Payload Segment)**：由 `ork::Subclass<Derived, Base>` 以 NVI 模式自動由頂至底遞迴連鎖寫入所有繼承層級之 `SerializeProperties`。反序列化時若任一層級回傳 `false`，框架統一代為拋出 `OuroCorruptedStreamException`。
+2. **段落二：核心骨幹名冊區 (Core Edge Roster Segment)**：`edge_count: UInt32` 帶領之物件本體核心生命週期插槽名冊（`m_registered_handles`）。
+3. **段落三：次世代零件名冊區 (Next-Gen Part Roster Segment)**：`part_edge_count: UInt32` 帶領之次世代動態組裝零件插槽名冊（`m_part_handles`）。
+
+反序列化時，兩套名冊由 `OuroPart::DeserializeHandles` 自動多型連鎖還原，兩套名冊嚴格物理隔離，互不干擾。
 
 ---
 

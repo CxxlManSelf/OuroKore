@@ -1,4 +1,4 @@
-# 10. 公開 C++ API 參照手冊 (API Reference)
+﻿# 10. 公開 C++ API 參照手冊 (API Reference)
 
 本手冊彙整 OuroKore 面向應用開發者、外掛實作者與宿主主程式之所有公開核心類別、工具與介面，作為全套手冊之終端速查字典附錄。
 
@@ -41,13 +41,28 @@
   * `HandleID GetObjectID() const`：取得物件之全域唯一識別碼。
   * `StorageState GetStorageState() const`：取得物件當前儲存狀態（Clean/Dirty/Dehydrated/UnsavedNew）。
   * `ork_type_id_t GetTypeID() const`：取得物件當前之 64 位元 TypeID（支援多型與繼承階層查詢）。
-  * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化介面。
-  * `virtual void DeserializePayload(OuroStream &stream)`：純資料屬性反序列化介面。
+  * `virtual void SerializePayload(OuroStream &stream) const`：純資料屬性序列化虛擬介面（由 `Subclass` 以 NVI 模式自動完成繼承鏈連鎖呼叫）。
+  * `virtual bool DeserializePayload(OuroStream &stream)`：純資料屬性反序列化虛擬介面（回傳 `bool`，若失敗由 `UnpackBlueprint` 統一代為拋出 `OuroCorruptedStreamException`）。
+  * `virtual void SerializeHandles(OuroStream &stream) const`：Handle 插槽名冊序列化介面（支援衍生類別如 `OuroPart` 多型串聯第二套名冊）。
+  * `virtual void DeserializeHandles(OuroStream &stream)`：Handle 插槽名冊反序列化介面。
 * **樣板基底 `ork::Subclass<Derived, Base = ork::OuroObject>`**：
   * **所有領域物件強制繼承之 CRTP 基底**（免巨集自動型別系統）。
+  * **NVI 自動連鎖序列化**：自動連鎖調度父類別 `Base` 之序列化，並掛鉤子類之 `SerializeProperties(stream)` 與 `bool DeserializeProperties(stream)`，子類絕對不需手動呼叫 `Base::...`。
   * `static constexpr const char* StaticTypeName()`：自動在編譯期萃取類別名稱。
   * `static TypeID StaticTypeID()`：自動以 FNV-1a 計算並向核心註冊繼承關係樹。
   * 支援帶參數建構子完美轉發：`Subclass(args...)` 直接初始化父類別。
+
+---
+
+## 🧩 3.1 次世代零件系統：`ork::OuroPart` / `ork::PartHandle`
+* **標頭檔**：`ourokore/part/OuroPart.hpp`、`ourokore/part/PartHandle.hpp`
+* **類別基底 `ork::OuroPart`**：
+  * 繼承自 `OuroObject`，提供專屬次世代獨立零件名冊 `m_part_handles` 與傳統核心名冊 `m_registered_handles` 雙套物理隔離。
+  * `virtual std::string_view GetModuleTag() const`：提供外掛與零件模組識別標籤。
+  * 多型覆寫 `SerializeHandles` / `DeserializeHandles`，自動連鎖傳統名冊與次世代零件名冊。
+* **專用句柄**：
+  * `PartHandle<T>`：次世代強持有單一零件槽位（編譯期靜態斷言強制 `T` 必須繼承自 `OuroPart`）。
+  * `PartContainerHandle<T>`：次世代強持有動態零件容器。
 
 ---
 

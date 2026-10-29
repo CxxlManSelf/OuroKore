@@ -1,4 +1,4 @@
-# 02. 5 分鐘快速上手 (Quickstart)
+﻿# 02. 5 分鐘快速上手 (Quickstart)
 
 本章節帶領您從零開始建立第一個 OuroKore 應用程式，體驗宿主初始化、自訂領域物件、屬性讀寫與序列化存檔。
 
@@ -67,15 +67,16 @@ public:
         m_score += delta;
     }
 
-    // 實作純 Payload 序列化協議
-    void SerializePayload(ork::OuroStream &stream) const override {
+    // 實作純屬性序列化協議（由 Subclass 自動連鎖調度，子類免寫 Base）
+    void SerializeProperties(ork::OuroStream &stream) const {
         stream.WriteProperty("name", m_name);
         stream.WriteProperty("score", m_score);
     }
 
-    void DeserializePayload(ork::OuroStream &stream) override {
+    bool DeserializeProperties(ork::OuroStream &stream) {
         stream.ReadProperty("name", m_name);
         stream.ReadProperty("score", m_score);
+        return true;
     }
 
 private:

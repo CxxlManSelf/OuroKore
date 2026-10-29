@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <iostream>
 #include <vector>
 
@@ -22,16 +22,17 @@ public:
   {
   }
 
-  void SerializePayload(OuroStream &stream) const override
+  void SerializeProperties(OuroStream &stream) const
   {
     stream.WriteProperty("id_val", m_id_val);
     stream.WriteProperty("tag", m_tag);
   }
 
-  void DeserializePayload(OuroStream &stream) override
+  bool DeserializeProperties(OuroStream &stream)
   {
     stream.ReadProperty("id_val", m_id_val);
-    stream.ReadProperty("tag", m_tag);
+    stream.ReadProperty("tag", m_tag);
+    return true;
   }
 };
 
@@ -42,8 +43,8 @@ public:
 
   AsyncEntityContainer() = default;
 
-  void SerializePayload(OuroStream &) const override {}
-  void DeserializePayload(OuroStream &) override {}
+  void SerializeProperties(OuroStream &) const {}
+  bool DeserializeProperties(OuroStream &) { return true; }
 };
 
 class AsyncDerivedEntity : public ork::Subclass<AsyncDerivedEntity, AsyncTestEntity>

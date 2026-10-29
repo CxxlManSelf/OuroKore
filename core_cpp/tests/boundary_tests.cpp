@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <iostream>
 #include <memory>
 #include <type_traits>
@@ -12,13 +12,14 @@ class PluginItem : public ork::Subclass<PluginItem, ork::OuroObject>
 {
 public:
   int value{100};
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty("value", value);
   }
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
-    stream.ReadProperty("value", value);
+    stream.ReadProperty("value", value);
+    return true;
   }
 };
 

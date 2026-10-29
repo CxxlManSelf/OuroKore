@@ -74,6 +74,9 @@ add_executable(gateway_driver_tests gateway_driver_tests.cpp)
 target_link_libraries(gateway_driver_tests ourokore_base)
 add_dependencies(gateway_driver_tests OrkGatewayDriver)
 
+add_executable(ouro_part_tests ouro_part_tests.cpp)
+target_link_libraries(ouro_part_tests ourokore_core ourokore_base)
+
 
 
 

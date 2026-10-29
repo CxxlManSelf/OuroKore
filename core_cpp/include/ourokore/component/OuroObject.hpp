@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <array>
 #include <cstdint>
@@ -242,7 +242,15 @@ public:
    * @brief Pure Payload serialization interface for concrete component classes.
    */
   virtual void SerializePayload(OuroStream & /*stream*/) const {}
-  virtual void DeserializePayload(OuroStream & /*stream*/) {}
+  virtual bool DeserializePayload(OuroStream & /*stream*/) { return true; }
+
+  /**
+   * @brief Handles serialization interface for OuroObject.
+   * Handles packing and unpacking of internal registered handles roster (m_registered_handles).
+   * Derived classes (such as OuroPart) can override this to chain base handles and serialize secondary part rosters.
+   */
+  virtual void SerializeHandles(OuroStream &stream) const;
+  virtual void DeserializeHandles(OuroStream &stream);
 
 protected:
   OuroObject();
@@ -407,6 +415,35 @@ public:
     static const TypeID s_type_id = detail::RegisterTypeHelper(
         base::Fnv1a64(StaticTypeName()), StaticTypeName(), detail::TypeTraits<Base>::GetTypeID());
     return s_type_id;
+  }
+
+  void SerializePayload(OuroStream &stream) const override
+  {
+    Base::SerializePayload(stream);
+    if constexpr (requires(const Derived &d, OuroStream &s) { d.SerializeProperties(s); })
+    {
+      static_cast<const Derived *>(this)->SerializeProperties(stream);
+    }
+  }
+
+  bool DeserializePayload(OuroStream &stream) override
+  {
+    if (!Base::DeserializePayload(stream))
+    {
+      return false;
+    }
+    if constexpr (requires(Derived &d, OuroStream &s) {
+                    { d.DeserializeProperties(s) } -> std::same_as<bool>;
+                  })
+    {
+      return static_cast<Derived *>(this)->DeserializeProperties(stream);
+    }
+    else if constexpr (requires(Derived &d, OuroStream &s) { d.DeserializeProperties(s); })
+    {
+      static_cast<Derived *>(this)->DeserializeProperties(stream);
+      return true;
+    }
+    return true;
   }
 
   TypeID GetTypeID() const override

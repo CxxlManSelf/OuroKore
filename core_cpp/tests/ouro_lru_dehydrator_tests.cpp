@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <memory>
@@ -19,16 +19,17 @@ public:
   int m_val{0};
   std::string m_name;
 
-  void SerializePayload(OuroStream &stream) const override
+  void SerializeProperties(OuroStream &stream) const
   {
     stream.WriteProperty("val", m_val);
     stream.WriteProperty("name", m_name);
   }
 
-  void DeserializePayload(OuroStream &stream) override
+  bool DeserializeProperties(OuroStream &stream)
   {
     stream.ReadProperty("val", m_val);
-    stream.ReadProperty("name", m_name);
+    stream.ReadProperty("name", m_name);
+    return true;
   }
 };
 
@@ -41,8 +42,8 @@ public:
   ork::OwningHandle<TestItem> m_item2{"item2"};
   ork::OwningHandle<TestItem> m_item3{"item3"};
 
-  void SerializePayload(OuroStream &) const override {}
-  void DeserializePayload(OuroStream &) override {}
+  void SerializeProperties(OuroStream &) const {}
+  bool DeserializeProperties(OuroStream &) { return true; }
 };
 
 void test_lru_order_and_access(ork::HostContext &host)

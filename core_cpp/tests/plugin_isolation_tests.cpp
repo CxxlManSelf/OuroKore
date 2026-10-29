@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <iostream>
 #include <string>
 
@@ -27,16 +27,17 @@ public:
   int score{123};
   std::string name{"PluginPlayer"};
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty("score", score);
     stream.WriteProperty("name", name);
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
     stream.ReadProperty("score", score);
-    stream.ReadProperty("name", name);
+    stream.ReadProperty("name", name);
+    return true;
   }
 };
 

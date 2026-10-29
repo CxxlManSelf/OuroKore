@@ -1,4 +1,4 @@
----
+﻿---
 name: ourokore-app
 description: "OuroKore 應用端與第三方外掛開發指南、領域物件設計、記憶體 Heap 追蹤清空檢驗與生命週期安全錨定最佳實踐。"
 ---
@@ -120,12 +120,14 @@ public:
     int32_t GetHp() const { ork::OuroReadLock lock(*this); return m_hp; }
     void SetHp(int32_t hp) { ork::OuroWriteLock lock(*this); m_hp = hp; }
 
-    void SerializePayload(ork::OuroStream &stream) const override {
+    // 由 Subclass 自動連鎖調度，子類免寫 Base，失敗回傳 false 由框架熔斷
+    void SerializeProperties(ork::OuroStream &stream) const {
         stream.WriteProperty("hp", m_hp);
     }
 
-    void DeserializePayload(ork::OuroStream &stream) override {
+    bool DeserializeProperties(ork::OuroStream &stream) {
         stream.ReadProperty("hp", m_hp);
+        return true;
     }
 
 private:

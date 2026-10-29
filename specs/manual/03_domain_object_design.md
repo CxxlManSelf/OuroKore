@@ -1,4 +1,4 @@
-# 03. 領域物件設計規範 (Domain Object Design)
+﻿# 03. 領域物件設計規範 (Domain Object Design)
 
 本章節介紹如何遵循 OuroKore 規範設計高效能、多執行緒安全的領域模型物件。
 
@@ -44,22 +44,46 @@ private:
 
 ---
 
-## 📦 2. 序列化協議實作 (Pure Payload Serialization)
+## 📦 2. 序列化協議實作 (Pure Payload Serialization & Automatic Chaining)
 
-OuroKore 嚴格實施「純資料（Pure Payload）」與「關聯拓撲（Edge Roster）」分離打包原則：
-* **您只需要負責自身的屬性資料**（整數、浮點數、字串、POD 二進位緩衝區）。
-* **所有成員插槽（`OwningHandle`）均由框架自動註冊並打包**，絕對不需要也不可以在 `SerializePayload` 裡手動序列化 Handle！
+OuroKore 嚴格實施「純資料（Pure Payload）」與「關聯拓撲（Edge Roster）」分離打包原則，並透過 `ork::Subclass<Derived, Base>` 在編譯期以 NVI 模式提供**全自動繼承鏈連鎖呼叫與錯誤熔斷機制**：
+
+* **您只需要負責自身的專屬屬性資料**：宣告 `SerializeProperties` 與 `DeserializeProperties`。
+* **絕對不需手動呼叫上層類別**：`Subclass` 在呼叫子類前，會自動依序由頂至底遞迴完成父類別的序列化與還原，完全杜絕漏寫 `Base::...` 導致的屬性丟失！
+* **無屬性子類零代碼**：若衍生類別純粹擴充業務邏輯方法而無新增資料欄位，這兩個函式均可完全省略不寫。
+* **輕量級失敗回報**：`DeserializeProperties` 回傳 `bool`（成功返回 `true`，失敗返回 `false`）。若缺少必要屬性或資料損毀只需 `return false;`，框架將自動中止並拋出 `OuroCorruptedStreamException` 觸發安全交易回滾。
+* **所有成員插槽（`OwningHandle`）均由框架自動名冊打包**：絕對不需要也不可以在屬性序列化函式裡手動處理 Handle！
 
 ```cpp
-void SerializePayload(ork::OuroStream &stream) const override {
-    stream.WriteProperty("hp", m_hp);
-    stream.WriteProperty("is_dead", m_is_dead);
-}
+// 1. 基底類別實作專屬屬性
+class Monster : public ork::Subclass<Monster, ork::OuroObject> {
+public:
+    void SerializeProperties(ork::OuroStream &stream) const {
+        stream.WriteProperty("hp", m_hp);
+    }
 
-void DeserializePayload(ork::OuroStream &stream) override {
-    stream.ReadProperty("hp", m_hp);
-    stream.ReadProperty("is_dead", m_is_dead);
-}
+    bool DeserializeProperties(ork::OuroStream &stream) {
+        stream.ReadProperty("hp", m_hp);
+        return true;
+    }
+private:
+    int32_t m_hp{100};
+};
+
+// 2. 衍生類別（自動享受繼承連鎖，絕不需寫 Monster::SerializeProperties！）
+class Boss : public ork::Subclass<Boss, Monster> {
+public:
+    void SerializeProperties(ork::OuroStream &stream) const {
+        stream.WriteProperty("rage", m_rage);
+    }
+
+    bool DeserializeProperties(ork::OuroStream &stream) {
+        stream.ReadProperty("rage", m_rage);
+        return true;
+    }
+private:
+    int32_t m_rage{0};
+};
 ```
 
 ---
@@ -202,3 +226,44 @@ auto static_boss = ork::static_pointer_cast<BossMonster>(creature_ptr);
       boss(&BossMonster::CastUltimateSkill);
   }
   ```
+
+---
+
+## 🧩 5. 次世代可替換零件設計 (Next-Gen OuroPart & PartHandle)
+
+在高度模組化、可熱插拔零件或動態裝備系統中，OuroKore 提供專屬之次世代零件基底 `ork::OuroPart` 與專用句柄 `ork::PartHandle<T>` / `ork::PartContainerHandle<T>`：
+
+### 1. 雙套名冊嚴格物理隔離 (Two Distinct Rosters Invariant)
+* **傳統骨幹名冊 (`m_registered_handles`)**：負責物件本體不可或缺的核心生命週期插槽。
+* **次世代零件名冊 (`m_part_handles`)**：負責次世代動態組裝之獨立零件槽位，兩套名冊物理分離，互不污染，杜絕命名衝突。
+* **編譯期型別約束**：`PartHandle<T>` 與 `PartContainerHandle<T>` 透過 `static_assert` 強制要求 `T` 必須繼承自 `ork::OuroPart`。
+
+### 2. 次世代零件定義與宣告範例
+```cpp
+#include <ourokore/part/OuroPart.hpp>
+#include <ourokore/part/PartHandle.hpp>
+
+// 1. 定義次世代零件（繼承自 Subclass<T, ork::OuroPart>）
+class EnginePart : public ork::Subclass<EnginePart, ork::OuroPart> {
+public:
+    void SerializeProperties(ork::OuroStream &stream) const {
+        stream.WriteProperty("thrust", m_thrust);
+    }
+    bool DeserializeProperties(ork::OuroStream &stream) {
+        stream.ReadProperty("thrust", m_thrust);
+        return true;
+    }
+private:
+    float m_thrust{1000.0f};
+};
+
+// 2. 裝配次世代零件的主體物件
+class Spaceship : public ork::Subclass<Spaceship, ork::OuroPart> {
+public:
+    // 次世代專用零件插槽（自動登記至次世代名冊）
+    ork::PartHandle<EnginePart> m_main_engine{"MainEngineSlot"};
+};
+```
+
+### 3. 多型責任鏈藍圖打包 (Polymorphic Handle Chaining)
+當呼叫 `PackBlueprint` / `UnpackBlueprint` 時，`OuroPart::SerializeHandles` 與 `OuroPart::DeserializeHandles` 會自動先委派基類 `OuroObject` 打包第一套核心名冊，隨後自動序列化與還原第二套零件名冊，呼叫端與主程式完全無需介入！

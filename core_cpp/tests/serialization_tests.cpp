@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -52,16 +52,17 @@ public:
     m_name = name;
   }
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty(u8"PlayerObject::hp", m_hp);
     stream.WriteProperty(u8"PlayerObject::name", m_name);
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
     stream.ReadProperty(u8"PlayerObject::hp", m_hp);
-    stream.ReadProperty(u8"PlayerObject::name", m_name);
+    stream.ReadProperty(u8"PlayerObject::name", m_name);
+    return true;
   }
 
 private:
@@ -96,14 +97,15 @@ public:
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
   }
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty(u8"WeaponObject::damage", m_damage);
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
-    stream.ReadProperty(u8"WeaponObject::damage", m_damage);
+    stream.ReadProperty(u8"WeaponObject::damage", m_damage);
+    return true;
   }
 
 private:
@@ -137,14 +139,15 @@ public:
     m_level = lvl;
   }
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty(u8"ParentCharacter::level", m_level);
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
-    stream.ReadProperty(u8"ParentCharacter::level", m_level);
+    stream.ReadProperty(u8"ParentCharacter::level", m_level);
+    return true;
   }
 
 private:
@@ -161,15 +164,16 @@ public:
 
   ork::OwningHandle<ParentCharacter> m_character{"m_character"};
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty(u8"WorldObject::dummy", int32_t(1));
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
     int32_t dummy = 0;
-    stream.ReadProperty(u8"WorldObject::dummy", dummy);
+    stream.ReadProperty(u8"WorldObject::dummy", dummy);
+    return true;
   }
 };
 
@@ -177,7 +181,7 @@ public:
 class DupKeyObject : public ork::Subclass<DupKeyObject, ork::OuroObject>
 {
 public:
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty("same_key", 100);
     stream.WriteProperty("same_key", 200);  // Fail-Fast trigger
@@ -1181,7 +1185,7 @@ public:
   bool should_throw = false;
   int data = 100;
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty("data", data);
     if (should_throw)
@@ -1190,9 +1194,10 @@ public:
     }
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
-    stream.ReadProperty("data", data);
+    stream.ReadProperty("data", data);
+    return true;
   }
 };
 
@@ -1326,13 +1331,14 @@ class Utf8TestChild : public ork::Subclass<Utf8TestChild, ork::OuroObject>
 {
 public:
   std::string m_tag{"ChildTag"};
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty(u8"tag", m_tag);
   }
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
-    stream.ReadProperty(u8"tag", m_tag);
+    stream.ReadProperty(u8"tag", m_tag);
+    return true;
   }
 };
 
@@ -1345,7 +1351,7 @@ public:
 
   Utf8TestParent() = default;
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     // 驗證各種形式的 UTF-8 Key 與 Value
     stream.WriteProperty(u8"desc", m_u8_desc);
@@ -1354,7 +1360,7 @@ public:
     stream.WriteProperty(std::string_view("key_view"), std::string_view("視圖字串值"));
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
     stream.ReadProperty(u8"desc", m_u8_desc);
     stream.ReadProperty("title", m_str_title);
@@ -1363,7 +1369,8 @@ public:
     assert(u8_val == u8"字面量UTF8值");
     std::string view_val;
     stream.ReadProperty(std::string_view("key_view"), view_val);
-    assert(view_val == "視圖字串值");
+    assert(view_val == "視圖字串值");
+    return true;
   }
 };
 
@@ -1579,6 +1586,57 @@ void Test16_Concurrent_InFlight_Pinning_And_Load_Swap(ork::HostContext &host)
   std::cout.flush();
 }
 
+class FailingPayloadEntity : public ork::Subclass<FailingPayloadEntity, ork::OuroObject>
+{
+public:
+  bool should_succeed{false};
+  void SerializeProperties(ork::OuroStream &stream) const
+  {
+    int32_t val = 42;
+    stream.WriteProperty("val", val);
+  }
+  bool DeserializeProperties(ork::OuroStream &stream)
+  {
+    int32_t val = 0;
+    stream.ReadProperty("val", val);
+    return should_succeed;
+  }
+};
+
+void Test17_DeserializePayload_Failure_Throws_Exception()
+{
+  std::cout << "\n[Test 17] DeserializePayload Failure Return False Throws Exception in UnpackBlueprint..." << std::endl;
+  auto entity = ork::CreateObject<FailingPayloadEntity>();
+  ork::BlueprintStream stream;
+  entity.WithObject([&](FailingPayloadEntity &e) {
+    ork::PackBlueprint(e, stream);
+  });
+
+  auto target = ork::CreateObject<FailingPayloadEntity>();
+  target(&FailingPayloadEntity::should_succeed) = false;
+
+  bool caught_exception = false;
+  try
+  {
+    target.WithObject([&](FailingPayloadEntity &e) {
+      ork::UnpackBlueprint(e, stream);
+    });
+  }
+  catch (const ork::OuroCorruptedStreamException &e)
+  {
+    caught_exception = true;
+    std::cout << "  Captured expected OuroCorruptedStreamException when DeserializePayload returned false: " << e.what() << std::endl;
+  }
+  assert(caught_exception && "UnpackBlueprint must throw OuroCorruptedStreamException when DeserializePayload returns false");
+
+  target(&FailingPayloadEntity::should_succeed) = true;
+  stream.ResetCursors();
+  target.WithObject([&](FailingPayloadEntity &e) {
+    ork::UnpackBlueprint(e, stream);
+  });
+  std::cout << "  Test 17 Passed!" << std::endl;
+}
+
 int main()
 {
   std::cout << "=== OuroKore Phase 3 Serialization & Dehydration/Rehydration Tests ===" << std::endl;
@@ -1608,6 +1666,7 @@ int main()
     Test14_Utf8_Properties_And_Handles_Serialization();
     Test15_Load_TwoPhase_Strong_Exception_Safety(host);
     Test16_Concurrent_InFlight_Pinning_And_Load_Swap(host);
+    Test17_DeserializePayload_Failure_Throws_Exception();
 
     std::cout << "ALL PHASE 3 TESTS PASSED SUCCESSFULLY!" << std::endl;
     std::cout.flush();

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <type_traits>
 #include <utility>
@@ -165,9 +165,10 @@ public: \
   { \
     PROPERTIES_LIST(OURO_GEN_ENTITY_SERIALIZE_PROPERTY) \
   } \
-  void DeserializePayload(::ork::OuroStream &stream) override \
+  bool DeserializePayload(::ork::OuroStream &stream) override \
   { \
     PROPERTIES_LIST(OURO_GEN_ENTITY_DESERIALIZE_PROPERTY) \
+    return true; \
   }
 
 /**

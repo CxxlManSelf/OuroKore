@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <iostream>
 #include <string>
 #include <type_traits>
@@ -58,10 +58,11 @@ public:
     BOSS_PROPERTIES(OURO_GEN_ENTITY_SERIALIZE_PROPERTY)
   }
 
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializePayload(ork::OuroStream &stream) override
   {
-    Monster::DeserializePayload(stream);
+    if (!Monster::DeserializePayload(stream)) return false;
     BOSS_PROPERTIES(OURO_GEN_ENTITY_DESERIALIZE_PROPERTY)
+    return true;
   }
 
   // 額外的自訂業務方法

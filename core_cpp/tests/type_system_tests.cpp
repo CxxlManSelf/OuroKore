@@ -1,4 +1,4 @@
-#include <cassert>
+﻿#include <cassert>
 #include <iostream>
 #include <string>
 
@@ -21,13 +21,14 @@ public:
   Creature() = default;
   explicit Creature(int hp) : m_hp(hp) {}
 
-  void SerializePayload(ork::OuroStream &stream) const override
+  void SerializeProperties(ork::OuroStream &stream) const
   {
     stream.WriteProperty("hp", m_hp);
   }
-  void DeserializePayload(ork::OuroStream &stream) override
+  bool DeserializeProperties(ork::OuroStream &stream)
   {
-    stream.ReadProperty("hp", m_hp);
+    stream.ReadProperty("hp", m_hp);
+    return true;
   }
 };
 

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -493,15 +494,26 @@ class OwningContainerHandle
 {
 public:
   explicit OwningContainerHandle(std::string slot_name) :
+      OwningContainerHandle(std::move(slot_name), true)
+  {
+  }
+
+protected:
+  explicit OwningContainerHandle(std::string slot_name, bool auto_register) :
       m_slot_name(std::move(slot_name)),
       m_owner_id(GetActiveOwnerHelper())
   {
-    OuroObject *active_obj = detail::GetActiveObject();
-    if (active_obj)
+    if (auto_register)
     {
-      active_obj->RegisterHandle(this);
+      OuroObject *active_obj = detail::GetActiveObject();
+      if (active_obj)
+      {
+        active_obj->RegisterHandle(this);
+      }
     }
   }
+
+public:
 
   template <typename StrT, typename = std::enable_if_t<
       !std::is_base_of_v<OwningContainerHandle, std::decay_t<StrT>> &&
@@ -770,6 +782,127 @@ inline void OuroObject::RegisterHandle(OwningContainerHandle *handle)
   m_registered_handles[name] = handle;
 }
 
+inline void OuroObject::SerializeHandles(OuroStream &stream) const
+{
+  uint32_t edge_count = static_cast<uint32_t>(m_registered_handles.size());
+  stream.WriteBytes(reinterpret_cast<const uint8_t *>(&edge_count), sizeof(edge_count));
+
+  for (const auto &[slot_name, handle_ptr] : m_registered_handles)
+  {
+    stream.WriteStringRaw(slot_name);
+    const auto &target_ids = handle_ptr->GetTargetIDs();
+    uint32_t target_count = static_cast<uint32_t>(target_ids.size());
+    stream.WriteBytes(reinterpret_cast<const uint8_t *>(&target_count), sizeof(target_count));
+    for (HandleID tid : target_ids)
+    {
+      stream.WriteBytes(reinterpret_cast<const uint8_t *>(&tid), sizeof(tid));
+    }
+  }
+}
+
+inline void OuroObject::DeserializeHandles(OuroStream &stream)
+{
+  if (!stream.HasRemainingBytes())
+  {
+    return;
+  }
+
+  constexpr size_t kMaxEdgeCount = 100000;
+  constexpr size_t kMaxTargetsPerSlot = 100000;
+  constexpr size_t kMaxSlotNameLength = 1024;
+
+  size_t remaining = stream.GetRemainingBytes();
+  if (remaining < sizeof(uint32_t))
+  {
+    throw OuroCorruptedStreamException("OuroKore UnpackBlueprint Error: Truncated stream before edge_count.");
+  }
+
+  uint32_t edge_count = 0;
+  stream.ReadBytes(reinterpret_cast<uint8_t *>(&edge_count), sizeof(edge_count));
+
+  // 防禦 1: 記憶體爆炸與整數溢位檢查（每條邊至少需要 slot 長度(4B) + target_count(4B) = 8B）
+  if (edge_count > kMaxEdgeCount || static_cast<size_t>(edge_count) * 8 > stream.GetRemainingBytes())
+  {
+    throw OuroCorruptedStreamException(
+        "OuroKore UnpackBlueprint Error: edge_count exceeds stream bounds or maximum limit."
+    );
+  }
+
+  // 兩階段暫存結構：驗證全部通過後再統一套用，提供強例外安全保證
+  std::vector<std::pair<std::string, std::vector<HandleID>>> parsed_edges;
+  parsed_edges.reserve(edge_count);
+  std::unordered_set<std::string> seen_slots;
+
+  for (uint32_t i = 0; i < edge_count; ++i)
+  {
+    if (!stream.HasRemainingBytes())
+    {
+      throw OuroCorruptedStreamException("OuroKore UnpackBlueprint Error: Stream truncated while reading edge roster.");
+    }
+
+    std::string slot_name = stream.ReadStringRaw();
+    if (slot_name.empty() || slot_name.size() > kMaxSlotNameLength)
+    {
+      throw OuroCorruptedStreamException("OuroKore UnpackBlueprint Error: Invalid or oversized slot name detected.");
+    }
+
+    // 防禦 2: 重複 Slot 槽位 Fail-Fast 防護
+    if (!seen_slots.insert(slot_name).second)
+    {
+      throw OuroDuplicateKeyException(
+          "OuroKore UnpackBlueprint Error: Duplicate slot name detected in edge roster: " + slot_name
+      );
+    }
+
+    if (stream.GetRemainingBytes() < sizeof(uint32_t))
+    {
+      throw OuroCorruptedStreamException(
+          "OuroKore UnpackBlueprint Error: Stream truncated before target_count in slot: " + slot_name
+      );
+    }
+
+    uint32_t target_count = 0;
+    stream.ReadBytes(reinterpret_cast<uint8_t *>(&target_count), sizeof(target_count));
+
+    // 防禦 3: 單一 Slot 的 Target 數量上限與串流長度檢查（防止 OOM 記憶體配置炸彈）
+    if (target_count > kMaxTargetsPerSlot ||
+        static_cast<size_t>(target_count) * sizeof(HandleID) > stream.GetRemainingBytes())
+    {
+      throw OuroCorruptedStreamException(
+          "OuroKore UnpackBlueprint Error: target_count exceeds stream bounds in slot: " + slot_name
+      );
+    }
+
+    std::vector<HandleID> tids;
+    tids.reserve(target_count);
+    for (uint32_t j = 0; j < target_count; ++j)
+    {
+      HandleID tid = 0;
+      stream.ReadBytes(reinterpret_cast<uint8_t *>(&tid), sizeof(tid));
+      if (tid != 0)
+      {
+        tids.push_back(tid);
+      }
+    }
+
+    parsed_edges.emplace_back(std::move(slot_name), std::move(tids));
+  }
+
+  // 第二階段：原子套用（全部驗證通過，安全更新 Handle Roster）
+  for (const auto &[slot_name, tids] : parsed_edges)
+  {
+    auto it = m_registered_handles.find(slot_name);
+    if (it != m_registered_handles.end())
+    {
+      it->second->ReleaseAll();
+      for (HandleID tid : tids)
+      {
+        it->second->AddTarget(tid);
+      }
+    }
+  }
+}
+
 /**
  * @brief OwningHandle controls object lifecycles inside Parent OuroObjects.
  * Inherits from OwningContainerHandle with strict max Target count of 1.
@@ -802,6 +935,14 @@ public:
       OwningContainerHandle(std::move(slot_name))
   {
   }
+
+protected:
+  explicit OwningHandle(std::string slot_name, bool auto_register) :
+      OwningContainerHandle(std::move(slot_name), auto_register)
+  {
+  }
+
+public:
 
   template <typename StrT, typename = std::enable_if_t<
       !std::is_base_of_v<OwningContainerHandle, std::decay_t<StrT>> &&
